@@ -1,0 +1,28 @@
+name: Tests
+
+on:
+  push:
+    branches: ["main", "develop"]
+  pull_request:
+    branches: ["main", "develop", "release*", "release/*", "*audit*"]
+    paths:
+      - "axiom-eth/**"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: ubuntu-latest-64core-256ram
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Run axiom-eth tests real prover
+        working-directory: "axiom-eth"
+        run: |
+          export ALCHEMY_KEY=${{ secrets.ALCHEMY_KEY }}
+          export JSON_RPC_URL=${{ secrets.JSON_RPC_URL }}
+          cargo t --release -- test_one_mainnet_header_prover
+          cargo t --release -- bench_mpt_inclusion_fixed --ignored
+          cargo t --release utils::component::

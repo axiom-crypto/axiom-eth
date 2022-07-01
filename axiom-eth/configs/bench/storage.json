@@ -1,0 +1,65 @@
+[
+  [
+    {
+      "base": {
+        "k": 15,
+        "num_advice_per_phase": [
+          92,
+          58
+        ],
+        "num_fixed": 1,
+        "num_lookup_advice_per_phase": [
+          1,
+          1,
+          0
+        ],
+        "lookup_bits": 8,
+        "num_instance_columns": 1
+      },
+      "num_rlc_columns": 5
+    },
+    1
+  ],
+  [
+    {
+      "base": {
+        "k": 18,
+        "num_advice_per_phase": [
+          56,
+          39
+        ],
+        "num_fixed": 1,
+        "num_lookup_advice_per_phase": [
+          1,
+          1,
+          0
+        ],
+        "lookup_bits": 8,
+        "num_instance_columns": 1
+      },
+      "num_rlc_columns": 3
+    },
+    10
+  ],
+  [
+    {
+      "base": {
+        "k": 20,
+        "num_advice_per_phase": [
+          41,
+          29
+        ],
+        "num_fixed": 1,
+        "num_lookup_advice_per_phase": [
+          1,
+          1,
+          0
+        ],
+        "lookup_bits": 8,
+        "num_instance_columns": 1
+      },
+      "num_rlc_columns": 3
+    },
+    32
+  ]
+]

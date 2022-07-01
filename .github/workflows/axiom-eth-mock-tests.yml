@@ -1,0 +1,41 @@
+name: axiom-eth mock prover tests
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    paths:
+      - "axiom-eth/**"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: ubuntu-latest-64core-256ram
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Build
+        run: |
+          export AXIOM_SKIP_CONSTANT_GEN=1
+          cargo build --verbose
+
+      - name: Run axiom-eth tests MockProver
+        working-directory: "axiom-eth"
+        run: |
+          export ALCHEMY_KEY=${{ secrets.ALCHEMY_KEY}}
+          export JSON_RPC_URL=${{ secrets.JSON_RPC_URL }}
+          cargo t test_keccak
+          cargo t rlc::tests
+          cargo t rlp::tests
+          cargo t keccak::tests
+          cargo t block_header::tests
+          cargo t mpt
+          cargo t storage::tests::test_mock
+          cargo t transaction::tests
+          BLOCK_NUM=17000000 cargo test receipt::tests
+          cargo t solidity::tests::mapping::test_mock
+          cargo t solidity::tests::nested_mappings::test_mock
+          cargo t solidity::tests::mapping_storage::test_mock

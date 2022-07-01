@@ -1,0 +1,3 @@
+[submodule "axiom-codec/axiom-tools"]
+	path = axiom-codec/axiom-tools
+	url = git@github.com:axiom-crypto/axiom-tools.git

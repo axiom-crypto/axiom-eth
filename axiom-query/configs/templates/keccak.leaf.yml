@@ -1,0 +1,6 @@
+Keccak:
+  Leaf:
+    k: 18
+    core_params:
+      capacity: 50
+      capacity: 50

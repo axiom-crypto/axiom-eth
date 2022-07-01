@@ -1,0 +1,59 @@
+{
+  "circuit_id": "e94efbee3e07ae4224ed1ae0a6389f5128d210ff7a2a743e459cff501e4379ab",
+  "children": [
+    {
+      "circuit_id": "b4d1978a47642b8e75ef96febc75d2c185553b4d7a6205ad553cd7dab058975f",
+      "children": [
+        {
+          "circuit_id": "66b0c26ba69347aaf33ccbeedddb45b2546c187f4bb9889471fed75de87f39f1",
+          "children": []
+        },
+        {
+          "circuit_id": "e1b72c0d68965bac19f2bcee228ce79f2706b479fd18201795ee5c3d2bb5209b",
+          "children": [
+            {
+              "circuit_id": "36dce255606d6725e9f1d0b2bb4d464501d92593a64a4fe103b44bc47fcbe45a",
+              "children": []
+            },
+            {
+              "circuit_id": "edd2aabdb850b9b37be8d023e5188bad64f719395b67555fe400256da0585bf0",
+              "children": []
+            },
+            {
+              "circuit_id": "5aa31d595da2f2de6d4e427c54a2404cd4732e1b2a5e96caaa3318302ce07a67",
+              "children": []
+            },
+            {
+              "circuit_id": "73ea602d51433cd943c6a6c1e6c44ad7898ae7f527f46644e3dcbafe0af30bfb",
+              "children": []
+            },
+            {
+              "circuit_id": "66d432f4e647b078f105d6c5cce306fe956bb3dafcc4e0afa4ba86369196346e",
+              "children": []
+            },
+            {
+              "circuit_id": "121a04b7eb32cc4a7e41483537903c8e2a0ff0715a5520a8c575a5bbb9323d06",
+              "children": []
+            },
+            {
+              "circuit_id": "c933a0b1f35be833896bf7a5d4c06f5de0e784f8c3198646dfe3c655d44684d5",
+              "children": []
+            }
+          ],
+          "aggregate_vk_hash": "0x053b0dc911e5e702a54bd208a2773540ec8adbcc15f616c100acee5d543cd909"
+        },
+        {
+          "circuit_id": "14b09226156c9961a1b943400e25850ae170f52f8542519cd33b76f47b6d8131",
+          "children": [
+            {
+              "circuit_id": "21745f8186a53c3e64b826dbec6b31e2d3e6cdd6a0c652570f7be4ee3105dde3",
+              "children": []
+            }
+          ]
+        }
+      ],
+      "aggregate_vk_hash": "0x136f2c238411b5a70ba1198ab2ba488f84bcfde2b1f48cbde51f63ec9327c1e7"
+    }
+  ],
+  "aggregate_vk_hash": "0x0101065876114de866aa867d320a1be1bd455dc47cd86d58792a2fcd625f508a"
+}

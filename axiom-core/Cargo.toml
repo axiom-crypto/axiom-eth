@@ -1,0 +1,60 @@
+[package]
+name = "axiom-core"
+version = "2.0.13"
+authors = ["Intrinsic Technologies"]
+license = "MIT"
+edition = "2021"
+repository = "https://github.com/axiom-crypto/axiom-eth"
+readme = "README.md"
+description = "This contains the ZK circuits that generate proofs for the `AxiomV2Core` smart contract. These circuits read the RLP encoded block headers for a chain of blocks and verify that the block headers form a chain. They output a Merkle Mountain Range of the block hashes of the chain. This crate also contains aggregation circuits to aggregate multiple circuits for the purpose of proving longer chains."
+rust-version = "1.73.0"
+
+[[bin]]
+name = "axiom-core-keygen"
+path = "src/bin/keygen.rs"
+required-features = ["keygen"]
+
+[dependencies]
+itertools = "0.11"
+lazy_static = "1.4.0"
+# serialization
+serde = { version = "1.0", default-features = false, features = ["derive"] }
+serde_json = { version = "1.0", default-features = false }
+serde_with = { version = "3.3", features = ["base64"] }
+# misc
+log = "0.4"
+env_logger = "0.10"
+#getset = "0.1.2"
+anyhow = "1.0"
+hex = "0.4.3"
+
+# halo2, features turned on by axiom-eth
+axiom-eth = { version = "0.4.1", path = "../axiom-eth", default-features = false, features = ["providers", "aggregation", "evm"] }
+
+# crypto
+ethers-core = { workspace = true }
+
+# keygen
+clap = { version = "=4.4.7", features = ["derive"], optional = true }
+blake3 = { version = "=1.5", optional = true }
+serde_yaml = { version = "=0.9.16", optional = true }
+
+[dev-dependencies]
+hex = "0.4.3"
+ark-std = { version = "0.3.0", features = ["print-trace"] }
+test-log = "0.2.11"
+test-case = "3.1.0"
+rand_core = { version = "0.6", default-features = false, features = ["getrandom"] }
+rand = "0.8"
+rand_chacha = "0.3.1"
+axiom-eth = { path = "../axiom-eth", features = ["revm"] }
+
+[features]
+default = ["halo2-axiom", "jemallocator", "keygen", "display"]
+display = ["axiom-eth/display"]
+asm = ["axiom-eth/asm"]
+revm = ["axiom-eth/revm"]
+halo2-pse = ["axiom-eth/halo2-pse"]
+halo2-axiom = ["axiom-eth/halo2-axiom"]
+jemallocator = ["axiom-eth/jemallocator"]
+keygen = ["axiom-eth/keygen", "dep:clap", "dep:serde_yaml"]

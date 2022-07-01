@@ -1,0 +1,8 @@
+{
+  "comp_loader_params": {
+    "max_height": 3,
+    "shard_caps": [
+      200
+    ]
+  }
+}

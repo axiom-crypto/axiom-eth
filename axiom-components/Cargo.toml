@@ -1,0 +1,49 @@
+[package]
+name = "axiom-components"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+itertools = "0.11"
+lazy_static = "1.4.0"
+rayon = "1.8"
+
+# serialization
+serde = { version = "1.0", default-features = false, features = ["derive"] }
+serde_json = { version = "1.0", default-features = false }
+
+# misc
+log = "0.4"
+anyhow = "1.0"
+num-bigint = "0.4"
+num-traits = "0.2"
+component-derive = { path = "component-derive" }
+
+# halo2, features turned on by axiom-eth
+axiom-eth = { path = "../axiom-eth", default-features = false, features = [
+    "jemallocator",
+    "providers",
+    "aggregation",
+    "evm",
+    "keygen",
+] }
+halo2-ecc = { workspace = true }
+ethers-core = { workspace = true }
+secp256k1 = "0.28.2"
+
+[dev-dependencies]
+ark-std = { version = "0.3.0", features = ["print-trace"] }
+
+[features]
+default = ["halo2-axiom", "display"]
+display = ["axiom-eth/display"]
+halo2-pse = ["axiom-eth/halo2-pse"]
+halo2-axiom = ["axiom-eth/halo2-axiom"]
+asm = ["axiom-eth/asm"]
+revm = ["axiom-eth/revm"]
+
+[profile.dev]
+opt-level = 3
+debug = 2              # change to 0 or 2 for more or less debug info
+overflow-checks = true
+incremental = true

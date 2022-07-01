@@ -1,0 +1,84 @@
+use std::fs::File;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+
+// Helper function to convert camelCase to UPPER_SNAKE_CASE
+fn to_upper_snake_case(s: &str) -> String {
+    let mut result = String::new();
+    for (i, ch) in s.chars().enumerate() {
+        if ch.is_uppercase() && i != 0 {
+            result.push('_');
+        }
+        result.push(ch.to_ascii_uppercase());
+    }
+    result
+}
+
+fn main() {
+    println!("cargo:rerun-if-changed=axiom-tools/src/constants/v2/circuit.json");
+    println!("cargo:rerun-if-changed=axiom-tools/src/constants/v2/fieldValues.json");
+
+    if std::env::var("AXIOM_SKIP_CONSTANT_GEN").unwrap_or("0".to_string()) == "1" {
+        return;
+    }
+    let special_values_path: PathBuf =
+        ["axiom-tools", "src", "constants", "v2", "fieldValues.json"].into_iter().collect();
+
+    // Read the JSON file
+    let json =
+        std::fs::read_to_string(special_values_path).expect("Unable to read special_values.json");
+
+    // Parse the JSON into a serde_json::Value
+    let data: serde_json::Value = serde_json::from_str(&json).expect("Error parsing the JSON");
+
+    // Begin generating the Rust code
+    let mut output = String::new();
+
+    for (section_name, section) in data.as_object().unwrap() {
+        for (key, value) in section.as_object().unwrap() {
+            if let Some(value) = value.as_number() {
+                let const_name =
+                    format!("{}_{}", to_upper_snake_case(section_name), to_upper_snake_case(key));
+                output += &format!("pub const {}: usize = {};\n", const_name, value);
+            }
+        }
+    }
+
+    // Determine the output directory
+    let dest_path = Path::new("src").join("special_values.rs");
+
+    // Write the generated Rust code to a file
+    let mut f = File::create(dest_path).expect("Could not create file");
+    f.write_all(output.as_bytes()).expect("Could not write data");
+
+    // Print a message for debugging purposes
+    println!("Generated src/special_values.rs");
+
+    // Read the JSON file
+    let constants_path: PathBuf =
+        ["axiom-tools", "src", "constants", "v2", "circuit.json"].into_iter().collect();
+    let json = std::fs::read_to_string(constants_path).expect("Unable to read constants.json");
+
+    // Parse the JSON into a serde_json::Value
+    let data: serde_json::Value = serde_json::from_str(&json).expect("Error parsing the JSON");
+
+    // Begin generating the Rust code
+    let mut output = String::new();
+
+    for (key, value) in data.as_object().unwrap() {
+        if let Some(value) = value.as_number() {
+            let const_name = to_upper_snake_case(key);
+            output += &format!("pub const {}: usize = {};\n", const_name, value);
+        }
+    }
+
+    // Determine the output directory
+    let dest_path = Path::new("src").join("constants.rs");
+
+    // Write the generated Rust code to a file
+    let mut f = File::create(dest_path).expect("Could not create file");
+    f.write_all(output.as_bytes()).expect("Could not write data");
+
+    // Print a message for debugging purposes
+    println!("Generated src/constants.rs");
+}

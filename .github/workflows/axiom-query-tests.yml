@@ -1,0 +1,28 @@
+name: Tests
+
+on:
+  push:
+    branches: ["main", "develop"]
+  pull_request:
+    paths:
+      - "axiom-eth/**" # axiom-eth changes affect axiom-query
+      - "axiom-query/**"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: ubuntu-latest-64core-256ram
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Run axiom-query tests
+        working-directory: "axiom-query"
+        run: |
+          export AXIOM_SKIP_CONSTANT_GEN=1
+          export ALCHEMY_KEY=${{ secrets.ALCHEMY_KEY }}
+          export JSON_RPC_URL=${{ secrets.JSON_RPC_URL }}
+          mkdir -p data/test
+          cargo t --no-default-features --features "halo2-axiom, jemallocator"

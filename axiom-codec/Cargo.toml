@@ -1,0 +1,38 @@
+[package]
+name = "axiom-codec"
+version = "0.3.0-alpha.1"
+authors = ["Intrinsic Technologies"]
+license = "MIT"
+edition = "2021"
+repository = "https://github.com/axiom-crypto/axiom-eth"
+readme = "README.md"
+description = "This crate contains Rust types for Axiom queries and specifies how to encode/decode them to field elements for in-circuit use."
+rust-version = "1.73.0"
+
+[dependencies]
+byteorder = { version = "1.4.3" }
+serde = { version = "1.0", default-features = false, features = ["derive"] }
+serde_json = { version = "1.0", default-features = false }
+serde_repr = "0.1"
+base64 = { version = "0.21", optional = true }
+serde_with = { version = "2.2", optional = true }
+anyhow = "1.0"
+
+# halo2, features turned on by axiom-eth
+axiom-eth = { version = "0.4.1", path = "../axiom-eth", default-features = false }
+axiom-components = { path = "../axiom-components", default-features = false }
+
+# ethereum
+ethers-core = { workspace = true }
+
+[dev-dependencies]
+hex = "0.4.3"
+
+[build-dependencies]
+serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+
+[features]
+default = ["halo2-axiom"]
+halo2-pse = ["axiom-eth/halo2-pse"]
+halo2-axiom = ["axiom-eth/halo2-axiom"]

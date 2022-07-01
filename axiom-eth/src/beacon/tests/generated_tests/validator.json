@@ -1,0 +1,10 @@
+{
+    "pubkey": "0xa2dc4fe34d4a934885578a52bbf33dd02367216b3472eb398b7fa3bc92909e29ac547cbcd813649650e419dfd797f46f",
+    "withdrawal_credentials": "0x003a058dc0b094fd2525966f9273a2c95b10bd84fe3e3227516a96e49335de76",
+    "effective_balance": "32000000000",
+    "slashed": false,
+    "activation_eligibility_epoch": "74210",
+    "activation_epoch": "18446744073709551615",
+    "exit_epoch": "18446744073709551615",
+    "withdrawable_epoch": "18446744073709551615"
+}

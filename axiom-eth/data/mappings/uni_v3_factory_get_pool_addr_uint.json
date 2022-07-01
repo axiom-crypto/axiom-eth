@@ -1,0 +1,8 @@
+{
+    "key": "c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+    "var_len": "",
+    "max_var_len": "",
+    "mapping_slot": "43ae34693ee6dbe9779e719b5579311057a431d9890ba5cceb265b8a21e95990",
+    "ground_truth_concat_key": "000000000000000000000000c02aaa39b223fe8d0a0e5c4f27ead9083c756cc243ae34693ee6dbe9779e719b5579311057a431d9890ba5cceb265b8a21e95990",
+    "ground_truth_slot": "af01b659268ea8b268c9c7ca07bf047651afe5aecef23fa3e9b9e2a8140a32b7"
+}

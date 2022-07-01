@@ -1,0 +1,77 @@
+[package]
+name = "axiom-query"
+version = "2.1.0-alpha.1"
+authors = ["Intrinsic Technologies"]
+license = "MIT"
+edition = "2021"
+repository = "https://github.com/axiom-crypto/axiom-eth"
+readme = "README.md"
+description = "This contains the ZK circuits that generate proofs for the `AxiomV2Query` smart contract."
+rust-version = "1.73.0"
+
+[[bin]]
+name = "axiom-query-keygen"
+path = "src/bin/keygen.rs"
+required-features = ["keygen"]
+
+[dependencies]
+itertools = "0.11"
+lazy_static = "1.4.0"
+# serialization
+serde = { version = "1.0", default-features = false, features = ["derive"] }
+serde_json = { version = "1.0", default-features = false }
+serde_with = { version = "3.3", features = ["base64"] }
+bincode = { version = "1.3.3" }
+# misc
+log = "0.4"
+env_logger = "0.10"
+getset = "0.1.2"
+ark-std = { version = "0.3.0", features = ["print-trace"], optional = true }
+anyhow = "1.0"
+downcast-rs = "1.2.0"
+hex = "0.4.3"
+byteorder = { version = "1.4.3" }
+rand = "0.8"
+rand_core = { version = "0.6", default-features = false, features = ["getrandom"] }
+
+# halo2, features turned on by axiom-eth
+axiom-eth = { version = "=0.4.2", path = "../axiom-eth", default-features = false, features = ["providers", "aggregation", "evm"] }
+axiom-codec = { version = "0.3.0-alpha", path = "../axiom-codec", default-features = false }
+axiom-components = { path = "../axiom-components" }
+
+# crypto
+rlp = "0.5.2"
+ethers-core = { workspace = true }
+# mpt implementation
+hasher = { version = "=0.1", features = ["hash-keccak"] }
+cita_trie = "=5.0.0"
+
+# keygen
+clap = { version = "=4.4.7", features = ["derive"], optional = true }
+enum_dispatch = { version = "0.3.12", optional = true }
+serde_yaml = { version = "0.9.16", optional = true }
+
+[dev-dependencies]
+hex = "0.4.3"
+ark-std = { version = "0.3.0", features = ["print-trace"] }
+log = "0.4"
+test-log = "0.2.11"
+test-case = "3.1.0"
+proptest = "1.1.0"
+rand_chacha = "0.3.1"
+tokio = { version = "1.33", features = ["macros"] }
+reqwest = { version = "0.11", features = ["json"] }
+# generating circuit inputs from blockchain
+ethers-providers = { workspace = true }
+futures = { version = "0.3" }
+blake3 = { version = "=1.5" }
+
+[features]
+default = ["halo2-axiom", "jemallocator", "display", "keygen"]
+display = ["axiom-eth/display", "dep:ark-std"]
+asm = ["axiom-eth/asm"]
+revm = ["axiom-eth/revm"]
+halo2-pse = ["axiom-eth/halo2-pse"]
+halo2-axiom = ["axiom-eth/halo2-axiom"]
+jemallocator = ["axiom-eth/jemallocator"]
+keygen = ["axiom-eth/keygen", "dep:enum_dispatch", "dep:clap", "dep:serde_yaml"]
