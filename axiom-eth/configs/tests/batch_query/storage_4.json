@@ -1,0 +1,44 @@
+{
+  "params": {
+    "degree": 20,
+    "num_rlc_columns": 1,
+    "num_range_advice": [
+      10,
+      6,
+      0
+    ],
+    "num_lookup_advice": [
+      1,
+      1,
+      0
+    ],
+    "num_fixed": 1,
+    "unusable_rows": 63,
+    "keccak_rows_per_round": 43,
+    "lookup_bits": 8
+  },
+  "break_points": {
+    "gate": [
+      [
+        1048466,
+        1048465,
+        1048464,
+        1048466,
+        1048466,
+        1048466,
+        1048465,
+        1048465,
+        1048465
+      ],
+      [
+        1048466,
+        1048466,
+        1048464,
+        1048466,
+        1048465
+      ],
+      []
+    ],
+    "rlc": []
+  }
+}

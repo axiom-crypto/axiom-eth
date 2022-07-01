@@ -1,0 +1,4 @@
+[submodule "halo2-lib"]
+	path = halo2-lib
+	url = https://github.com/axiom-crypto/halo2-lib.git
+	branch = release-0.3.0
