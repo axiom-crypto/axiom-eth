@@ -1,0 +1,9 @@
+Keccak:
+  Node:
+    k: 20
+    num_children: 2
+    child_intent:
+      Leaf:
+        k: 18
+        core_params:
+          capacity: 50

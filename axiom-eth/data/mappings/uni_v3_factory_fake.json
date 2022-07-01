@@ -1,0 +1,9 @@
+{
+    "key": "00000000000000000000000000000000000003e8",
+    "var_len": "",
+    "max_var_len": "",
+    "test_type": "Address", 
+    "mapping_slot": "125b34c9effbe1283a941860855143fc893f1fe5abe557e1626df746d9f19d16",
+    "ground_truth_concat_key": "00000000000000000000000000000000000000000000000000000000000003e8125b34c9effbe1283a941860855143fc893f1fe5abe557e1626df746d9f19d16",
+    "ground_truth_slot": "64479ced6d1ebcf1b3db1573104fc23b42e527cfb9bdf09e3085da4adad6fb28"
+}

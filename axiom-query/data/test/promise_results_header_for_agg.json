@@ -1,0 +1,25 @@
+{
+    "results": [
+        {
+            "subquery": {
+                "blockNumber": 9528813,
+                "fieldIdx": 1
+            },
+            "value": "0x1dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347"
+        },
+        {
+            "subquery": {
+                "blockNumber": 9528813,
+                "fieldIdx": 71
+            },
+            "value": "0x2a4a0345b08e0c50805158030213038e9205244c5100b7223068018ef1648009"
+        },
+        {
+            "subquery": {
+                "blockNumber": 9528813,
+                "fieldIdx": 12
+            },
+            "value": "0x43727578706f6f6c205050532f6e696365686173682d31000000000000000000"
+        }
+    ]
+}

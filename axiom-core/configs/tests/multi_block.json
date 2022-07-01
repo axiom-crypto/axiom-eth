@@ -1,0 +1,21 @@
+{
+  "rlc": {
+    "base": {
+      "k": 14,
+      "num_advice_per_phase": [
+        85,
+        24
+      ],
+      "num_fixed": 1,
+      "num_lookup_advice_per_phase": [
+        1,
+        0,
+        0
+      ],
+      "lookup_bits": 8,
+      "num_instance_columns": 1
+    },
+    "num_rlc_columns": 3
+  },
+  "keccak_rows_per_round": 9
+}

@@ -1,0 +1,21 @@
+VerifyCompute:
+  k: 16
+  core_params:
+    subquery_results_capacity: 1
+    svk: "0100000000000000000000000000000000000000000000000000000000000000"
+    client_metadata:
+      version: 0
+      numAdvicePerPhase: [4]
+      numLookupAdvicePerPhase: [1]
+      numRlcColumns: 0
+      numFixed: 1
+      numInstance: [2304]
+      numChallenge: [0]
+      maxOutputs: 128
+      isAggregation: false
+    preprocessed_len: 13
+  loader_params:
+    comp_loader_params: # keccak
+      max_height: 0
+      shard_caps:
+        - 100

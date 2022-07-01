@@ -1,0 +1,9 @@
+{
+    "key": "01dfeaf2f6b648296b4c9dc4f0c5fddcb0984c0d",
+    "var_len": "",
+    "max_var_len": "",
+    "test_type": "Address", 
+    "mapping_slot": "1c2339d1c4bfaf58b8f0d2638d9dae656c10932e13c9305c240770ec2cf1f659",
+    "ground_truth_concat_key": "00000000000000000000000001dfeaf2f6b648296b4c9dc4f0c5fddcb0984c0d1c2339d1c4bfaf58b8f0d2638d9dae656c10932e13c9305c240770ec2cf1f659",
+    "ground_truth_slot": "edb07cd504a790e8a8e63503d585d5c2408101fafac413177b1bdf3e0c3086e3"
+}

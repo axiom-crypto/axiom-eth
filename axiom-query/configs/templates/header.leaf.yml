@@ -1,0 +1,12 @@
+Subquery:
+  Header:
+    Leaf:
+      k: 16
+      core_params:
+        max_extra_data_bytes: 32
+        capacity: 33
+      loader_params:
+        comp_loader_params: # keccak
+          max_height: 0
+          shard_caps:
+            - 1000

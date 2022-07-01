@@ -1,0 +1,65 @@
+name: Tests
+
+on:
+  push:
+    branches: ["main", "develop"]
+  pull_request:
+    branches: ["main", "develop", "release*", "release/*", "rc*", "*-audit*", "v0.13", "v0.12"]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: ubuntu-latest-64core-256ram
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Build
+        run: |
+          export AXIOM_SKIP_CONSTANT_GEN=1
+          cargo build --verbose
+
+      - name: Run axiom-eth tests MockProver
+        working-directory: "axiom-eth"
+        run: |
+          export ALCHEMY_KEY=${{ secrets.ALCHEMY_KEY}}
+          export JSON_RPC_URL=${{ secrets.JSON_RPC_URL }}
+          cargo t test_keccak
+          cargo t rlc::tests
+          cargo t rlp::tests
+          cargo t keccak::tests
+          cargo t block_header::tests
+          cargo t mpt
+          cargo t storage::tests::test_mock
+          cargo t transaction::tests
+          BLOCK_NUM=17000000 cargo test receipt::tests
+          cargo t solidity::tests::mapping::test_mock
+          cargo t solidity::tests::nested_mappings::test_mock
+          cargo t solidity::tests::mapping_storage::test_mock
+
+      - name: Run axiom-eth tests real prover
+        working-directory: "axiom-eth"
+        run: |
+          export ALCHEMY_KEY=${{ secrets.ALCHEMY_KEY }}
+          export JSON_RPC_URL=${{ secrets.JSON_RPC_URL }}
+          cargo t --release -- test_one_mainnet_header_prover
+          cargo t --release -- bench_mpt_inclusion_fixed --ignored
+          cargo t --release utils::component::
+
+      - name: Run axiom-core tests
+        working-directory: "axiom-core"
+        run: |
+          export ALCHEMY_KEY=${{ secrets.ALCHEMY_KEY }}
+          export JSON_RPC_URL=${{ secrets.JSON_RPC_URL }}
+          cargo t
+
+      - name: Run axiom-query tests
+        working-directory: "axiom-query"
+        run: |
+          export AXIOM_SKIP_CONSTANT_GEN=1
+          export ALCHEMY_KEY=${{ secrets.ALCHEMY_KEY }}
+          export JSON_RPC_URL=${{ secrets.JSON_RPC_URL }}
+          mkdir -p data/test
+          cargo t --no-default-features --features "halo2-axiom, jemallocator"

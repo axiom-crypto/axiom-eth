@@ -1,0 +1,97 @@
+[package]
+name = "axiom-eth"
+version = "0.4.0"
+authors = ["Intrinsic Technologies"]
+license = "MIT"
+edition = "2021"
+repository = "https://github.com/axiom-crypto/axiom-eth"
+readme = "README.md"
+description = "This crate is the main library for building ZK circuits that prove data about the Ethereum virtual machine (EVM)."
+rust-version = "1.73.0"
+
+[dependencies]
+itertools = "0.11"
+lazy_static = "1.4.0"
+serde = { version = "1.0", default-features = false, features = ["derive"] }
+serde_json = { version = "1.0", default-features = false }
+serde_with = { version = "3.3", features = ["base64"], optional = true }
+bincode = { version = "1.3.3" }
+rayon = "1.8"
+# misc
+log = "0.4"
+env_logger = "0.10"
+ark-std = { version = "0.3.0", features = ["print-trace"], optional = true }
+getset = "0.1.2"
+thiserror = "1"
+anyhow = "1.0"
+static_assertions = "1.1.0"
+type-map = "0.5.0"
+
+# halo2
+halo2-base = { version = "=0.4.1", default-features = false, features = ["test-utils"] }
+# halo2-base = { git = "https://github.com/axiom-crypto/halo2-lib.git", tag = "v0.4.1-git", default-features = false, features = ["test-utils"] }
+zkevm-hashes = { version = "=0.2.1", default-features = false }
+# zkevm-hashes = { git = "https://github.com/axiom-crypto/halo2-lib.git", tag = "v0.4.1-git", default-features = false }
+
+# crypto
+rlp = "=0.5.2"
+ethers-core = { version = "2.0.10" }
+# mpt implementation
+hasher = { version = "=0.1", features = ["hash-keccak"] }
+cita_trie = "=5.0.0"
+num-bigint = { version = "0.4" }
+sha3 = "0.10.6"
+# rand
+rand_core = { version = "0.6", default-features = false, features = ["getrandom"] }
+rand = "0.8"
+rand_chacha = "0.3.1"
+
+# aggregation
+snark-verifier = { version = "=0.1.7", default-features = false }
+# snark-verifier = { git = "https://github.com/axiom-crypto/snark-verifier.git", tag = "v0.1.7-git", default-features = false }
+snark-verifier-sdk = { version = "=0.1.7", default-features = false }
+# snark-verifier-sdk = { git = "https://github.com/axiom-crypto/snark-verifier.git", tag = "v0.1.7-git", default-features = false }
+
+# generating circuit inputs from blockchain
+ethers-providers = { version = "2.0.10", optional = true }
+tokio = { version = "1.28", default-features = false, features = ["rt", "rt-multi-thread", "macros"], optional = true }
+futures = { version = "0.3", optional = true }
+
+# keygen
+blake3 = { version = "=1.5", optional = true }
+
+[dev-dependencies]
+hex = "0.4.3"
+ark-std = { version = "0.3.0", features = ["print-trace"] }
+log = "0.4"
+test-log = "0.2.11"
+pprof = { version = "0.11", features = ["criterion", "flamegraph"] }
+criterion = "0.4"
+criterion-macro = "0.4"
+rayon = "1.6.1"
+test-case = "3.1.0"
+proptest = "1.1.0"
+hasher = { version = "0.1", features = ["hash-keccak"] }
+
+[features]
+default = [
+    "halo2-axiom",
+    "jemallocator",
+    "providers",
+    "display",
+    "aggregation",
+    "keygen",
+    # "evm"
+]
+aggregation = ["snark-verifier/loader_halo2", "snark-verifier-sdk/loader_halo2", "providers", "dep:serde_with"]
+evm = ["snark-verifier-sdk/loader_evm", "aggregation"]
+revm = ["snark-verifier-sdk/revm"]
+providers = ["dep:ethers-providers", "dep:tokio", "dep:futures"]
+display = ["zkevm-hashes/display", "snark-verifier-sdk/display", "dep:ark-std"]
+# EXACTLY one of halo2-pse / halo2-axiom should always be turned on
+# halo2-pse = ["zkevm-hashes/halo2-pse", "snark-verifier-sdk/halo2-pse"]
+halo2-axiom = ["zkevm-hashes/halo2-axiom", "snark-verifier-sdk/halo2-axiom"]
+keygen = ["aggregation", "dep:blake3"]
+jemallocator = ["halo2-base/jemallocator"]
+asm = ["halo2-base/asm"]
+profile = ["halo2-base/profile"]

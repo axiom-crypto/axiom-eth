@@ -1,0 +1,15 @@
+Subquery:
+  SolidityMapping:
+    Leaf:
+      k: 16
+      core_params:
+        capacity: 33
+      loader_params:
+        - comp_loader_params: # keccak
+          max_height: 0
+          shard_caps:
+            - 1000
+        - comp_loader_params: # storage
+          max_height: 1
+          shard_caps:
+            - 1

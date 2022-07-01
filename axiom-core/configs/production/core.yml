@@ -1,0 +1,8 @@
+# Core configuration used for chains where extra data field has at most 32 bytes
+k_at_depth: [23, 22, 19, 21, 22, 19]
+max_extra_data_bytes: 32
+params:
+  node_type:
+    Evm: 1
+  depth: 10
+  initial_depth: 7
