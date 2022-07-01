@@ -1,0 +1,38 @@
+[
+  {
+    "degree": 15,
+    "num_rlc_columns": 2,
+    "num_range_advice": [18, 10, 0],
+    "num_lookup_advice": [1, 1, 0],
+    "num_fixed": 1,
+    "unusable_rows": 65,
+    "keccak_rows_per_round": 22
+  },
+  {
+    "degree": 16,
+    "num_rlc_columns": 1,
+    "num_range_advice": [8, 5],
+    "num_lookup_advice": [1, 1],
+    "num_fixed": 1,
+    "unusable_rows": 109,
+    "keccak_rows_per_round": 45
+  },
+  {
+    "degree": 17,
+    "num_rlc_columns": 1,
+    "num_range_advice": [4, 3],
+    "num_lookup_advice": [1, 1],
+    "num_fixed": 1,
+    "unusable_rows": 109,
+    "keccak_rows_per_round": 50
+  },
+  {
+    "degree": 18,
+    "num_rlc_columns": 1,
+    "num_range_advice": [2, 2],
+    "num_lookup_advice": [1, 1],
+    "num_fixed": 1,
+    "unusable_rows": 59,
+    "keccak_rows_per_round": 50
+  }
+]
