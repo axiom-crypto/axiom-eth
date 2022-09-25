@@ -6,16 +6,9 @@ edition = "2021"
 [patch.crates-io]
 #bitvec = { git = "https://github.com/ed255/bitvec.git", rev = "5cfc5fa8496c66872d21905e677120fc3e79693c" }
 halo2_proofs = { git = "https://github.com/privacy-scaling-explorations/halo2.git", tag = "v2022_09_10" }
-halo2curves = { git = "https://github.com/jonathanpwang/pse-pairing-bn254.git", package = "pairing_bn254" }
 
 [patch."https://github.com/privacy-scaling-explorations/halo2"]
 halo2_proofs = { git = "https:///github.com//privacy-scaling-explorations/halo2", tag =  "v2022_09_10" }
-
-[patch."https://github.com/privacy-scaling-explorations/halo2curves"]
-halo2curves = { git = "https://github.com/jonathanpwang/pse-pairing-bn254.git", package = "pairing_bn254" }
-
-[patch."https://github.com/appliedzkp/halo2curves"]
-halo2curves = { git = "https://github.com/jonathanpwang/pse-pairing-bn254.git", package = "pairing_bn254" }
 
 [patch."https://github.com/privacy-scaling-explorations/zkevm-circuits"]
 zkevm-circuits = { git = "https://github.com/yi-sun/zkevm-circuits.git", branch = "expose-keccak" }
@@ -28,8 +21,7 @@ num-integer = "0.1"
 num-traits = "0.2"
 ff = "0.12.0"
 group = "0.11"
-halo2curves = { git = "https://github.com/jonathanpwang/pse-pairing-bn254.git", package = "pairing_bn254" }
-#halo2_ecc = { git = "ssh://github.com/jonathanpwang/halo2-ecc.git" }
+halo2_ecc = { git = "ssh://github.com/jonathanpwang/halo2-ecc.git", branch = "value" }
 halo2_proofs = { git = "https://github.com/privacy-scaling-explorations/halo2.git", tag = "v2022_09_10" }
 ecdsa = { git = "https://github.com/privacy-scaling-explorations/halo2wrong", tag = "v2022_09_09" }
 ecc =       { git = "https://github.com/privacy-scaling-explorations/halo2wrong", tag = "v2022_09_09" }

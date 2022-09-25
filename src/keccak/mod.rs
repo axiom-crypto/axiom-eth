@@ -83,6 +83,8 @@ impl<F: Field> KeccakChip<F> {
 		    || Value::known(F::from(1))
 		)?;
 
+		// pending https://github.com/privacy-scaling-explorations/zkevm-circuits/issues/799,
+		// input_rlc is in reverse order
 		input_rlc.copy_advice(
 		    || "input_rlc",
 		    &mut region,

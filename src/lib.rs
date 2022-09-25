@@ -10,3 +10,5 @@ use jemallocator::Jemalloc;
 static GLOBAL: Jemalloc = Jemalloc;
 
 pub mod keccak;
+pub mod mpt;
+pub mod rlp;
