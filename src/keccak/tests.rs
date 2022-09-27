@@ -166,7 +166,8 @@ impl<'a, F: Field> Circuit<F> for TestCircuit<'_, F> {
 		    )?;
 		}
 		let output_rlc = compute_rlc(&outputs, F::from(123456));
-//		println!("output_rlc {:?}", output_rlc);
+		println!("outputs    {:?}", outputs);
+		println!("output_rlc {:?}", output_rlc);
 		region.assign_advice(
 		    || "output RLC value",
 		    config.keccak_out_rlc,
