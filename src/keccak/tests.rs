@@ -17,7 +17,7 @@ use zkevm_circuits::{
 };
 
 use crate::rlp::{
-    compute_rlc,
+    rlc::compute_rlc,
 };
 
 pub fn compute_keccak(msg: &[u8]) -> Vec<u8> {
