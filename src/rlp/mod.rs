@@ -1,6 +1,11 @@
 use std::marker::PhantomData;
 use halo2_ecc::{
-    gates::{Context, RangeInstructions},
+    gates::{
+	Context, ContextParams,
+	GateInstructions,
+	QuantumCell::Witness,
+	range::{RangeConfig, RangeStrategy, RangeStrategy::Vertical},
+	RangeInstructions},
 };
 use halo2_proofs::{
     circuit::{AssignedCell, Layouter, SimpleFloorPlanner, Value},
@@ -27,6 +32,7 @@ pub struct RlcChip<F> {
     rlc: Column<Advice>,
     q_rlc: Selector,
     q_mul: Selector,
+    cons: Column<Fixed>,
     gamma: Challenge,
 
     _marker: PhantomData<F>
@@ -46,12 +52,15 @@ impl<F: Field> RlcChip<F> {
     pub fn configure(meta: &mut ConstraintSystem<F>) -> Self {
 	let q_rlc = meta.selector();
 	let q_mul = meta.selector();
+	let cons = meta.fixed_column();
 	let val = meta.advice_column();
 	let rlc = meta.advice_column_in(SecondPhase);
 	let [gamma] = [(); 1].map(|_| meta.challenge_usable_after(FirstPhase));
 
 	meta.enable_equality(val);
 	meta.enable_equality(rlc);
+	meta.enable_equality(cons);
+	meta.enable_constant(cons);
 	
 	meta.create_gate("RLC computation", |meta| {
 	    let sel = meta.query_selector(q_rlc);
@@ -78,6 +87,7 @@ impl<F: Field> RlcChip<F> {
 	    rlc,
 	    q_rlc,
 	    q_mul,
+	    cons,
 	    gamma,
 	    _marker: PhantomData
 	};
@@ -88,12 +98,11 @@ impl<F: Field> RlcChip<F> {
     pub fn compute_rlc(
 	&self,
 	layouter: &mut impl Layouter<F>,
-	ctx: &mut Context<F>,
-	range: &impl RangeInstructions<F>,
-	input: &[AssignedCell<F, F>],
+	range: &RangeConfig<F>,
+	input: &Vec<AssignedCell<F, F>>,
 	len: AssignedCell<F, F>,
 	max_len: usize,
-	rlc_cache: &[AssignedCell<F, F>],
+	rlc_cache: &Vec<AssignedCell<F, F>>,
     ) -> Result<RlcTrace<F>, Error> {
 	assert!(input.len() == max_len);
 
@@ -168,7 +177,6 @@ impl<F: Field> RlcChip<F> {
 	
 	let rlc_pow = self.rlc_pow(
 	    layouter,
-	    ctx,
 	    range,
 	    pow_diff,
 	    log2(max_len + 1),
@@ -231,6 +239,10 @@ impl<F: Field> RlcChip<F> {
 	    |mut region| {
 		let mut cache = Vec::new();
 		for idx in 0..cache_bits {
+		    // rlc:   | 1 | g | 0 | g | g | g^2 
+		    // val:   |   | 0 |   |
+		    // q_rlc: |   | 1 |   | 
+		    // q_mul: |   |   | 1 | 
 		    if idx == 0 {
 			let one = region.assign_advice(
 			    || "one",
@@ -254,26 +266,11 @@ impl<F: Field> RlcChip<F> {
 			)?;
 			self.q_rlc.enable(&mut region, 1)?;
 			cache.push(cache0);
-		    } else if idx == 1 {
-			cache[0].copy_advice(
-			    || "gamma",
-			    &mut region,
-			    self.rlc,
-			    2,
-			)?;
-			let cache1 = region.assign_advice(
-			    || "gamma^2",
-			    self.rlc,
-			    3,
-			    || gamma * gamma
-			)?;
-			self.q_mul.enable(&mut region, 0)?;
-			cache.push(cache1);
 		    } else {
 			let zero = region.assign_advice(
 			    || "zero",
 			    self.rlc,
-			    4 * idx - 4,
+			    4 * idx - 2,
 			    || Value::known(F::from(0))
 			)?;
 			region.constrain_constant(zero.cell(), F::from(0))?;
@@ -281,23 +278,23 @@ impl<F: Field> RlcChip<F> {
 			    || "prev copy",
 			    &mut region,
 			    self.rlc,
-			    4 * idx - 3
+			    4 * idx - 1
 			)?;
 			let next2 = cache[cache.len() - 1].copy_advice(
 			    || "prev copy",
 			    &mut region,
 			    self.rlc,
-			    4 * idx - 2
+			    4 * idx
 			)?;
 			region.constrain_equal(next.cell(), cache[cache.len() - 1].cell())?;
 			region.constrain_equal(next2.cell(), cache[cache.len() - 1].cell())?;
 			let next3 = region.assign_advice(
 			    || "gamma next",
 			    self.rlc,
-			    4 * idx - 1,
+			    4 * idx + 1,
 			    || cache[cache.len() - 1].value().map(|x| (*x) * (*x))
 			)?;
-			self.q_mul.enable(&mut region, 4 * idx - 4)?;
+			self.q_mul.enable(&mut region, 4 * idx - 2)?;
 			cache.push(next3);
 		    }
 		}
@@ -310,20 +307,43 @@ impl<F: Field> RlcChip<F> {
     pub fn rlc_pow(
 	&self,
 	layouter: &mut impl Layouter<F>,
-	ctx: &mut Context<F>,
-	range: &impl RangeInstructions<F>,
+	range: &RangeConfig<F>,
 	pow: AssignedCell<F, F>,
 	pow_bits: usize,
-	rlc_cache: &[AssignedCell<F, F>],
+	rlc_cache: &Vec<AssignedCell<F, F>>,
     ) -> Result<AssignedCell<F, F>, Error> {
 	assert!(pow_bits <= rlc_cache.len());
 	
-	let bits = range.num_to_bits(
-	    ctx,
-	    &pow,
-	    pow_bits,
-	)?;
+	let using_simple_floor_planner = true;
+	let mut first_pass = true;
+	let bits = layouter.assign_region(
+	    || "num_to_bits",
+	    |mut region| {
+		if first_pass && using_simple_floor_planner {
+		    first_pass = false;
+		}
+		
+		let mut aux = Context::new(
+		    region,
+		    ContextParams {
+			num_advice: range.gate.num_advice,
+			using_simple_floor_planner,
+			first_pass,
+		    },
+		);
+		let ctx = &mut aux;
 
+		let bits = range.num_to_bits(
+		    ctx,
+		    &pow,
+		    pow_bits,
+		)?;
+		let stats = range.finalize(ctx)?;
+		println!("stats: {:?}", stats);
+		Ok(bits)
+	    }
+	)?;
+	
 	// multi-exp of bits and rlc_cache
 	let dot = layouter.assign_region(
 	    || "bit product",
@@ -331,8 +351,7 @@ impl<F: Field> RlcChip<F> {
 		let mut prod_cells = Vec::new();
 		for idx in 0..pow_bits {
 		    // prod = bit * x + (1 - bit)
-		    // | 1 | bit | x | 1 + bit * x |
-		    // | bit | prod | 1 | bit + prod |
+		    // | 1   | bit  | x | 1 + bit * x | bit | prod | 1 | bit + prod |
 		    let one = region.assign_advice(
 			|| "one",
 			self.rlc,
@@ -393,13 +412,13 @@ impl<F: Field> RlcChip<F> {
 		let mut intermed = Vec::new();
 		for idx in 0..(pow_bits - 1) {
 		    if idx == 0 {
-			let one = region.assign_advice(
-			    || "one",
+			let zero = region.assign_advice(
+			    || "zero",
 			    self.rlc,
 			    8 * pow_bits,
-			    || Value::known(F::from(1))
+			    || Value::known(F::from(0))
 			)?;
-			region.constrain_constant(one.cell(), F::from(1))?;
+			region.constrain_constant(zero.cell(), F::from(0))?;
 			prod_cells[0].copy_advice(
 			    || "cache0",
 			    &mut region,
@@ -421,13 +440,13 @@ impl<F: Field> RlcChip<F> {
 			self.q_mul.enable(&mut region, 8 * pow_bits)?;
 			intermed.push(prod1);
 		    } else {
-			let one = region.assign_advice(
-			    || "one",
+			let zero = region.assign_advice(
+			    || "zero",
 			    self.rlc,
 			    8 * pow_bits + 4 * idx,
-			    || Value::known(F::from(1))
+			    || Value::known(F::from(0))
 			)?;
-			region.constrain_constant(one.cell(), F::from(1))?;
+			region.constrain_constant(zero.cell(), F::from(0))?;
 			prod_cells[idx + 1].copy_advice(
 			    || "cache",
 			    &mut region,
@@ -458,8 +477,162 @@ impl<F: Field> RlcChip<F> {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct TestConfig<F: Field> {
+    rlc: RlcChip<F>,
+    range: RangeConfig<F>,
+}
+
+impl<F: Field> TestConfig<F> {
+    pub fn configure(
+	meta: &mut ConstraintSystem<F>,
+        range_strategy: RangeStrategy,
+        num_advice: usize,
+        mut num_lookup_advice: usize,
+        num_fixed: usize,
+        lookup_bits: usize,
+    ) -> Self {
+	let rlc = RlcChip::configure(meta);
+	let range = RangeConfig::configure(
+	    meta,
+	    range_strategy,
+	    num_advice,
+	    num_lookup_advice,
+	    num_fixed,
+	    lookup_bits
+	);
+	Self {
+	    rlc,
+	    range
+	}
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct TestCircuit<F> {
+    inputs: Vec<u8>,
+    len: usize,
+    max_len: usize,
+    _marker: PhantomData<F>,
+}
+
+impl<F: Field> Circuit<F> for TestCircuit<F> {
+    type Config = TestConfig<F>;
+    type FloorPlanner = SimpleFloorPlanner;
+
+    fn without_witnesses(&self) -> Self {
+	Self::default()
+    }
+
+    fn configure(meta: &mut ConstraintSystem<F>) -> Self::Config {
+	TestConfig::configure(
+	    meta,
+	    Vertical,
+	    1,
+	    0,
+	    1,
+	    10		    
+	)
+    }
+
+    fn synthesize(
+	&self,
+	config: Self::Config,
+	mut layouter: impl Layouter<F>,
+    ) -> Result<(), Error> {
+	config.range.load_lookup_table(&mut layouter)?;
+
+	let using_simple_floor_planner = true;
+	let mut first_pass = true;	   
+	let (inputs_assigned, len_assigned) = layouter.assign_region(
+	    || "load_inputs",
+	    |mut region| {
+		if first_pass && using_simple_floor_planner {
+		    first_pass = false;
+		}
+		
+		let mut aux = Context::new(
+		    region,
+		    ContextParams {
+			num_advice: config.range.gate.num_advice,
+			using_simple_floor_planner,
+			first_pass,
+		    },
+		);
+		let ctx = &mut aux;
+		
+		let inputs_assigned = config.range.gate.assign_region_smart(
+		    ctx,
+		    self.inputs.iter().map(|x| Witness(Value::known(F::from(*x as u64)))).collect(),
+		    vec![],
+		    vec![],
+		    vec![]
+		)?;
+		let len_assigned = config.range.gate.assign_region_smart(
+		    ctx,
+		    vec![Witness(Value::known(F::from(self.len as u64)))],
+		    vec![],
+		    vec![],
+		    vec![]
+		)?;
+		let stats = config.range.finalize(ctx)?;
+		Ok((inputs_assigned, len_assigned[0].clone()))
+	    }
+	)?;
+
+	let rlc_cache = config.rlc.load_rlc_cache(
+	    &mut layouter,
+	    log2(self.max_len),
+	)?;
+	
+	let rlc_trace = config.rlc.compute_rlc(
+	    &mut layouter,
+	    &config.range,
+	    &inputs_assigned,
+	    len_assigned,
+	    self.max_len,
+	    &rlc_cache
+	)?;
+	
+	Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::marker::PhantomData;
+    use halo2_proofs::{
+	dev::{MockProver},
+	halo2curves::bn256::Fr,
+    };
+    use crate::rlp::{
+	log2, TestCircuit
+    };
+    	    
+    #[test]
+    pub fn test_mock_rlc() {
+	let k = 18;
+	let input_bytes = vec![
+	    1, 2, 3, 4, 5, 6, 7, 8,
+	    1, 2, 3, 4, 5, 6, 7, 8,
+	    1, 2, 3, 4, 5, 6, 7, 8,
+	    1, 2, 3, 4, 5, 6, 7, 8,
+	    0, 0, 0, 0, 0, 0, 0, 0
+	];
+	let max_len = input_bytes.len();
+	let max_len_bits = log2(max_len);
+	let len = 32;
+	
+	let circuit = TestCircuit::<Fr> {
+	    inputs: input_bytes,
+	    len,
+	    max_len,
+	    _marker: PhantomData
+	};
+	let prover = MockProver::run(k, &circuit, vec![]).unwrap();
+	assert_eq!(prover.verify(), Ok(()));
+    }
+    
     #[test]
     pub fn test_rlp_rlc() {
 	
