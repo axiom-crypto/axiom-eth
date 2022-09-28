@@ -16,20 +16,14 @@ use zkevm_circuits::{
     table::KeccakTable
 };
 
+use crate::rlp::{
+    compute_rlc,
+};
+
 pub fn compute_keccak(msg: &[u8]) -> Vec<u8> {
     let mut keccak = Keccak::default();
     keccak.update(msg);
     keccak.digest()
-}
-
-pub fn compute_rlc<F: Field>(msg: &Vec<u8>, r: F) -> F {
-    let mut coeff = r;
-    let mut rlc = F::from(msg[0] as u64);
-    for val in msg[1..].iter() {
-	rlc = rlc + F::from(*val as u64) * coeff;
-	coeff = coeff * r;
-    }
-    rlc
 }
 
 #[derive(Clone, Debug)]

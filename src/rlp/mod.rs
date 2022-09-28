@@ -17,6 +17,24 @@ use halo2_proofs::{
 
 use eth_types::Field;
 
+pub fn compute_rlc<F: Field>(msg: &Vec<u8>, r: F) -> F {
+    let mut coeff = r;
+    let mut rlc = F::from(msg[0] as u64);
+    for val in msg[1..].iter() {
+	rlc = rlc + F::from(*val as u64) * coeff;
+	coeff = coeff * r;
+    }
+    rlc
+}
+
+pub fn compute_rlc_acc<F: Field>(msg: &Vec<u8>, r: F) -> F {
+    let mut rlc = F::from(msg[0] as u64);
+    for val in msg[1..].iter() {
+	rlc = rlc * r + F::from(*val as u64);
+    }
+    rlc
+}
+
 #[derive(Clone, Debug)]
 pub struct RlcTrace<F: Field> {
     rlc_trace: Vec<AssignedCell<F, F>>,
@@ -593,7 +611,11 @@ impl<F: Field> Circuit<F> for TestCircuit<F> {
 	    self.max_len,
 	    &rlc_cache
 	)?;
-	
+
+	let gamma = layouter.get_challenge(config.rlc.gamma);
+	let real_rlc = gamma.map(|g| compute_rlc_acc(&self.inputs[..self.len].to_vec(), g));
+	println!("rlc_val {:?}", rlc_trace.rlc_val.value());
+	println!("real_rlc {:?}", real_rlc);	
 	Ok(())
     }
 }
