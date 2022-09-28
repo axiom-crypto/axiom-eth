@@ -35,6 +35,16 @@ pub fn compute_rlc_acc<F: Field>(msg: &Vec<u8>, r: F) -> F {
     rlc
 }
 
+pub fn log2(x: usize) -> usize {
+    let mut log = 0;
+    let mut y = x;
+    while y > 0 {
+	y = y / 2;
+	log = log + 1;
+    }
+    return log;
+}
+
 #[derive(Clone, Debug)]
 pub struct RlcTrace<F: Field> {
     rlc_trace: Vec<AssignedCell<F, F>>,
@@ -54,16 +64,6 @@ pub struct RlcChip<F> {
     gamma: Challenge,
 
     _marker: PhantomData<F>
-}
-
-pub fn log2(x: usize) -> usize {
-    let mut log = 0;
-    let mut y = x;
-    while y > 0 {
-	y = y / 2;
-	log = log + 1;
-    }
-    return log;
 }
 
 impl<F: Field> RlcChip<F> {
@@ -615,7 +615,8 @@ impl<F: Field> Circuit<F> for TestCircuit<F> {
 	let gamma = layouter.get_challenge(config.rlc.gamma);
 	let real_rlc = gamma.map(|g| compute_rlc_acc(&self.inputs[..self.len].to_vec(), g));
 	println!("rlc_val {:?}", rlc_trace.rlc_val.value());
-	println!("real_rlc {:?}", real_rlc);	
+	println!("real_rlc {:?}", real_rlc);
+	rlc_trace.rlc_val.value().zip(real_rlc).assert_if_known(|(a, b)| *a == b);
 	Ok(())
     }
 }
@@ -656,7 +657,7 @@ mod tests {
     }
     
     #[test]
-    pub fn test_rlp_rlc() {
+    pub fn test_rlc() {
 	
     }
 }
