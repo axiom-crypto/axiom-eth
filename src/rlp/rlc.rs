@@ -153,7 +153,18 @@ impl<F: Field> RlcChip<F> {
 			self.q_rlc.enable(&mut region, idx)?;
 		    }
 		}
-		Ok((rlc_cells.clone(), rlc_cells[max_len - 1].clone()))
+		if input.len() > 0 {
+		    Ok((rlc_cells.clone(), rlc_cells[max_len - 1].clone()))
+		} else {
+		    let zero = region.assign_advice(
+			|| "zero",
+			self.rlc,
+			0,
+			|| Value::known(F::from(0))
+		    )?;
+		    region.constrain_constant(zero.cell(), F::from(0))?;
+		    Ok((rlc_cells.clone(), zero))
+		}
 	    }
 	)?;
 	let rlc_max_val = assigned.1;
