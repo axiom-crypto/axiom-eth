@@ -3,7 +3,7 @@ use halo2_ecc::{
     gates::{
 	Context, ContextParams,
 	GateInstructions,
-	QuantumCell::Witness,
+	QuantumCell::{Constant, Existing, Witness},
 	range::{RangeConfig, RangeStrategy, RangeStrategy::Vertical},
 	RangeInstructions},
 };
@@ -198,7 +198,7 @@ impl<F: Field> RlcChip<F> {
 	    range,
 	    pow_diff,
 	    log2(max_len + 1),
-	    rlc_cache
+	    &rlc_cache
 	)?;
 
 	let rlc_val = layouter.assign_region(
@@ -245,6 +245,176 @@ impl<F: Field> RlcChip<F> {
 	Ok(rlc_trace)
     }
 
+    // Define the dynamic RLC: RLC(a, l) = \sum_{i = 0}^{l - 1} a_i r^{l - 1 - i}
+    // * We have that:
+    //     RLC(a || b, l_a + l_b) = RLC(a, l_a) * r^{l_a} + RLC(b, l_b).
+    // * Prop: For sequences b^1, \ldots, b^k with l(b^i) = l_i and
+    //     RLC(a, l) = RLC(b^1, l_1) * r^{l_1 + ... + l_{k - 1}}
+    //                 + RLC(b^2, l_2) * r^{l_2 + ... + l_{k - 1}}
+    //                 ... + RLC(b^k, l_k), and
+    //     l = l_1 + ... + l_k, 
+    //   then a = b^1 || ... || b^k.
+    // * Pf: View both sides as polynomials in r.
+    //
+    // Assumes:
+    // * each tuple of the input is (RLC(a, l), l) for some sequence a_i of length l
+    // * all rlc_len values have been range checked
+    pub fn constrain_rlc_concat(
+	&self,
+	layouter: &mut impl Layouter<F>,
+	range: &RangeConfig<F>,
+	rlc_and_len_inputs: &Vec<(AssignedCell<F, F>, AssignedCell<F, F>)>,
+	max_lens: &Vec<usize>,
+	concat: (AssignedCell<F, F>, AssignedCell<F, F>),
+	max_len: usize,
+	rlc_cache: &Vec<AssignedCell<F, F>>,
+    ) -> Result<(), Error> {
+	assert!(rlc_cache.len() >= log2(max_len));
+	assert!(rlc_cache.len() >= log2(*max_lens.iter().max().unwrap()));
+	
+	let using_simple_floor_planner = true;
+	let mut first_pass = true;	
+	let res = layouter.assign_region(
+	    || "len check",
+	    |mut region| {
+		if first_pass && using_simple_floor_planner {
+		    first_pass = false;
+		}
+		
+		let mut aux = Context::new(
+		    region,
+		    ContextParams {
+			num_advice: range.gate.num_advice,
+			using_simple_floor_planner,
+			first_pass,
+		    },
+		);
+		let ctx = &mut aux;
+
+		let (_, _, len_sum, _) = range.gate.inner_product(
+		    ctx,
+		    rlc_and_len_inputs.iter().map(|(a, b)| Constant(F::from(1))),
+		    rlc_and_len_inputs.iter().map(|(a, b)| Existing(&b)),
+		)?;
+
+		range.gate.assert_equal(
+		    ctx,
+		    &Existing(&len_sum),
+		    &Existing(&concat.1)
+		)?;
+
+		let stats = range.finalize(ctx)?;
+		println!("stats: {:?}", stats);
+		Ok(())
+	    }
+	)?;
+
+	let mut gamma_pows = Vec::new();
+	for (idx, (rlc, len)) in rlc_and_len_inputs.iter().enumerate() {
+	    let gamma_pow = self.rlc_pow(
+		layouter,
+		range,
+		len,
+		log2(max_lens[idx]),
+		&rlc_cache
+	    )?;
+	    gamma_pows.push(gamma_pow);
+	}
+	
+	let rlc_concat = layouter.assign_region(
+	    || "rlc_concat",
+	    |mut region| {
+		let mut intermed = Vec::new();
+		for idx in 0..rlc_and_len_inputs.len() {
+		    let rlc = rlc_and_len_inputs[idx].0;
+		    let gamma_pow = gamma_pows[idx];
+
+		    if idx == 0 {
+			let zero = region.assign_advice(
+			    || "zero",
+			    self.rlc,
+			    0,
+			    || Value::known(F::from(0))
+			)?;
+			region.constrain_constant(zero.cell(), F::from(0))?;
+			let rlc_copy = rlc.copy_advice(
+			    || "rlc_copy",
+			    &mut region,
+			    self.rlc,
+			    1
+			)?;
+			let gamma_pow_copy = gamma_pow.copy_advice(
+			    || "gamma_pow_copy",
+			    &mut region,
+			    self.rlc,
+			    2
+			)?;
+			let prod = region.assign_advice(
+			    || "prod",
+			    self.rlc,
+			    3,
+			    || rlc.value().zip(gamma_pow.value()).map(|(a, b)| (*a) * (*b))
+			)?;
+			self.q_mul.enable(&mut region, 0)?;
+			intermed.push(prod);
+		    } else {
+			let rlc_copy = rlc.copy_advice(
+			    || "rlc_copy",
+			    &mut region,
+			    self.rlc,
+			    4 * idx
+			)?;
+			let prev_prod_copy = intermed[intermed.len() - 1].copy_advice(
+			    || "prev_prod_copy",
+			    &mut region,
+			    self.rlc,
+			    4 * idx + 1
+			)?;
+			let gamma_pow_copy = gamma_pow.copy_advice(
+			    || "gamma_pow_copy",
+			    &mut region,
+			    self.rlc,
+			    4 * idx + 2
+			)?;
+			let prod = region.assign_advice(
+			    || "prod",
+			    self.rlc,
+			    4 * idx + 3,
+			    || rlc.value().zip(gamma_pow.value())
+				.zip(prev_prod_copy)
+				.map(|((a, b), c)| (*a) + (*b) * (*c))
+			)?;
+			self.q_mul.enable(&mut region, 4 * idx)?;
+			intermed.push(prod);
+		    }		    
+		}
+
+		let zero = region.assign_advice(
+		    || "zero",
+		    self.rlc,
+		    4 * rlc_and_len_inputs.len(),
+		    || Value::known(F::from(0))
+		)?;
+		region.constrain_constant(zero.cell(), F::from(0))?;
+		let zero2 = zero.copy_advice(
+		    || "zero2",
+		    &mut region,
+		    self.rlc,
+		    4 * rlc_and_len_inputs.len() + 1,
+		)?;
+		let compare = concat.0.copy_advice(
+		    || "concat_copy",
+		    &mut region,
+		    self.rlc,
+		    4 * rlc_and_len_inputs.len() + 2,
+		)?;
+		self.q_mul.enable(&mut region, 4 * rlc_and_len_inputs.len() - 1)?;
+		Ok(())		    
+	    }
+	)?;
+	Ok(())
+    }
+    
     pub fn load_rlc_cache(
 	&self,
 	layouter: &mut impl Layouter<F>,
