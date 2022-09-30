@@ -43,6 +43,7 @@ pub struct RlpArrayPrefixParsed<F: Field> {
     is_big: AssignedCell<F, F>,
     
     next_len: AssignedCell<F, F>,
+    len_len: AssignedCell<F, F>,
     prefix: AssignedCell<F, F>,
 }
 
@@ -66,6 +67,7 @@ pub struct RlpArrayTrace<F: Field> {
 
     min_field_lens: Vec<usize>,
     max_field_lens: Vec<usize>,
+    max_array_len: usize,
     num_fields: usize,
 }
 
@@ -101,187 +103,205 @@ impl<F: Field> RlpArrayChip<F> {
 
     pub fn parse_rlp_field_prefix(
 	&self,
-	layouter: &mut impl Layouter<F>,
+	ctx: &mut Context<'_, F>,
 	range: &RangeConfig<F>,
 	prefix: &AssignedCell<F, F>,
     ) -> Result<RlpFieldPrefixParsed<F>, Error> {
-	let using_simple_floor_planner = true;
-	let mut first_pass = true;
-	let parsed_field_prefix = layouter.assign_region(
-	    || "RLP field prefix",
-	    |mut region| {
-		if first_pass && using_simple_floor_planner {
-		    first_pass = false;
-		}
-		
-		let mut aux = Context::new(
-		    region,
-		    ContextParams {
-			num_advice: range.gate.num_advice,
-			using_simple_floor_planner,
-			first_pass,
-		    },
-		);
-		let ctx = &mut aux;
-
-		let is_literal = range.is_less_than(
-		    ctx,
-		    &Existing(prefix),
-		    &Constant(F::from(128u64)),
-		    8,
-		)?;
-		let is_len_or_literal = range.is_less_than(
-		    ctx,
-		    &Existing(prefix),
-		    &Constant(F::from(184u64)),
-		    8,
-		)?;
-		let is_valid = range.is_less_than(
-		    ctx,
-		    &Existing(prefix),
-		    &Constant(F::from(192u64)),
-		    8,
-		)?;
-
-		let field_len = range.gate.sub(
-		    ctx,
-		    &Existing(prefix),
-		    &Constant(F::from(128u64))
-		)?;
-		let len_len = range.gate.sub(
-		    ctx,
-		    &Existing(prefix),
-		    &Constant(F::from(184u64)),
-		)?;
-
-		let is_possibly_big = range.gate.not(
-		    ctx,
-		    &Existing(&is_len_or_literal)
-		)?;
-		let is_big = range.gate.and(
-		    ctx,
-		    &Existing(&is_valid),
-		    &Existing(&is_possibly_big)
-		)?;
-
-		// length of the next RLP field
-		let next_len = range.gate.select(
- 		    ctx,
-		    &Existing(&len_len),
-		    &Existing(&field_len),
-		    &Existing(&is_big)
-		)?;
-
-		let len_len_final = range.gate.mul(
-		    ctx,
-		    &Existing(&len_len),
-		    &Existing(&is_big)
-		)?;
-		
-		let stats = range.finalize(ctx)?;
-		println!("RLP field prefix stats: {:?}", stats);
-		Ok(RlpFieldPrefixParsed {
-		    is_valid,
-		    is_literal,
-		    is_big,
-		    next_len,
-		    len_len: len_len_final,
-		    prefix: prefix.clone(),
-		})
-	    }
+	let is_literal = range.is_less_than(
+	    ctx,
+	    &Existing(prefix),
+	    &Constant(F::from(128u64)),
+	    8,
 	)?;
-	Ok(parsed_field_prefix)
+	let is_len_or_literal = range.is_less_than(
+	    ctx,
+	    &Existing(prefix),
+	    &Constant(F::from(184u64)),
+	    8,
+	)?;
+	let is_valid = range.is_less_than(
+	    ctx,
+	    &Existing(prefix),
+	    &Constant(F::from(192u64)),
+	    8,
+	)?;
+
+	let field_len = range.gate.sub(
+	    ctx,
+	    &Existing(prefix),
+	    &Constant(F::from(128u64))
+	)?;
+	let len_len = range.gate.sub(
+	    ctx,
+	    &Existing(prefix),
+	    &Constant(F::from(184u64)),
+	)?;
+
+	let is_possibly_big = range.gate.not(
+	    ctx,
+	    &Existing(&is_len_or_literal)
+	)?;
+	let is_big = range.gate.and(
+	    ctx,
+	    &Existing(&is_valid),
+	    &Existing(&is_possibly_big)
+	)?;
+
+	// length of the next RLP field
+	let next_len = range.gate.select(
+ 	    ctx,
+	    &Existing(&len_len),
+	    &Existing(&field_len),
+	    &Existing(&is_big)
+	)?;
+
+	let len_len_final = range.gate.mul(
+	    ctx,
+	    &Existing(&len_len),
+	    &Existing(&is_big)
+	)?;
+	
+	Ok(RlpFieldPrefixParsed {
+		    is_valid,
+	    is_literal,
+	    is_big,
+	    next_len,
+	    len_len: len_len_final,
+	    prefix: prefix.clone(),
+	})
     }
     
     pub fn parse_rlp_array_prefix(
 	&self,
-	layouter: &mut impl Layouter<F>,
+	ctx: &mut Context<'_, F>,
 	range: &RangeConfig<F>,
 	prefix: &AssignedCell<F, F>,
     ) -> Result<RlpArrayPrefixParsed<F>, Error> {	
-	let using_simple_floor_planner = true;
-	let mut first_pass = true;
-	let parsed_array_prefix = layouter.assign_region(
-	    || "RLP array prefix",
-	    |mut region| {
-		if first_pass && using_simple_floor_planner {
-		    first_pass = false;
-		}
-		
-		let mut aux = Context::new(
-		    region,
-		    ContextParams {
-			num_advice: range.gate.num_advice,
-			using_simple_floor_planner,
-			first_pass,
-		    },
-		);
-		let ctx = &mut aux;
-
-		let is_field = range.is_less_than(
-		    ctx,
-		    &Existing(prefix),
-		    &Constant(F::from(192u64)),
-		    8,
-		)?;
-		let is_valid = range.gate.not(
-		    ctx,
-		    &Existing(&is_field)
-		)?;
-		
-		let is_empty = range.is_equal(
-		    ctx,
-		    &Existing(prefix),
-		    &Constant(F::from(192u64))
-		)?;
-		let is_empty_or_small_array = range.is_less_than(
-		    ctx,
-		    &Existing(prefix),
-		    &Constant(F::from(248u64)),
-		    8
-		)?;
-
-		let is_possibly_big = range.gate.not(
-		    ctx,
-		    &Existing(&is_empty_or_small_array)
-		)?;
-		let is_big = range.gate.and(
-		    ctx,
-		    &Existing(&is_possibly_big),
-		    &Existing(&is_valid)
-		)?;
-
-		let array_len = range.gate.sub(
-		    ctx,
-		    &Existing(prefix),
-		    &Constant(F::from(192u64))
-		)?;
-		let len_len = range.gate.sub(
-		    ctx,
-		    &Existing(prefix),
-		    &Constant(F::from(248u64)),
-		)?;
-		let next_len = range.gate.select(
- 		    ctx,
-		    &Existing(&len_len),
-		    &Existing(&array_len),
-		    &Existing(&is_big)
-		)?;			
-		
-		let stats = range.finalize(ctx)?;
-		println!("RLP array prefix stats: {:?}", stats);
-		Ok(RlpArrayPrefixParsed {
-		    is_valid,
-		    is_empty,
-		    is_big,
-		    next_len,
-		    prefix: prefix.clone(),
-		})
-	    }
+	let is_field = range.is_less_than(
+	    ctx,
+	    &Existing(prefix),
+	    &Constant(F::from(192u64)),
+	    8,
 	)?;
-	Ok(parsed_array_prefix)
+	let is_valid = range.gate.not(
+	    ctx,
+	    &Existing(&is_field)
+	)?;
+	
+	let is_empty = range.is_equal(
+	    ctx,
+	    &Existing(prefix),
+	    &Constant(F::from(192u64))
+	)?;
+	let is_empty_or_small_array = range.is_less_than(
+	    ctx,
+	    &Existing(prefix),
+	    &Constant(F::from(248u64)),
+	    8
+	)?;
+
+	let is_possibly_big = range.gate.not(
+	    ctx,
+	    &Existing(&is_empty_or_small_array)
+	)?;
+	let is_big = range.gate.and(
+	    ctx,
+	    &Existing(&is_possibly_big),
+	    &Existing(&is_valid)
+	)?;
+
+	let array_len = range.gate.sub(
+	    ctx,
+	    &Existing(prefix),
+	    &Constant(F::from(192u64))
+	)?;
+	let len_len = range.gate.sub(
+	    ctx,
+	    &Existing(prefix),
+	    &Constant(F::from(248u64)),
+	)?;
+	let next_len = range.gate.select(
+ 	    ctx,
+	    &Existing(&len_len),
+	    &Existing(&array_len),
+	    &Existing(&is_big)
+	)?;			
+
+	let len_len_final = range.gate.mul(
+	    ctx,
+	    &Existing(&len_len),
+	    &Existing(&is_big)
+	)?;
+	
+	let stats = range.finalize(ctx)?;
+	println!("RLP array prefix stats: {:?}", stats);
+	Ok(RlpArrayPrefixParsed {
+	    is_valid,
+	    is_empty,
+	    is_big,
+	    next_len,
+	    len_len: len_len_final,
+	    prefix: prefix.clone(),
+	})
     }
 
+    fn parse_rlp_len(
+	&self,
+	ctx: &mut Context<'_, F>,
+	range: &RangeConfig<F>,
+	rlp_cells: &Vec<AssignedCell<F, F>>,
+	len_len: &AssignedCell<F, F>,
+	max_len_len: usize,
+    ) -> Result<(Vec<AssignedCell<F, F>>, AssignedCell<F, F>), Error> {
+	let mut len_vals = Vec::new();
+	for idx in 0..max_len_len {
+	    let len_val = len_len.value()
+		.zip(rlp_cells[1 + idx].value())
+		.map(|(l, r)| {
+		    if BigUint::from(idx) < fe_to_biguint(l) {
+			r.clone()
+		    } else {
+			F::from(0)
+		    }
+		});
+	    len_vals.push(Witness(len_val));
+	}
+	let len_cells = range.gate.assign_region_smart(
+	    ctx,
+	    len_vals,
+	    vec![],
+	    vec![],
+	    vec![]
+	)?;
+	let len_byte_val = {
+	    if len_cells.len() > 0 {
+		let len_cells_byte_val_vec = range.gate.accumulated_product(
+		    ctx,
+		    &vec![Constant(F::from(8)); len_cells.len() - 1],
+		    &len_cells.iter().map(|c| Existing(&c)).collect()
+		)?;
+		
+		let out = range.gate.select_from_idx(
+		    ctx,
+		    &len_cells_byte_val_vec.iter().map(|c| Existing(&c)).collect(),
+		    &Existing(&len_len)
+		)?;
+		out
+	    } else {
+		let out = range.gate.assign_region_smart(
+		    ctx,
+		    vec![Constant(F::from(0))],
+		    vec![],
+		    vec![],
+		    vec![]
+		)?;
+		out[0].clone()
+	    }
+	};
+					    
+	Ok((len_cells, len_byte_val))
+    }
+    
     pub fn decompose_rlp_field(
 	&self,
 	layouter: &mut impl Layouter<F>,
@@ -291,7 +311,7 @@ impl<F: Field> RlpArrayChip<F> {
 	max_field_len: usize,
     ) -> Result<RlpFieldTrace<F>, Error> {
 	let max_field_bytes = (log2(max_field_len) + 2) / 3;
-	let max_len_len = {
+ 	let max_len_len = {
 	    if max_field_bytes > 55 {
 		max_field_bytes
 	    } else {
@@ -307,6 +327,8 @@ impl<F: Field> RlpArrayChip<F> {
 	    cache_bits
 	)?;
 
+	// TODO: Do len range checks
+	
 	// Witness consists of
 	// * prefix_parsed
 	// * len_rlc
@@ -327,15 +349,8 @@ impl<F: Field> RlpArrayChip<F> {
 	//                       [(prefix, 1),
 	//                        (len_rlc.rlc_val, len_rlc.rlc_len),
 	//                        (field_rlc.rlc_val, field_rlc.rlc_len)])
-	//
 
-	
 	let prefix = rlp_field[0].clone();
-	let prefix_parsed = self.parse_rlp_field_prefix(
-	    layouter,
-	    range,
-	    &prefix
-	)?;
 
 	let using_simple_floor_planner = true;
 	let mut first_pass = true;	
@@ -355,57 +370,25 @@ impl<F: Field> RlpArrayChip<F> {
 		    },
 		);
 		let ctx = &mut aux;
-	    
-		let len_len = prefix_parsed.len_len.clone();
-		let mut len_vals = Vec::new();
-		for idx in 0..max_len_len {
-		    let len_val = len_len.value()
-			.zip(rlp_field[1 + idx].value())
-			.map(|(l, r)| {
-			if BigUint::from(idx) < fe_to_biguint(l) {
-			    r.clone()
-			} else {
-			    F::from(0)
-			}
-		    });
-		    len_vals.push(Witness(len_val));
-		}
-		let len_cells = range.gate.assign_region_smart(
+
+		let prefix_parsed = self.parse_rlp_field_prefix(
 		    ctx,
-		    len_vals,
-		    vec![],
-		    vec![],
-		    vec![]
+		    range,
+		    &prefix
 		)?;
-		let len_cells_byte_val = {
-		    if len_cells.len() > 0 {
-			let len_cells_byte_val_vec = range.gate.accumulated_product(
-			    ctx,
-			    &vec![Constant(F::from(8)); len_cells.len() - 1],
-			    &len_cells.iter().map(|c| Existing(&c)).collect()
-			)?;
 		
-			let out = range.gate.select_from_idx(
-			    ctx,
-			    &len_cells_byte_val_vec.iter().map(|c| Existing(&c)).collect(),
-			    &Existing(&len_len)
-			)?;
-			out
-		    } else {
-			let out = range.gate.assign_region_smart(
-			    ctx,
-			    vec![Constant(F::from(0))],
-			    vec![],
-			    vec![],
-			    vec![]
-			)?;
-			out[0].clone()
-		    }
-		};
+		let len_len = prefix_parsed.len_len.clone();
+		let (len_cells, len_byte_val) = self.parse_rlp_len(
+		    ctx,
+		    range,
+		    &rlp_field,
+		    &len_len,
+		    max_len_len
+		)?;
 					    
 		let field_len = range.gate.select(
 		    ctx,
-		    &Existing(&len_cells_byte_val),
+		    &Existing(&len_byte_val),
 		    &Existing(&prefix_parsed.next_len),
 		    &Existing(&prefix_parsed.is_big)
 		)?;
@@ -454,7 +437,6 @@ impl<F: Field> RlpArrayChip<F> {
 	    max_len_len,
 	)?;
 	
-
 	let field_rlc = self.rlc.compute_rlc(
 	    layouter,
 	    range,
@@ -512,8 +494,129 @@ impl<F: Field> RlpArrayChip<F> {
 	&self,
 	layouter: &mut impl Layouter<F>,
 	range: &RangeConfig<F>,
+	rlp_array: &Vec<AssignedCell<F, F>>,
+	min_field_lens: Vec<usize>,
+	max_field_lens: Vec<usize>,
+	max_array_len: usize,
+	num_fields: usize,
     ) -> Result<RlpArrayTrace<F>, Error> {
+	let max_array_bytes = (log2(max_array_len) + 2) / 3;
+	let max_len_len = {
+	    if max_array_bytes > 55 {
+		max_array_bytes
+	    } else {
+		0
+	    }
+	};
+	assert_eq!(rlp_array.len(), max_array_len);
+
+	// Witness consists of
+	// * prefix_parsed
+	// * len_rlc
+	// * field_rlcs: Vec<RlpFieldTrace>
+	// * rlp_array_rlc
+	//
+	// check that:
+	// * len_rlc.rlc_len in [0, max_len_len]
+	// * field_rlcs[idx].rlc_len in [0, max_field_len[idx]]
+	// * rlp_field_rlc.rlc_len in [0, max_rlp_field_len]
+	//
+	// * rlp_field_rlc.rlc_len = 1 + len_rlc.rlc_len + field_rlc.rlc_len
+	// * len_rlc.rlc_len = prefix_parsed.is_big * prefix_parsed.next_len
+	// * field_rlc.rlc_len = prefix_parsed.is_big * prefix_parsed.next_len
+	//                       + (1 - prefix_parsed.is_big) * byte_value(len)
+	//
+	// * rlp_field_rlc = accumulate(
+	//                       [(prefix, 1),
+	//                        (len_rlc.rlc_val, len_rlc.rlc_len),
+	//                        (field_rlc.rlc_val, field_rlc.rlc_len)])
+	//
+
+	let prefix = rlp_array[0].clone();
+
+	let using_simple_floor_planner = true;
+	let mut first_pass = true;	
+	let (len_cells, len_len, all_fields_len, rlp_len) = layouter.assign_region(
+	    || "assign witness cells",
+	    |mut region| {
+		if first_pass && using_simple_floor_planner {
+		    first_pass = false;
+		}
+		let mut aux = Context::new(
+		    region,
+		    ContextParams {
+			num_advice: range.gate.num_advice,
+			using_simple_floor_planner,
+			first_pass,
+		    },
+		);
+		let ctx = &mut aux;
+
+		let prefix_parsed = self.parse_rlp_array_prefix(
+		    ctx,
+		    range,
+		    &prefix
+		)?;
+		
+		let len_len = prefix_parsed.len_len.clone();
+		let (len_cells, len_byte_val) = self.parse_rlp_len(
+		    ctx,
+		    range,
+		    &rlp_array,
+		    &len_len,
+		    max_len_len
+		)?;
+
+		let all_fields_len = range.gate.select(
+		    ctx,
+		    &Existing(&len_byte_val),
+		    &Existing(&prefix_parsed.next_len),
+		    &Existing(&prefix_parsed.is_big)
+		)?;
+
+		let (_, _, rlp_len, _) = range.gate.inner_product(
+		    ctx,
+		    &vec![Constant(F::from(1)), Constant(F::from(1)), Constant(F::from(1))],
+		    &vec![Constant(F::from(1)), Existing(&len_len), Existing(&all_fields_len)],
+		)?;
+
+		let mut field_cells_vec = Vec::new();
+		let mut field_len_vec = Vec::new();
+
+		let mut prefix_idxs = Vec::new();
+		let prefix_idx = range.gate.add(ctx, &Constant(F::from(1)), &Existing(&len_len))?;
+		prefix_idxs.push(prefix_idx);
+
+		for idx in 0..num_fields {
+		    let prefix = range.gate.select_from_idx(
+			ctx,
+			rlp_array,
+			prefix_idxs[idx]
+		    )?;
+
+		    // TODO: Need to do selection
+		    
+		    let field_trace = self.decompose_rlp_field(
+			layouter,
+			range,
+			rlp_array,
+			min_field_lens[idx],
+			max_field_lens[idx]
+		    )?;	
+		}
+
+		let stats = range.finalize(ctx)?;
+		Ok((len_cells, len_len, all_fields_len, rlp_len))
+	    }
+	)?;
+
+
 	todo!();
+
+	let parsed_rlp_array = RlpArrayTrace {
+	    
+	};	
+	Ok(parsed_rlp_array)
     }
 }
 
