@@ -1,3 +1,4 @@
+use std::cmp::max;
 use std::marker::PhantomData;
 use num_bigint::BigUint;
 use num_traits::cast::ToPrimitive;
@@ -289,10 +290,16 @@ impl<F: Field> RlpArrayChip<F> {
 	min_field_len: usize,
 	max_field_len: usize,
     ) -> Result<RlpFieldTrace<F>, Error> {
-	assert_eq!(rlp_field.len(), max_field_len);
-
-	let max_len_len = (log2(max_field_len) + 2) / 3;
+	let max_field_bytes = (log2(max_field_len) + 2) / 3;
+	let max_len_len = {
+	    if max_field_bytes > 55 {
+		max_field_bytes
+	    } else {
+		0
+	    }
+	};
 	let max_rlp_field_len = 1 + max_len_len + max_field_len;
+	assert_eq!(rlp_field.len(), max_rlp_field_len);
 	
 	let cache_bits = log2(max_rlp_field_len);
 	let rlc_cache = self.rlc.load_rlc_cache(
@@ -363,7 +370,6 @@ impl<F: Field> RlpArrayChip<F> {
 		    });
 		    len_vals.push(Witness(len_val));
 		}
-	    
 		let len_cells = range.gate.assign_region_smart(
 		    ctx,
 		    len_vals,
@@ -371,17 +377,32 @@ impl<F: Field> RlpArrayChip<F> {
 		    vec![],
 		    vec![]
 		)?;
-		let len_cells_byte_val_vec = range.gate.accumulated_product(
-		    ctx,
-		    &vec![Constant(F::from(8)); len_cells.len() - 1],
-		    &len_cells.iter().map(|c| Existing(&c)).collect()
-		)?;
-		let len_cells_byte_val = range.gate.select_from_idx(
-		    ctx,
-		    &len_cells_byte_val_vec.iter().map(|c| Existing(&c)).collect(),
-		    &Existing(&len_len)
-		)?;
-		    
+		let len_cells_byte_val = {
+		    if len_cells.len() > 0 {
+			let len_cells_byte_val_vec = range.gate.accumulated_product(
+			    ctx,
+			    &vec![Constant(F::from(8)); len_cells.len() - 1],
+			    &len_cells.iter().map(|c| Existing(&c)).collect()
+			)?;
+		
+			let out = range.gate.select_from_idx(
+			    ctx,
+			    &len_cells_byte_val_vec.iter().map(|c| Existing(&c)).collect(),
+			    &Existing(&len_len)
+			)?;
+			out
+		    } else {
+			let out = range.gate.assign_region_smart(
+			    ctx,
+			    vec![Constant(F::from(0))],
+			    vec![],
+			    vec![],
+			    vec![]
+			)?;
+			out[0].clone()
+		    }
+		};
+					    
 		let field_len = range.gate.select(
 		    ctx,
 		    &Existing(&len_cells_byte_val),
@@ -432,6 +453,7 @@ impl<F: Field> RlpArrayChip<F> {
 	    len_len,
 	    max_len_len,
 	)?;
+	
 
 	let field_rlc = self.rlc.compute_rlc(
 	    layouter,
@@ -448,7 +470,7 @@ impl<F: Field> RlpArrayChip<F> {
 	    rlp_len,
 	    max_rlp_field_len,
 	)?;
-	
+
 	let one = layouter.assign_region(
 	    || "one",
 	    |mut region| {
@@ -495,11 +517,143 @@ impl<F: Field> RlpArrayChip<F> {
     }
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct RlpTestCircuit<F> {
+    inputs: Vec<u8>,
+    min_len: usize,
+    max_len: usize,
+    _marker: PhantomData<F>,
+}
+
+impl<F: Field> Circuit<F> for RlpTestCircuit<F> {
+    type Config = RlpArrayChip<F>;
+    type FloorPlanner = SimpleFloorPlanner;
+
+    fn without_witnesses(&self) -> Self {
+	Self::default()
+    }
+
+    fn configure(meta: &mut ConstraintSystem<F>) -> Self::Config {
+	RlpArrayChip::configure(
+	    meta,
+	    Vertical,
+	    1,
+	    0,
+	    1,
+	    10		    
+	)
+    }
+
+    fn synthesize(
+	&self,
+	config: Self::Config,
+	mut layouter: impl Layouter<F>,
+    ) -> Result<(), Error> {
+	config.range.load_lookup_table(&mut layouter)?;
+
+	let using_simple_floor_planner = true;
+	let mut first_pass = true;	   
+	let inputs_assigned = layouter.assign_region(
+	    || "load_inputs",
+	    |mut region| {
+		if first_pass && using_simple_floor_planner {
+		    first_pass = false;
+		}
+		
+		let mut aux = Context::new(
+		    region,
+		    ContextParams {
+			num_advice: config.range.gate.num_advice,
+			using_simple_floor_planner,
+			first_pass,
+		    },
+		);
+		let ctx = &mut aux;
+		
+		let inputs_assigned = config.range.gate.assign_region_smart(
+		    ctx,
+		    self.inputs.iter().map(|x| Witness(Value::known(F::from(*x as u64)))).collect(),
+		    vec![],
+		    vec![],
+		    vec![]
+		)?;
+		let stats = config.range.finalize(ctx)?;
+		Ok(inputs_assigned)
+	    }
+	)?;
+	
+	let rlp_field_trace = config.decompose_rlp_field(
+	    &mut layouter,
+	    &config.range,
+	    &inputs_assigned,
+	    self.min_len,
+	    self.max_len,
+	)?;
+	Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use hex::FromHex;
+    use std::marker::PhantomData;
+    use halo2_proofs::{
+	dev::{MockProver},
+	halo2curves::bn256::Fr,
+    };
+    use crate::rlp::{
+	rlc::log2,
+	rlp::RlpTestCircuit,	
+    };
 
     #[test]
-    pub fn test_mock_rlp() {
+    pub fn test_mock_rlp_field() {
+	let k = 18;
+	let input_bytes: Vec<u8> = Vec::from_hex("a09bdb004d9b1e7f3e5f86fbdc9856f21f9dcb07a44c42f5de8eec178514d279df0000").unwrap();
 
+	let circuit = RlpTestCircuit::<Fr> {
+	    inputs: input_bytes,
+	    min_len: 0,
+	    max_len: 34,
+	    _marker: PhantomData
+	};
+	let prover_try = MockProver::run(k, &circuit, vec![]);
+	let prover = prover_try.unwrap();
+	prover.assert_satisfied();
+	assert_eq!(prover.verify(), Ok(()));
+    }
+    
+    #[test]
+    pub fn test_mock_rlp_long_field() {
+	let k = 18;
+	let input_bytes: Vec<u8> = Vec::from_hex("a09bdb004d9b1e7f3e5f86fbdc9856f21f9dcb07a44c42f5de8eec178514d279df00000000000000000000000000000000000000000000000000000000").unwrap();
+
+	let circuit = RlpTestCircuit::<Fr> {
+	    inputs: input_bytes,
+	    min_len: 0,
+	    max_len: 60,
+	    _marker: PhantomData
+	};
+	let prover_try = MockProver::run(k, &circuit, vec![]);
+	let prover = prover_try.unwrap();
+	prover.assert_satisfied();
+	assert_eq!(prover.verify(), Ok(()));
+    }
+
+    #[test]
+    pub fn test_mock_rlp_long_long_field() {
+	let k = 18;
+	let input_bytes: Vec<u8> = Vec::from_hex("813adb004d9b1e7f3e5f86fbdc9856f21f9dcb07a44c42f5de8eec178514d279df00000000000000000000000000000000000000000000000000000000").unwrap();
+
+	let circuit = RlpTestCircuit::<Fr> {
+	    inputs: input_bytes,
+	    min_len: 0,
+	    max_len: 60,
+	    _marker: PhantomData
+	};
+	let prover_try = MockProver::run(k, &circuit, vec![]);
+	let prover = prover_try.unwrap();
+	prover.assert_satisfied();
+	assert_eq!(prover.verify(), Ok(()));
     }
 }

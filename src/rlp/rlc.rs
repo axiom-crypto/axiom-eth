@@ -1,3 +1,4 @@
+use std::cmp::max;
 use std::marker::PhantomData;
 use halo2_ecc::{
     gates::{
@@ -187,8 +188,28 @@ impl<F: Field> RlcChip<F> {
 		Ok((idx, is_zero))
 	    }
 	)?;
-	
-	let rlc_val_pre = self.select_from_cells(layouter, range, &rlc_cells, &idx)?;
+
+	let rlc_val_pre = {
+	    if input.len() == 0 {
+		let zero = layouter.assign_region(
+		    || "zero",
+		    |mut region| {
+			let zero = region.assign_advice(
+			    || "zero",
+			    self.val,
+			    0,
+			    || Value::known(F::from(0))
+			)?;
+			region.constrain_constant(zero.cell(), F::from(0))?;
+			Ok(zero)
+		    }
+		)?;
+		zero
+	    } else {
+		let out = self.select_from_cells(layouter, range, &rlc_cells, &idx)?;
+		out
+	    }
+	};
 
 	// | rlc_val | is_zero | rlc_val_pre | rlc_val_pre |
 	let rlc_val = layouter.assign_region(
@@ -284,6 +305,7 @@ impl<F: Field> RlcChip<F> {
 						       || acc_vec[acc_vec.len() - 1].value()
 						       .zip(cell.value()).zip(ind.value())
 						       .map(|((x, y), z)| (*x) + (*y) * (*z)))?;
+		    self.q_mul.enable(&mut region, 3 * idx)?;
 		    acc_vec.push(acc_new);			
 		}
 		Ok(acc_vec[acc_vec.len() - 1].clone())
@@ -318,7 +340,7 @@ impl<F: Field> RlcChip<F> {
     ) -> Result<(), Error> {
 	assert!(rlc_cache.len() >= log2(max_len));
 	assert!(rlc_cache.len() >= log2(*max_lens.iter().max().unwrap()));
-	
+
 	let using_simple_floor_planner = true;
 	let mut first_pass = true;	
 	let res = layouter.assign_region(
@@ -362,7 +384,7 @@ impl<F: Field> RlcChip<F> {
 		layouter,
 		range,
 		len.clone(),
-		log2(max_lens[idx]),
+		max(1, log2(max_lens[idx])),
 		&rlc_cache
 	    )?;
 	    gamma_pows.push(gamma_pow);
@@ -374,64 +396,42 @@ impl<F: Field> RlcChip<F> {
 		let mut intermed = Vec::new();
 		for idx in 0..rlc_and_len_inputs.len() {
 		    let rlc = rlc_and_len_inputs[idx].0.clone();
-		    let gamma_pow = gamma_pows[idx].clone();
 
 		    if idx == 0 {
-			let zero = region.assign_advice(
-			    || "zero",
-			    self.rlc,
-			    0,
-			    || Value::known(F::from(0))
-			)?;
-			region.constrain_constant(zero.cell(), F::from(0))?;
 			let rlc_copy = rlc.copy_advice(
 			    || "rlc_copy",
 			    &mut region,
 			    self.rlc,
-			    1
+			    0
 			)?;
-			let gamma_pow_copy = gamma_pow.copy_advice(
-			    || "gamma_pow_copy",
-			    &mut region,
-			    self.rlc,
-			    2
-			)?;
-			let prod = region.assign_advice(
-			    || "prod",
-			    self.rlc,
-			    3,
-			    || rlc.value().zip(gamma_pow.value()).map(|(a, b)| (*a) * (*b))
-			)?;
-			self.q_mul.enable(&mut region, 0)?;
-			intermed.push(prod);
+			intermed.push(rlc_copy);
 		    } else {
+			let gamma_pow = gamma_pows[idx].clone();
 			let rlc_copy = rlc.copy_advice(
 			    || "rlc_copy",
 			    &mut region,
 			    self.rlc,
-			    4 * idx
+			    4 * idx - 3
 			)?;
 			let prev_prod_copy = intermed[intermed.len() - 1].copy_advice(
 			    || "prev_prod_copy",
 			    &mut region,
 			    self.rlc,
-			    4 * idx + 1
+			    4 * idx - 2
 			)?;
 			let gamma_pow_copy = gamma_pow.copy_advice(
 			    || "gamma_pow_copy",
 			    &mut region,
 			    self.rlc,
-			    4 * idx + 2
+			    4 * idx - 1
 			)?;
 			let prod = region.assign_advice(
 			    || "prod",
 			    self.rlc,
-			    4 * idx + 3,
-			    || rlc.value().zip(gamma_pow.value())
-				.zip(prev_prod_copy.value())
-				.map(|((a, b), c)| (*a) + (*b) * (*c))
+			    4 * idx,
+			    || rlc.value().copied() + gamma_pow.value().copied() * prev_prod_copy.value().copied()
 			)?;
-			self.q_mul.enable(&mut region, 4 * idx)?;
+			self.q_mul.enable(&mut region, 4 * idx - 3)?;
 			intermed.push(prod);
 		    }		    
 		}
@@ -439,7 +439,7 @@ impl<F: Field> RlcChip<F> {
 		let zero = region.assign_advice(
 		    || "zero",
 		    self.rlc,
-		    4 * rlc_and_len_inputs.len(),
+		    4 * rlc_and_len_inputs.len() - 3,
 		    || Value::known(F::from(0))
 		)?;
 		region.constrain_constant(zero.cell(), F::from(0))?;
@@ -447,15 +447,15 @@ impl<F: Field> RlcChip<F> {
 		    || "zero2",
 		    &mut region,
 		    self.rlc,
-		    4 * rlc_and_len_inputs.len() + 1,
+		    4 * rlc_and_len_inputs.len() - 2,
 		)?;
 		let compare = concat.0.copy_advice(
 		    || "concat_copy",
 		    &mut region,
 		    self.rlc,
-		    4 * rlc_and_len_inputs.len() + 2,
+		    4 * rlc_and_len_inputs.len() - 1,
 		)?;
-		self.q_mul.enable(&mut region, 4 * rlc_and_len_inputs.len() - 1)?;
+		self.q_mul.enable(&mut region, 4 * rlc_and_len_inputs.len() - 4)?;
 		Ok(())		    
 	    }
 	)?;
@@ -644,67 +644,71 @@ impl<F: Field> RlcChip<F> {
 		    prod_cells.push(prod);		    
 		}
 
-		let mut intermed = Vec::new();
-		for idx in 0..(pow_bits - 1) {
-		    if idx == 0 {
-			let zero = region.assign_advice(
-			    || "zero",
-			    self.rlc,
-			    8 * pow_bits,
-			    || Value::known(F::from(0))
-			)?;
-			region.constrain_constant(zero.cell(), F::from(0))?;
-			prod_cells[0].copy_advice(
-			    || "cache0",
-			    &mut region,
-			    self.rlc,
-			    8 * pow_bits + 1
-			)?;
-			prod_cells[1].copy_advice(
-			    || "cache1",
-			    &mut region,
-			    self.rlc,
-			    8 * pow_bits + 2
-			)?;
-			let prod1 = region.assign_advice(
-			    || "prod1",
-			    self.rlc,
-			    8 * pow_bits + 3,
-			    || prod_cells[0].value().zip(prod_cells[1].value()).map(|(a, b)| (*a) * (*b))
-			)?;
-			self.q_mul.enable(&mut region, 8 * pow_bits)?;
-			intermed.push(prod1);
-		    } else {
-			let zero = region.assign_advice(
-			    || "zero",
-			    self.rlc,
-			    8 * pow_bits + 4 * idx,
-			    || Value::known(F::from(0))
-			)?;
-			region.constrain_constant(zero.cell(), F::from(0))?;
-			prod_cells[idx + 1].copy_advice(
-			    || "cache",
-			    &mut region,
-			    self.rlc,
-			    8 * pow_bits + 4 * idx + 1,
-			)?;
-			intermed[intermed.len() - 1].copy_advice(
-			    || "intermed",
-			    &mut region,
-			    self.rlc,
-			    8 * pow_bits + 4 * idx + 2,
-			)?;
-			let prod = region.assign_advice(
-			    || "prod",
-			    self.rlc,
-			    8 * pow_bits + 4 * idx + 3,
-			    || prod_cells[idx + 1].value().zip(intermed[intermed.len() - 1].value()).map(|(a, b)| (*a) * (*b))
-			)?;
-			self.q_mul.enable(&mut region, 8 * pow_bits + 4 * idx)?;
-			intermed.push(prod);			
+		if pow_bits == 1 {
+		    Ok(prod_cells[0].clone())
+		} else {
+		    let mut intermed = Vec::new();
+		    for idx in 0..(pow_bits - 1) {
+			if idx == 0 {
+			    let zero = region.assign_advice(
+				|| "zero",
+				self.rlc,
+				8 * pow_bits,
+				|| Value::known(F::from(0))
+			    )?;
+			    region.constrain_constant(zero.cell(), F::from(0))?;
+			    prod_cells[0].copy_advice(
+				|| "cache0",
+				&mut region,
+				self.rlc,
+				8 * pow_bits + 1
+			    )?;
+			    prod_cells[1].copy_advice(
+				|| "cache1",
+				&mut region,
+				self.rlc,
+				8 * pow_bits + 2
+			    )?;
+			    let prod1 = region.assign_advice(
+				|| "prod1",
+				self.rlc,
+				8 * pow_bits + 3,
+				|| prod_cells[0].value().zip(prod_cells[1].value()).map(|(a, b)| (*a) * (*b))
+			    )?;
+			    self.q_mul.enable(&mut region, 8 * pow_bits)?;
+			    intermed.push(prod1);
+			} else {
+			    let zero = region.assign_advice(
+				|| "zero",
+				self.rlc,
+				8 * pow_bits + 4 * idx,
+				|| Value::known(F::from(0))
+			    )?;
+			    region.constrain_constant(zero.cell(), F::from(0))?;
+			    prod_cells[idx + 1].copy_advice(
+				|| "cache",
+				&mut region,
+				self.rlc,
+				8 * pow_bits + 4 * idx + 1,
+			    )?;
+			    intermed[intermed.len() - 1].copy_advice(
+				|| "intermed",
+				&mut region,
+				self.rlc,
+				8 * pow_bits + 4 * idx + 2,
+			    )?;
+			    let prod = region.assign_advice(
+				|| "prod",
+				self.rlc,
+				8 * pow_bits + 4 * idx + 3,
+				|| prod_cells[idx + 1].value().zip(intermed[intermed.len() - 1].value()).map(|(a, b)| (*a) * (*b))
+			    )?;
+			    self.q_mul.enable(&mut region, 8 * pow_bits + 4 * idx)?;
+			    intermed.push(prod);			
+			}
 		    }
+		    Ok(intermed[pow_bits - 2].clone())
 		}
-		Ok(intermed[intermed.len() - 1].clone())
 	    }
 	)?;
 	
