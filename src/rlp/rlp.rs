@@ -1,4 +1,6 @@
 use std::marker::PhantomData;
+use num_bigint::BigUint;
+use num_traits::cast::ToPrimitive;
 use halo2_ecc::{
     gates::{
 	Context, ContextParams,
@@ -6,6 +8,7 @@ use halo2_ecc::{
 	QuantumCell::{Constant, Existing, Witness},
 	range::{RangeConfig, RangeStrategy, RangeStrategy::Vertical},
 	RangeInstructions},
+    utils::fe_to_biguint,
 };
 use halo2_proofs::{
     circuit::{AssignedCell, Layouter, SimpleFloorPlanner, Value},
@@ -18,7 +21,7 @@ use halo2_proofs::{
 use eth_types::Field;
 
 use crate::rlp::rlc::{
-    RlcChip, RlcTrace
+    log2, RlcChip, RlcTrace
 };
 
 #[derive(Clone, Debug)]
@@ -28,6 +31,7 @@ pub struct RlpFieldPrefixParsed<F: Field> {
     is_big: AssignedCell<F, F>,
     
     next_len: AssignedCell<F, F>,
+    len_len: AssignedCell<F, F>,
     prefix: AssignedCell<F, F>,
 }
 
@@ -165,7 +169,13 @@ impl<F: Field> RlpArrayChip<F> {
 		    &Existing(&len_len),
 		    &Existing(&field_len),
 		    &Existing(&is_big)
-		)?;			
+		)?;
+
+		let len_len_final = range.gate.mul(
+		    ctx,
+		    &Existing(&len_len),
+		    &Existing(&is_big)
+		)?;
 		
 		let stats = range.finalize(ctx)?;
 		println!("RLP field prefix stats: {:?}", stats);
@@ -174,6 +184,7 @@ impl<F: Field> RlpArrayChip<F> {
 		    is_literal,
 		    is_big,
 		    next_len,
+		    len_len: len_len_final,
 		    prefix: prefix.clone(),
 		})
 	    }
@@ -279,11 +290,50 @@ impl<F: Field> RlpArrayChip<F> {
 	max_field_len: usize,
     ) -> Result<RlpFieldTrace<F>, Error> {
 	assert_eq!(rlp_field.len(), max_field_len);
+
+	let max_len_len = (log2(max_field_len) + 2) / 3;
+	let max_rlp_field_len = 1 + max_len_len + max_field_len;
 	
+	let cache_bits = log2(max_rlp_field_len);
+	let rlc_cache = self.rlc.load_rlc_cache(
+	    layouter,
+	    cache_bits
+	)?;
+
+	// Witness consists of
+	// * prefix_parsed
+	// * len_rlc
+	// * field_rlc
+	// * rlp_field_rlc
+	//
+	// check that:
+	// * len_rlc.rlc_len in [0, max_len_len]
+	// * field_rlc.rlc_len in [0, max_field_len]
+	// * rlp_field_rlc.rlc_len in [0, max_rlp_field_len]
+	//
+	// * rlp_field_rlc.rlc_len = 1 + len_rlc.rlc_len + field_rlc.rlc_len
+	// * len_rlc.rlc_len = prefix_parsed.is_big * prefix_parsed.next_len
+	// * field_rlc.rlc_len = prefix_parsed.is_big * prefix_parsed.next_len
+	//                       + (1 - prefix_parsed.is_big) * byte_value(len)
+	//
+	// * rlp_field_rlc = accumulate(
+	//                       [(prefix, 1),
+	//                        (len_rlc.rlc_val, len_rlc.rlc_len),
+	//                        (field_rlc.rlc_val, field_rlc.rlc_len)])
+	//
+
+	
+	let prefix = rlp_field[0].clone();
+	let prefix_parsed = self.parse_rlp_field_prefix(
+	    layouter,
+	    range,
+	    &prefix
+	)?;
+
 	let using_simple_floor_planner = true;
-	let mut first_pass = true;
-	let parsed_rlp_field = layouter.assign_region(
-	    || "RLP array prefix",
+	let mut first_pass = true;	
+	let (len_cells, len_len, field_cells, field_len, rlp_len) = layouter.assign_region(
+	    || "assign witness cells",
 	    |mut region| {
 		if first_pass && using_simple_floor_planner {
 		    first_pass = false;
@@ -298,23 +348,141 @@ impl<F: Field> RlpArrayChip<F> {
 		    },
 		);
 		let ctx = &mut aux;
+	    
+		let len_len = prefix_parsed.len_len.clone();
+		let mut len_vals = Vec::new();
+		for idx in 0..max_len_len {
+		    let len_val = len_len.value()
+			.zip(rlp_field[1 + idx].value())
+			.map(|(l, r)| {
+			if BigUint::from(idx) < fe_to_biguint(l) {
+			    r.clone()
+			} else {
+			    F::from(0)
+			}
+		    });
+		    len_vals.push(Witness(len_val));
+		}
+	    
+		let len_cells = range.gate.assign_region_smart(
+		    ctx,
+		    len_vals,
+		    vec![],
+		    vec![],
+		    vec![]
+		)?;
+		let len_cells_byte_val_vec = range.gate.accumulated_product(
+		    ctx,
+		    &vec![Constant(F::from(8)); len_cells.len() - 1],
+		    &len_cells.iter().map(|c| Existing(&c)).collect()
+		)?;
+		let len_cells_byte_val = range.gate.select_from_idx(
+		    ctx,
+		    &len_cells_byte_val_vec.iter().map(|c| Existing(&c)).collect(),
+		    &Existing(&len_len)
+		)?;
+		    
+		let field_len = range.gate.select(
+		    ctx,
+		    &Existing(&len_cells_byte_val),
+		    &Existing(&prefix_parsed.next_len),
+		    &Existing(&prefix_parsed.is_big)
+		)?;
 
-		let prefix = rlp_field[0].clone();
-		
+		let mut field_vals = Vec::with_capacity(max_field_len);
+		for idx in 0..max_field_len {
+		    let val_vec = rlp_field.iter().map(|x| x.value().copied()).collect::<Vec<Value<F>>>();
+		    let vec_val: Value<Vec<F>> = Value::from_iter(val_vec);
+		    let field_val = field_len.value()
+			.zip(len_len.value())
+			.zip(vec_val)
+			.map(|((fl, ll), rf)| {
+			    if BigUint::from(idx) < fe_to_biguint(fl) {
+				rf[1 + fe_to_biguint(ll).to_usize().unwrap() + idx].clone()
+			    } else {
+				F::from(0)
+			    }
+			});
+		    field_vals.push(Witness(field_val));
+		}
+		let field_cells = range.gate.assign_region_smart(
+		    ctx,
+		    field_vals,
+		    vec![],
+		    vec![],
+		    vec![]
+		)?;
+
+		let (_, _, rlp_len, _) = range.gate.inner_product(
+		    ctx,
+		    &vec![Constant(F::from(1)), Constant(F::from(1)), Constant(F::from(1))],
+		    &vec![Constant(F::from(1)), Existing(&len_len), Existing(&field_len)],
+		)?;
 
 		let stats = range.finalize(ctx)?;
-		println!("RLP field stats: {:?}", stats);
-		todo!();
-//		Ok(RlpFieldTrace {
-//		    rlp_trace,
-//		    prefix,
-//		    len_trace,
-//		    field_trace,
-//		    min_field_len,
-//		    max_field_len,
-//		})		
+		println!("stats: {:?}", stats);
+		Ok((len_cells, len_len, field_cells, field_len, rlp_len))
 	    }
 	)?;
+	
+	let len_rlc = self.rlc.compute_rlc(
+	    layouter,
+	    range,
+	    &len_cells,
+	    len_len,
+	    max_len_len,
+	)?;
+
+	let field_rlc = self.rlc.compute_rlc(
+	    layouter,
+	    range,
+	    &field_cells,
+	    field_len,
+	    max_field_len,
+	)?;
+	
+	let rlp_field_rlc = self.rlc.compute_rlc(
+	    layouter,
+	    range,
+	    rlp_field,
+	    rlp_len,
+	    max_rlp_field_len,
+	)?;
+	
+	let one = layouter.assign_region(
+	    || "one",
+	    |mut region| {
+		let one = region.assign_advice(
+		    || "one",
+		    self.rlc.val,
+		    0,
+		    || Value::known(F::from(1))
+		)?;
+		region.constrain_constant(one.cell(), F::from(1))?;
+		Ok(one)
+	    }
+	)?;
+
+	let concat_check = self.rlc.constrain_rlc_concat(
+	    layouter,
+	    range,
+	    &vec![(prefix.clone(), one),
+		 (len_rlc.rlc_val.clone(), len_rlc.rlc_len.clone()),
+		 (field_rlc.rlc_val.clone(), field_rlc.rlc_len.clone())],
+	    &vec![1, max_len_len, max_field_len],
+	    (rlp_field_rlc.rlc_val.clone(), rlp_field_rlc.rlc_len.clone()),
+	    rlp_field_rlc.max_len,
+	    &rlc_cache
+	)?;
+
+	let parsed_rlp_field = RlpFieldTrace {
+	    rlp_trace: rlp_field_rlc,
+	    prefix,
+	    len_trace: len_rlc,
+	    field_trace: field_rlc,
+	    min_field_len,
+	    max_field_len,
+	};
 	Ok(parsed_rlp_field)
     }
     

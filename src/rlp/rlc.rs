@@ -47,16 +47,14 @@ pub fn log2(x: usize) -> usize {
 
 #[derive(Clone, Debug)]
 pub struct RlcTrace<F: Field> {
-    rlc_trace: Vec<AssignedCell<F, F>>,
-    rlc_max_val: AssignedCell<F, F>,
-    rlc_val: AssignedCell<F, F>,
-    rlc_len: AssignedCell<F, F>,
-    max_len: usize,
+    pub rlc_val: AssignedCell<F, F>,
+    pub rlc_len: AssignedCell<F, F>,
+    pub max_len: usize,
 }
 
 #[derive(Clone, Debug)]
 pub struct RlcChip<F> {
-    val: Column<Advice>,
+    pub val: Column<Advice>,
     rlc: Column<Advice>,
     q_rlc: Selector,
     q_mul: Selector,
@@ -113,6 +111,7 @@ impl<F: Field> RlcChip<F> {
 	config
     }
 
+    // assumes 0 <= len <= max_len
     pub fn compute_rlc(
 	&self,
 	layouter: &mut impl Layouter<F>,
@@ -120,15 +119,14 @@ impl<F: Field> RlcChip<F> {
 	input: &Vec<AssignedCell<F, F>>,
 	len: AssignedCell<F, F>,
 	max_len: usize,
-	rlc_cache: &Vec<AssignedCell<F, F>>,
     ) -> Result<RlcTrace<F>, Error> {
 	assert!(input.len() == max_len);
 
 	let gamma = layouter.get_challenge(self.gamma);
-	let assigned = layouter.assign_region(
+	let rlc_cells = layouter.assign_region(
 	    || "RLC array",
 	    |mut region| {
-		let mut rlc_cells = Vec::new();
+		let mut rlc_cells = Vec::with_capacity(max_len);
 		let mut running_rlc = Value::known(F::from(0));
 		for (idx, val) in input.iter().enumerate() {
 		    let val_assigned = val.copy_advice(
@@ -153,90 +151,69 @@ impl<F: Field> RlcChip<F> {
 			self.q_rlc.enable(&mut region, idx)?;
 		    }
 		}
-		if input.len() > 0 {
-		    Ok((rlc_cells.clone(), rlc_cells[max_len - 1].clone()))
-		} else {
-		    let zero = region.assign_advice(
-			|| "zero",
-			self.rlc,
-			0,
-			|| Value::known(F::from(0))
-		    )?;
-		    region.constrain_constant(zero.cell(), F::from(0))?;
-		    Ok((rlc_cells.clone(), zero))
-		}
+		Ok(rlc_cells)
 	    }
 	)?;
-	let rlc_max_val = assigned.1;
 
-	let pow_diff = layouter.assign_region(
-	    || "RLC power diff",
+	let using_simple_floor_planner = true;
+	let mut first_pass = true;	
+	let (idx, is_zero) = layouter.assign_region(
+	    || "idx val",
 	    |mut region| {
-		// | len | 1 | diff | max_len |
-		let len_assigned = len.copy_advice(
-		    || "len copy",
-		    &mut region,
-		    self.rlc,
-		    0
+		if first_pass && using_simple_floor_planner {
+		    first_pass = false;
+		}
+		
+		let mut aux = Context::new(
+		    region,
+		    ContextParams {
+			num_advice: range.gate.num_advice,
+			using_simple_floor_planner,
+			first_pass,
+		    },
+		);
+		let ctx = &mut aux;
+
+		let is_zero = range.is_zero(ctx, &len)?;
+		let len_minus_one = range.gate.sub(ctx, &Existing(&len), &Constant(F::from(1)))?;
+		let idx = range.gate.select(
+		    ctx,
+		    &Constant(F::from(0)),
+		    &Existing(&len_minus_one),
+		    &Existing(&is_zero)
 		)?;
-		let one = region.assign_advice(
-		    || "one",
-		    self.rlc,
-		    1,
-		    || Value::known(F::from(1))
-		)?;
-		region.constrain_constant(one.cell(), F::from(1))?;
-		let diff = region.assign_advice(
-		    || "diff",
-		    self.rlc,
-		    2,
-		    || len.value().map(|x| F::from(max_len as u64) - x)
-		)?;
-		let ml = region.assign_advice(
-		    || "ml",
-		    self.rlc,
-		    3,
-		    || Value::known(F::from(max_len as u64))
-		)?;
-		region.constrain_constant(ml.cell(), F::from(max_len as u64))?;
-		self.q_mul.enable(&mut region, 0)?;
-		Ok(diff)
+		let stats = range.finalize(ctx)?;
+		println!("stats: {:?}", stats);
+		Ok((idx, is_zero))
 	    }
 	)?;
 	
-	let rlc_pow = self.rlc_pow(
-	    layouter,
-	    range,
-	    pow_diff,
-	    log2(max_len + 1),
-	    &rlc_cache
-	)?;
+	let rlc_val_pre = self.select_from_cells(layouter, range, &rlc_cells, &idx)?;
 
+	// | rlc_val | is_zero | rlc_val_pre | rlc_val_pre |
 	let rlc_val = layouter.assign_region(
-	    || "RLC pow diff check",
-	    |mut region| {
-		// | 0 | rlc_val | rlc_pow | rlc_max_val |
-		let zero = region.assign_advice(
-		    || "zero",
-		    self.rlc,
-		    0,
-		    || Value::known(F::from(0))
-		)?;
-		region.constrain_constant(zero.cell(), F::from(0))?;
+	    || "idx val",
+	    |mut region| {		
 		let rlc_val = region.assign_advice(
 		    || "rlc_val",
 		    self.rlc,
-		    1,
-		    || rlc_max_val.value().zip(rlc_pow.value()).map(|(x, y)| (*x) * (*y).invert().unwrap())
+		    0,
+		    || rlc_val_pre.value().copied() * (Value::known(F::from(1)) - is_zero.value())
 		)?;
-		let rlc_pow_copy = rlc_pow.copy_advice(
-		    || "rlc_pow_copy",
+		is_zero.copy_advice(
+		    || "is_zero_copy",
+		    &mut region,
+		    self.rlc,		    
+		    1
+		)?;
+		rlc_val_pre.copy_advice(
+		    || "rlc_val_pre_copy",
 		    &mut region,
 		    self.rlc,
 		    2
 		)?;
-		let rlc_max_val_copy = rlc_max_val.copy_advice(
-		    || "rlc_max_val_copy",
+		rlc_val_pre.copy_advice(
+		    || "rlc_val_pre_copy 2",
 		    &mut region,
 		    self.rlc,
 		    3
@@ -247,8 +224,6 @@ impl<F: Field> RlcChip<F> {
 	)?;
 	
 	let rlc_trace = RlcTrace {
-	    rlc_trace: assigned.0,
-	    rlc_max_val: rlc_max_val,
 	    rlc_val: rlc_val,
 	    rlc_len: len,
 	    max_len: max_len,
@@ -256,6 +231,67 @@ impl<F: Field> RlcChip<F> {
 	Ok(rlc_trace)
     }
 
+    pub fn select_from_cells(
+	&self,
+	layouter: &mut impl Layouter<F>,
+	range: &RangeConfig<F>,
+	cells: &Vec<AssignedCell<F, F>>,
+	idx: &AssignedCell<F, F>,	
+    ) -> Result<AssignedCell<F, F>, Error> {
+	let using_simple_floor_planner = true;
+	let mut first_pass = true;
+	let ind_vec = layouter.assign_region(
+	    || "select_from_cells",
+	    |mut region| {
+		if first_pass && using_simple_floor_planner {
+		    first_pass = false;
+		}
+		
+		let mut aux = Context::new(
+		    region,
+		    ContextParams {
+			num_advice: range.gate.num_advice,
+			using_simple_floor_planner,
+			first_pass,
+		    },
+		);
+		let ctx = &mut aux;
+		let ind_vec = range.gate.idx_to_indicator(ctx, &Existing(&idx), cells.len())?;
+		let stats = range.finalize(ctx)?;
+		println!("stats: {:?}", stats);
+		Ok(ind_vec)
+	    }	    
+	)?;
+
+	let res = layouter.assign_region(
+	    || "dot product",
+	    |mut region| {
+		let mut acc_vec = Vec::with_capacity(cells.len());
+		for (idx, (cell, ind)) in cells.iter().zip(ind_vec.iter()).enumerate() {
+		    if idx == 0 {
+			let zero = region.assign_advice(
+			    || "zero",
+			    self.rlc,
+			    0,
+			    || Value::known(F::from(0))
+			)?;
+			region.constrain_constant(zero.cell(), F::from(0))?;
+			acc_vec.push(zero);
+		    }
+		    cell.copy_advice(|| "cell copy", &mut region, self.rlc, 3 * idx + 1)?;
+		    ind.copy_advice(|| "ind copy", &mut region, self.rlc, 3 * idx + 2)?;
+		    let acc_new = region.assign_advice(|| "acc", self.rlc, 3 * idx + 3,
+						       || acc_vec[acc_vec.len() - 1].value()
+						       .zip(cell.value()).zip(ind.value())
+						       .map(|((x, y), z)| (*x) + (*y) * (*z)))?;
+		    acc_vec.push(acc_new);			
+		}
+		Ok(acc_vec[acc_vec.len() - 1].clone())
+	    }
+	)?;
+	Ok(res)
+    }
+    
     // Define the dynamic RLC: RLC(a, l) = \sum_{i = 0}^{l - 1} a_i r^{l - 1 - i}
     // * We have that:
     //     RLC(a || b, l_a + l_b) = RLC(a, l_a) * r^{l_a} + RLC(b, l_b).
@@ -304,8 +340,8 @@ impl<F: Field> RlcChip<F> {
 
 		let (_, _, len_sum, _) = range.gate.inner_product(
 		    ctx,
-		    rlc_and_len_inputs.iter().map(|(a, b)| Constant(F::from(1))),
-		    rlc_and_len_inputs.iter().map(|(a, b)| Existing(&b)),
+		    &rlc_and_len_inputs.iter().map(|(a, b)| Constant(F::from(1))).collect(),
+		    &rlc_and_len_inputs.iter().map(|(a, b)| Existing(&b)).collect(),
 		)?;
 
 		range.gate.assert_equal(
@@ -325,7 +361,7 @@ impl<F: Field> RlcChip<F> {
 	    let gamma_pow = self.rlc_pow(
 		layouter,
 		range,
-		len,
+		len.clone(),
 		log2(max_lens[idx]),
 		&rlc_cache
 	    )?;
@@ -337,8 +373,8 @@ impl<F: Field> RlcChip<F> {
 	    |mut region| {
 		let mut intermed = Vec::new();
 		for idx in 0..rlc_and_len_inputs.len() {
-		    let rlc = rlc_and_len_inputs[idx].0;
-		    let gamma_pow = gamma_pows[idx];
+		    let rlc = rlc_and_len_inputs[idx].0.clone();
+		    let gamma_pow = gamma_pows[idx].clone();
 
 		    if idx == 0 {
 			let zero = region.assign_advice(
@@ -392,7 +428,7 @@ impl<F: Field> RlcChip<F> {
 			    self.rlc,
 			    4 * idx + 3,
 			    || rlc.value().zip(gamma_pow.value())
-				.zip(prev_prod_copy)
+				.zip(prev_prod_copy.value())
 				.map(|((a, b), c)| (*a) + (*b) * (*c))
 			)?;
 			self.q_mul.enable(&mut region, 4 * idx)?;
@@ -778,11 +814,6 @@ impl<F: Field> Circuit<F> for TestCircuit<F> {
 		Ok((inputs_assigned, len_assigned[0].clone()))
 	    }
 	)?;
-
-	let rlc_cache = config.rlc.load_rlc_cache(
-	    &mut layouter,
-	    log2(self.max_len),
-	)?;
 	
 	let rlc_trace = config.rlc.compute_rlc(
 	    &mut layouter,
@@ -790,7 +821,6 @@ impl<F: Field> Circuit<F> for TestCircuit<F> {
 	    &inputs_assigned,
 	    len_assigned,
 	    self.max_len,
-	    &rlc_cache
 	)?;
 
 	let gamma = layouter.get_challenge(config.rlc.gamma);
