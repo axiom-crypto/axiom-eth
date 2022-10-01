@@ -4,6 +4,7 @@ use halo2_ecc::{
     gates::{
 	Context, ContextParams,
 	GateInstructions,
+	QuantumCell,
 	QuantumCell::{Constant, Existing, Witness},
 	range::{RangeConfig, RangeStrategy, RangeStrategy::Vertical},
 	RangeInstructions},
@@ -435,7 +436,7 @@ impl<F: Field> RlcChip<F> {
 			intermed.push(prod);
 		    }		    
 		}
-
+		
 		let zero = region.assign_advice(
 		    || "zero",
 		    self.rlc,
@@ -829,8 +830,6 @@ impl<F: Field> Circuit<F> for TestCircuit<F> {
 
 	let gamma = layouter.get_challenge(config.rlc.gamma);
 	let real_rlc = gamma.map(|g| compute_rlc_acc(&self.inputs[..self.len].to_vec(), g));
-	println!("rlc_val {:?}", rlc_trace.rlc_val.value());
-	println!("real_rlc {:?}", real_rlc);
 	rlc_trace.rlc_val.value().zip(real_rlc).assert_if_known(|(a, b)| *a == b);
 	Ok(())
     }
