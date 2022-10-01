@@ -133,12 +133,12 @@ pub struct RlpFieldTrace<F: Field> {
 
 #[derive(Clone, Debug)]
 pub struct RlpArrayTrace<F: Field> {
-    array_trace: RlcTrace<F>,
-    prefix: AssignedCell<F, F>,
-    len_trace: RlcTrace<F>,
-    field_prefixs: Vec<AssignedCell<F, F>>,
-    field_len_traces: Vec<RlcTrace<F>>,
-    field_traces: Vec<RlcTrace<F>>,
+    pub array_trace: RlcTrace<F>,
+    pub prefix: AssignedCell<F, F>,
+    pub len_trace: RlcTrace<F>,
+    pub field_prefixs: Vec<AssignedCell<F, F>>,
+    pub field_len_traces: Vec<RlcTrace<F>>,
+    pub field_traces: Vec<RlcTrace<F>>,
 
     max_field_lens: Vec<usize>,
     max_array_len: usize,
@@ -147,8 +147,8 @@ pub struct RlpArrayTrace<F: Field> {
 
 #[derive(Clone, Debug)]
 pub struct RlpArrayChip<F: Field> {
-    rlc: RlcChip<F>,
-    range: RangeConfig<F>,
+    pub rlc: RlcChip<F>,
+    pub range: RangeConfig<F>,
 }
 
 impl<F: Field> RlpArrayChip<F> {
@@ -348,7 +348,7 @@ impl<F: Field> RlpArrayChip<F> {
     ) -> Result<RlpFieldTrace<F>, Error> {
  	let max_len_len = {
 	    if max_field_len > 55 {
-		(log2(max_field_len) + 2) / 8
+		(log2(max_field_len) + 7) / 8
 	    } else {
 		0
 	    }
@@ -517,7 +517,7 @@ impl<F: Field> RlpArrayChip<F> {
     ) -> Result<RlpArrayTrace<F>, Error> {
 	let max_len_len = {
 	    if max_array_len > 55 {
-		(log2(max_array_len) + 2) / 8
+		(log2(max_array_len) + 7) / 8
 	    } else {
 		0
 	    }
@@ -615,7 +615,7 @@ impl<F: Field> RlpArrayChip<F> {
 		    )?;
 		    prefix_vec.push(prefix.clone());
 		    let prefix_parsed = self.parse_rlp_field_prefix(ctx, range, &prefix)?;
-		    
+
 		    let len_len = prefix_parsed.len_len.clone();
 		    let field_len_cells = witness_subarray_from_idxs(
 			ctx,
@@ -623,7 +623,7 @@ impl<F: Field> RlpArrayChip<F> {
 			&rlp_array,
 			prefix_idxs[idx].value().copied() + Value::known(F::from(1)),
 			prefix_idxs[idx].value().copied() + Value::known(F::from(1)) + len_len.value().copied(),
-			(log2(max_field_lens[idx]) + 2) / 8,			
+			(log2(max_field_lens[idx]) + 7) / 8,			
 		    )?;
 		    let field_byte_val = array_to_byte_val(ctx, range, &field_len_cells, &len_len)?;
 		    let field_len = range.gate.select(
@@ -680,7 +680,7 @@ impl<F: Field> RlpArrayChip<F> {
 		range,
 		&field_len_cells_vec[idx],
 		field_len_len_vec[idx].clone(),
-		(log2(max_field_lens[idx]) + 2) / 8,
+		(log2(max_field_lens[idx]) + 7) / 8,
 	    )?;
 	    let field_cells_rlc = self.rlc.compute_rlc(
 		layouter,
@@ -725,7 +725,7 @@ impl<F: Field> RlpArrayChip<F> {
 	    (len_rlc.rlc_val.clone(), len_rlc.rlc_len.clone())
 	];
 	for idx in 0..num_fields {
-	    max_lens.extend(vec![1, (log2(max_field_lens[idx]) + 2) / 8, max_field_lens[idx]]);
+	    max_lens.extend(vec![1, (log2(max_field_lens[idx]) + 7) / 8, max_field_lens[idx]]);
 	    rlc_and_len_inputs.extend(vec![
 		(prefix_vec[idx].clone(), one.clone()),
 		(field_len_rlcs[idx].rlc_val.clone(), field_len_rlcs[idx].rlc_len.clone()),
