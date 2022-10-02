@@ -1,11 +1,15 @@
-use std::cmp::max;
-use std::marker::PhantomData;
-use halo2_ecc::{
+use std::{
+    borrow::Borrow,
+    cmp::max,
+    marker::PhantomData,
+    rc::Rc,
+};
+use halo2_base::{
+    AssignedValue, Context, ContextParams,
+    QuantumCell,
+    QuantumCell::{Constant, Existing, Witness},
     gates::{
-	Context, ContextParams,
 	GateInstructions,
-	QuantumCell,
-	QuantumCell::{Constant, Existing, Witness},
 	range::{RangeConfig, RangeStrategy, RangeStrategy::Vertical},
 	RangeInstructions},
 };
@@ -49,201 +53,380 @@ pub fn log2(x: usize) -> usize {
 
 #[derive(Clone, Debug)]
 pub struct RlcTrace<F: Field> {
-    pub rlc_val: AssignedCell<F, F>,
-    pub rlc_len: AssignedCell<F, F>,
+    pub rlc_val: AssignedValue<F>,
+    pub rlc_len: AssignedValue<F>,
     pub max_len: usize,
 }
 
 #[derive(Clone, Debug)]
-pub struct RlcChip<F> {
+pub struct BasicRlcChip<F: Field> {
     pub val: Column<Advice>,
-    rlc: Column<Advice>,
-    q_rlc: Selector,
-    q_mul: Selector,
-    cons: Column<Fixed>,
-    gamma: Challenge,
-
-    _marker: PhantomData<F>
+    pub rlc: Column<Advice>,
+    pub q_rlc: Selector,
+    pub q_mul: Selector,
+    _marker: PhantomData<F>,
 }
 
-impl<F: Field> RlcChip<F> {
+impl<F: Field> BasicRlcChip<F> {
     pub fn configure(meta: &mut ConstraintSystem<F>) -> Self {
 	let q_rlc = meta.selector();
 	let q_mul = meta.selector();
 	let cons = meta.fixed_column();
 	let val = meta.advice_column();
 	let rlc = meta.advice_column_in(SecondPhase);
-	let [gamma] = [(); 1].map(|_| meta.challenge_usable_after(FirstPhase));
 
 	meta.enable_equality(val);
 	meta.enable_equality(rlc);
 	meta.enable_equality(cons);
 	meta.enable_constant(cons);
 	
-	meta.create_gate("RLC computation", |meta| {
-	    let sel = meta.query_selector(q_rlc);
-	    let val = meta.query_advice(val, Rotation::cur());
-	    let rlc_curr = meta.query_advice(rlc, Rotation::cur());
-	    let rlc_prev = meta.query_advice(rlc, Rotation::prev());
-	    let [gamma] = [gamma].map(|challenge| meta.query_challenge(challenge));
-	    
-	    vec![sel * (rlc_prev * gamma + val - rlc_curr)]
-	});
-
-	meta.create_gate("RLC mul", |meta| {
-	    let sel = meta.query_selector(q_mul);
-	    let a = meta.query_advice(rlc, Rotation::cur());
-	    let b = meta.query_advice(rlc, Rotation(1));
-	    let c = meta.query_advice(rlc, Rotation(2));
-	    let d = meta.query_advice(rlc, Rotation(3));
-
-	    vec![sel * (a + b * c - d)]
-	});
-
 	let config = Self {
 	    val,
 	    rlc,
 	    q_rlc,
 	    q_mul,
-	    cons,
-	    gamma,
 	    _marker: PhantomData
 	};
 
 	config
     }
 
+    pub fn create_gates(
+	&self,
+	meta: &mut ConstraintSystem<F>,
+	gamma: Challenge
+    ) {
+	meta.create_gate("RLC computation", |meta| {
+	    let sel = meta.query_selector(self.q_rlc);
+	    let val = meta.query_advice(self.val, Rotation::cur());
+	    let rlc_curr = meta.query_advice(self.rlc, Rotation::cur());
+	    let rlc_prev = meta.query_advice(self.rlc, Rotation::prev());
+	    let [gamma] = [gamma].map(|challenge| meta.query_challenge(challenge));
+	    
+	    vec![sel * (rlc_prev * gamma + val - rlc_curr)]
+	});
+
+	meta.create_gate("RLC mul", |meta| {
+	    let sel = meta.query_selector(self.q_mul);
+	    let a = meta.query_advice(self.rlc, Rotation::cur());
+	    let b = meta.query_advice(self.rlc, Rotation(1));
+	    let c = meta.query_advice(self.rlc, Rotation(2));
+	    let d = meta.query_advice(self.rlc, Rotation(3));
+
+	    vec![sel * (a + b * c - d)]
+	});
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct RlcChip<F: Field> {
+    pub basic_chips: Vec<BasicRlcChip<F>>,
+    pub constants: Vec<Column<Fixed>>,
+    pub challenge_id: Rc<String>,
+    pub context_id: Rc<String>,
+    pub gamma: Challenge,
+    _marker: PhantomData<F>
+}
+
+impl<F: Field> RlcChip<F> {
+    pub fn configure(
+	meta: &mut ConstraintSystem<F>,
+	num_basic_chips: usize,
+	num_fixed: usize,
+	challenge_id: String,
+	context_id: String,
+    ) -> Self {
+	let mut basic_chips = Vec::with_capacity(num_basic_chips);
+	for idx in 0..num_basic_chips {
+	    let basic_chip = BasicRlcChip::configure(meta);
+	    basic_chips.push(basic_chip);
+	}
+	
+	let [gamma] = [(); 1].map(|_| meta.challenge_usable_after(FirstPhase));
+	for idx in 0..num_basic_chips {
+	    basic_chips[idx].create_gates(meta, gamma);
+	}
+
+	let mut constants = Vec::with_capacity(num_fixed);
+	for idx in 0..num_fixed {
+	    let fixed = meta.fixed_column();
+	    meta.enable_equality(fixed);
+	    constants.push(fixed);
+	}
+	Self {
+	    basic_chips,
+	    constants,
+	    challenge_id: Rc::new(challenge_id),
+	    context_id: Rc::new(context_id),
+	    gamma,
+	    _marker: PhantomData,
+	}
+    }
+
+    fn min_chip_idx(&self, ctx: &Context<'_, F>) -> usize {
+	let advice_rows = ctx
+	    .advice_rows
+            .get::<String>(Rc::borrow(&self.context_id))
+            .expect(format!("context_id {} should have advice rows", self.context_id).as_str());
+
+	self.basic_chips
+            .iter()
+            .enumerate()
+            .min_by(|(i, _), (j, _)| advice_rows[*i].cmp(&advice_rows[*j]))
+            .map(|(i, _)| i)
+            .expect(format!("Should exist basic chip").as_str())
+    }
+
+    fn assign_cell(
+	&self,
+	ctx: &mut Context<'_, F>,
+	input: QuantumCell<F>,
+	column: Column<Advice>,
+	offset: usize
+    ) -> Result<AssignedCell<F, F>, Error> {
+        match input {
+            QuantumCell::Existing(acell) => {
+                acell.assigned.copy_advice(|| "gate: copy advice", &mut ctx.region, column, offset)
+            }
+            QuantumCell::Witness(val) => {
+                ctx.region.assign_advice(|| "gate: assign advice", column, offset, || val)
+            }
+            QuantumCell::Constant(c) => {
+                let acell = ctx.region.assign_advice(
+                    || "gate: assign const",
+                    column,
+                    offset,
+                    || Value::known(c),
+                )?;
+                ctx.constants_to_assign.push((c, Some(acell.cell())));
+                Ok(acell)
+            }
+        }
+    }
+    
+    pub fn assign_region(
+	&self,
+	ctx: &mut Context<'_, F>,
+	rlc_inputs: &Vec<Option<QuantumCell<F>>>,
+	val_inputs: &Vec<Option<QuantumCell<F>>>,
+	rlc_offsets: Vec<usize>,
+	gate_offsets: Vec<usize>,
+	chip_idx: Option<usize>,
+    ) -> Result<(Vec<Option<AssignedValue<F>>>, Vec<Option<AssignedValue<F>>>), Error> {
+	assert_eq!(rlc_inputs.len(), val_inputs.len());
+	
+	let chip_idx = if let Some(id) = chip_idx {
+	    id
+	} else {
+	    self.min_chip_idx(ctx)
+	};
+	let row_offset =
+	    ctx.advice_rows.get::<String>(Rc::borrow(&self.context_id)).unwrap()[chip_idx];
+
+	let mut rlc_vec = Vec::with_capacity(rlc_inputs.len());
+	let mut val_vec = Vec::with_capacity(val_inputs.len());
+	for (idx, (rlc, val)) in rlc_inputs.iter().zip(val_inputs).enumerate() {
+	    let rlc_assigned_val = if let Some(rlc) = rlc {
+		let rlc_assigned = self.assign_cell(
+		    ctx,
+		    rlc.clone(),
+		    self.basic_chips[chip_idx].rlc,
+		    row_offset + idx,
+		)?;
+		Some(AssignedValue::new(
+		    rlc_assigned,
+		    self.context_id.clone(),
+		    chip_idx,
+		    row_offset + idx,
+		    1u8
+		))
+	    } else {
+		None
+	    };
+	    rlc_vec.push(rlc_assigned_val);
+
+	    let val_assigned_val = if let Some(val) = val {
+		let val_assigned = self.assign_cell(
+		    ctx,
+		    val.clone(),
+		    self.basic_chips[chip_idx].val,
+		    row_offset + idx,
+		)?;		
+		Some(AssignedValue::new(
+		    val_assigned,
+		    self.context_id.clone(),
+		    chip_idx,
+		    row_offset + idx,
+		    0u8
+		))
+	    } else {
+		None
+	    };
+	    val_vec.push(val_assigned_val);
+	}
+	for idx in &rlc_offsets {
+	    self.basic_chips[chip_idx].q_rlc.enable(&mut ctx.region, row_offset + idx)?;	    
+	}
+	for idx in &gate_offsets {
+	    self.basic_chips[chip_idx].q_mul.enable(&mut ctx.region, row_offset + idx)?;	    
+	}
+	ctx.advice_rows.get_mut::<String>(Rc::borrow(&self.context_id)).unwrap()[chip_idx] +=
+	    rlc_inputs.len();
+
+	Ok((rlc_vec, val_vec))
+    }
+
+    pub fn assign_region_rlc(
+	&self,
+	ctx: &mut Context<'_, F>,
+	rlc_inputs: &Vec<QuantumCell<F>>,
+	rlc_offsets: Vec<usize>,
+	gate_offsets: Vec<usize>,
+	chip_idx: Option<usize>
+    ) -> Result<Vec<AssignedValue<F>>, Error> {
+	let (rlc_vec_opt, val_vec_opt) = self.assign_region(
+	    ctx,
+	    &rlc_inputs.iter().map(|q| Some(q.clone())).collect(),
+	    &vec![None; rlc_inputs.len()],
+	    rlc_offsets,
+	    gate_offsets,
+	    chip_idx
+	)?;
+
+	let rlc_vec = rlc_vec_opt.iter().map(|v| v.clone().unwrap()).collect();
+	Ok(rlc_vec)
+    }
+
+    pub fn assign_region_rlc_and_val(
+	&self,
+	ctx: &mut Context<'_, F>,
+	rlc_inputs: &Vec<QuantumCell<F>>,
+	val_inputs: &Vec<QuantumCell<F>>,
+	rlc_offsets: Vec<usize>,
+	gate_offsets: Vec<usize>,
+	chip_idx: Option<usize>,
+    ) -> Result<(Vec<AssignedValue<F>>, Vec<AssignedValue<F>>), Error> {
+	let (rlc_vec_opt, val_vec_opt) = self.assign_region(
+	    ctx,
+	    &rlc_inputs.iter().map(|q| Some(q.clone())).collect(),
+	    &val_inputs.iter().map(|q| Some(q.clone())).collect(),
+	    rlc_offsets,
+	    gate_offsets,
+	    chip_idx
+	)?;
+
+	let rlc_vec = rlc_vec_opt.iter().map(|v| v.clone().unwrap()).collect();
+	let val_vec = val_vec_opt.iter().map(|v| v.clone().unwrap()).collect();
+	Ok((rlc_vec, val_vec))
+    }
+    
+    pub fn assign_region_rlc_and_val_idx(
+	&self,
+	ctx: &mut Context<'_, F>,
+	rlc_inputs: &Vec<QuantumCell<F>>,
+	val_inputs: &Vec<(usize, QuantumCell<F>)>,
+	rlc_offsets: Vec<usize>,
+	gate_offsets: Vec<usize>,
+	chip_idx: Option<usize>
+    ) -> Result<(Vec<AssignedValue<F>>, Vec<(usize, AssignedValue<F>)>), Error> {
+	let mut val_inputs_opt = Vec::with_capacity(rlc_inputs.len());
+	let mut val_idx = 0;
+	for idx in 0..rlc_inputs.len() {
+	    let val_input = {
+		if val_idx < val_inputs.len() && idx == val_inputs[val_idx].0 {
+		    val_idx += 1;
+		    Some(val_inputs[val_idx - 1].1.clone())
+		} else {
+		    None
+		}
+	    };
+	    val_inputs_opt.push(val_input);
+	}
+	
+	let (rlc_vec_opt, val_vec_opt) = self.assign_region(
+	    ctx,
+	    &rlc_inputs.iter().map(|q| Some(q.clone())).collect(),
+	    &val_inputs_opt,
+	    rlc_offsets,
+	    gate_offsets,
+	    chip_idx
+	)?;
+
+	let rlc_vec = rlc_vec_opt.iter().map(|v| v.clone().unwrap()).collect();
+	let mut val_vec = Vec::new();
+	for idx in 0..rlc_inputs.len() {
+	    if let Some(v) = &val_vec_opt[idx] {
+		val_vec.push((idx, v.clone()));
+	    }
+	}
+	
+	Ok((rlc_vec, val_vec))	
+    }
+	
     // assumes 0 <= len <= max_len
     pub fn compute_rlc(
 	&self,
-	layouter: &mut impl Layouter<F>,
+	ctx: &mut Context<'_, F>,
 	range: &RangeConfig<F>,
-	input: &Vec<AssignedCell<F, F>>,
-	len: AssignedCell<F, F>,
+	input: &Vec<AssignedValue<F>>,
+	len: AssignedValue<F>,
 	max_len: usize,
     ) -> Result<RlcTrace<F>, Error> {
 	assert!(input.len() == max_len);
+	let gamma = ctx.challenge.get::<String>(Rc::borrow(&self.challenge_id))
+	    .expect(format!("challenge_id {} should exist", self.challenge_id).as_str());
 
-	let gamma = layouter.get_challenge(self.gamma);
-	let rlc_cells = layouter.assign_region(
-	    || "RLC array",
-	    |mut region| {
-		let mut rlc_cells = Vec::with_capacity(max_len);
-		let mut running_rlc = Value::known(F::from(0));
-		for (idx, val) in input.iter().enumerate() {
-		    let val_assigned = val.copy_advice(
-			|| "RLC input",
-			&mut region,
-			self.val,
-			idx,
-		    )?;
+	let mut running_rlc = Value::known(F::from(0));
+	let mut rlc_vals = Vec::new();
+	for (idx, val) in input.iter().enumerate() {
+	    running_rlc = running_rlc * gamma + val.value();
+	    rlc_vals.push(Witness(running_rlc));
+	}
 
-		    running_rlc = running_rlc * gamma + val.value();
-		    let rlc_assigned = region.assign_advice(
-			|| "RLC compute",
-			self.rlc,
-			idx,
-			|| running_rlc
-		    )?;
-		    rlc_cells.push(rlc_assigned.clone());
-
-		    if idx == 0 {
-			region.constrain_equal(rlc_assigned.cell(), val_assigned.cell())?;
-		    } else {
-			self.q_rlc.enable(&mut region, idx)?;
-		    }
-		}
-		Ok(rlc_cells)
-	    }
+	let (rlc_cells, val_cells) = self.assign_region_rlc_and_val(
+	    ctx,
+	    &rlc_vals,
+	    &input.iter().map(|x| Existing(&x)).collect(),
+	    (1..input.len()).collect(),
+	    vec![],
+	    None
 	)?;
 
-	let using_simple_floor_planner = true;
-	let mut first_pass = true;	
-	let (idx, is_zero) = layouter.assign_region(
-	    || "idx val",
-	    |mut region| {
-		if first_pass && using_simple_floor_planner {
-		    first_pass = false;
-		}
-		
-		let mut aux = Context::new(
-		    region,
-		    ContextParams {
-			num_advice: range.gate.num_advice,
-			using_simple_floor_planner,
-			first_pass,
-		    },
-		);
-		let ctx = &mut aux;
-
-		let is_zero = range.is_zero(ctx, &len)?;
-		let len_minus_one = range.gate.sub(ctx, &Existing(&len), &Constant(F::from(1)))?;
-		let idx = range.gate.select(
-		    ctx,
-		    &Constant(F::from(0)),
-		    &Existing(&len_minus_one),
-		    &Existing(&is_zero)
-		)?;
-		let stats = range.finalize(ctx)?;
-		println!("stats: {:?}", stats);
-		Ok((idx, is_zero))
-	    }
+	if input.len() > 0 {
+	    ctx.region.constrain_equal(rlc_cells[0].assigned.cell(), val_cells[0].assigned.cell())?;
+	}
+	
+	let is_zero = range.is_zero(ctx, &len)?;
+	let len_minus_one = range.gate.sub(ctx, &Existing(&len), &Constant(F::from(1)))?;
+	let idx = range.gate.select(
+	    ctx,
+	    &Constant(F::from(0)),
+	    &Existing(&len_minus_one),
+	    &Existing(&is_zero)
 	)?;
-
+	
 	let rlc_val_pre = {
 	    if input.len() == 0 {
-		let zero = layouter.assign_region(
-		    || "zero",
-		    |mut region| {
-			let zero = region.assign_advice(
-			    || "zero",
-			    self.val,
-			    0,
-			    || Value::known(F::from(0))
-			)?;
-			region.constrain_constant(zero.cell(), F::from(0))?;
-			Ok(zero)
-		    }
-		)?;
+		let zero = range.gate.load_zero(ctx)?;
 		zero
 	    } else {
-		let out = self.select_from_cells(layouter, range, &rlc_cells, &idx)?;
+		let out = self.select_from_cells(ctx, range, &rlc_cells, &idx)?;
 		out
 	    }
 	};
-
+	
 	// | rlc_val | is_zero | rlc_val_pre | rlc_val_pre |
-	let rlc_val = layouter.assign_region(
-	    || "idx val",
-	    |mut region| {		
-		let rlc_val = region.assign_advice(
-		    || "rlc_val",
-		    self.rlc,
-		    0,
-		    || rlc_val_pre.value().copied() * (Value::known(F::from(1)) - is_zero.value())
-		)?;
-		is_zero.copy_advice(
-		    || "is_zero_copy",
-		    &mut region,
-		    self.rlc,		    
-		    1
-		)?;
-		rlc_val_pre.copy_advice(
-		    || "rlc_val_pre_copy",
-		    &mut region,
-		    self.rlc,
-		    2
-		)?;
-		rlc_val_pre.copy_advice(
-		    || "rlc_val_pre_copy 2",
-		    &mut region,
-		    self.rlc,
-		    3
-		)?;
-		self.q_mul.enable(&mut region, 0)?;
-		Ok(rlc_val)
-	    }
+	let rlc_val_sel = self.assign_region_rlc(
+	    ctx,
+	    &vec![Witness(rlc_val_pre.value().copied() * (Value::known(F::from(1)) - is_zero.value())),
+		  Existing(&is_zero),
+		  Existing(&rlc_val_pre),
+		  Existing(&rlc_val_pre)],
+	    vec![],
+	    vec![0],
+	    None
 	)?;
+	let rlc_val = rlc_val_sel[0].clone();
 	
 	let rlc_trace = RlcTrace {
 	    rlc_val: rlc_val,
@@ -255,64 +438,34 @@ impl<F: Field> RlcChip<F> {
 
     pub fn select_from_cells(
 	&self,
-	layouter: &mut impl Layouter<F>,
+	ctx: &mut Context<'_, F>,
 	range: &RangeConfig<F>,
-	cells: &Vec<AssignedCell<F, F>>,
-	idx: &AssignedCell<F, F>,	
-    ) -> Result<AssignedCell<F, F>, Error> {
-	let using_simple_floor_planner = true;
-	let mut first_pass = true;
-	let ind_vec = layouter.assign_region(
-	    || "select_from_cells",
-	    |mut region| {
-		if first_pass && using_simple_floor_planner {
-		    first_pass = false;
-		}
-		
-		let mut aux = Context::new(
-		    region,
-		    ContextParams {
-			num_advice: range.gate.num_advice,
-			using_simple_floor_planner,
-			first_pass,
-		    },
-		);
-		let ctx = &mut aux;
-		let ind_vec = range.gate.idx_to_indicator(ctx, &Existing(&idx), cells.len())?;
-		let stats = range.finalize(ctx)?;
-		println!("stats: {:?}", stats);
-		Ok(ind_vec)
-	    }	    
-	)?;
-
-	let res = layouter.assign_region(
-	    || "dot product",
-	    |mut region| {
-		let mut acc_vec = Vec::with_capacity(cells.len());
-		for (idx, (cell, ind)) in cells.iter().zip(ind_vec.iter()).enumerate() {
-		    if idx == 0 {
-			let zero = region.assign_advice(
-			    || "zero",
-			    self.rlc,
-			    0,
-			    || Value::known(F::from(0))
-			)?;
-			region.constrain_constant(zero.cell(), F::from(0))?;
-			acc_vec.push(zero);
-		    }
-		    cell.copy_advice(|| "cell copy", &mut region, self.rlc, 3 * idx + 1)?;
-		    ind.copy_advice(|| "ind copy", &mut region, self.rlc, 3 * idx + 2)?;
-		    let acc_new = region.assign_advice(|| "acc", self.rlc, 3 * idx + 3,
-						       || acc_vec[acc_vec.len() - 1].value()
-						       .zip(cell.value()).zip(ind.value())
-						       .map(|((x, y), z)| (*x) + (*y) * (*z)))?;
-		    self.q_mul.enable(&mut region, 3 * idx)?;
-		    acc_vec.push(acc_new);			
-		}
-		Ok(acc_vec[acc_vec.len() - 1].clone())
+	cells: &Vec<AssignedValue<F>>,
+	idx: &AssignedValue<F>,
+    ) -> Result<AssignedValue<F>, Error> {
+	let ind_vec = range.gate.idx_to_indicator(ctx, &Existing(&idx), cells.len())?;
+	let mut inputs = Vec::new();
+	let mut gate_offsets = Vec::new();
+	let mut running_sum = Value::known(F::from(0));
+	for (idx, (cell, ind)) in cells.iter().zip(ind_vec.iter()).enumerate() {
+	    if idx == 0 {
+		inputs.push(Constant(F::from(0)));
 	    }
+	    inputs.push(Existing(&cell));
+	    inputs.push(Existing(&ind));
+	    running_sum = running_sum + cell.value().copied() * ind.value().copied();
+	    inputs.push(Witness(running_sum));
+	    gate_offsets.push(3 * idx);
+	}
+		
+	let acc_vec = self.assign_region_rlc(
+	    ctx,
+	    &inputs,
+	    vec![],
+	    gate_offsets,
+	    None
 	)?;
-	Ok(res)
+	Ok(acc_vec[acc_vec.len() - 1].clone())
     }
     
     // Define the dynamic RLC: RLC(a, l) = \sum_{i = 0}^{l - 1} a_i r^{l - 1 - i}
@@ -331,58 +484,28 @@ impl<F: Field> RlcChip<F> {
     // * all rlc_len values have been range checked
     pub fn constrain_rlc_concat(
 	&self,
-	layouter: &mut impl Layouter<F>,
+	ctx: &mut Context<'_, F>,
 	range: &RangeConfig<F>,
-	rlc_and_len_inputs: &Vec<(AssignedCell<F, F>, AssignedCell<F, F>)>,
+	rlc_and_len_inputs: &Vec<(AssignedValue<F>, AssignedValue<F>)>,
 	max_lens: &Vec<usize>,
-	concat: (AssignedCell<F, F>, AssignedCell<F, F>),
+	concat: (AssignedValue<F>, AssignedValue<F>),
 	max_len: usize,
-	rlc_cache: &Vec<AssignedCell<F, F>>,
+	rlc_cache: &Vec<AssignedValue<F>>,
     ) -> Result<(), Error> {
 	assert!(rlc_cache.len() >= log2(max_len));
 	assert!(rlc_cache.len() >= log2(*max_lens.iter().max().unwrap()));
 
-	let using_simple_floor_planner = true;
-	let mut first_pass = true;	
-	let res = layouter.assign_region(
-	    || "len check",
-	    |mut region| {
-		if first_pass && using_simple_floor_planner {
-		    first_pass = false;
-		}
-		
-		let mut aux = Context::new(
-		    region,
-		    ContextParams {
-			num_advice: range.gate.num_advice,
-			using_simple_floor_planner,
-			first_pass,
-		    },
-		);
-		let ctx = &mut aux;
-
-		let (_, _, len_sum, _) = range.gate.inner_product(
-		    ctx,
-		    &rlc_and_len_inputs.iter().map(|(a, b)| Constant(F::from(1))).collect(),
-		    &rlc_and_len_inputs.iter().map(|(a, b)| Existing(&b)).collect(),
-		)?;
-
-		range.gate.assert_equal(
-		    ctx,
-		    &Existing(&len_sum),
-		    &Existing(&concat.1)
-		)?;
-
-		let stats = range.finalize(ctx)?;
-		println!("stats: {:?}", stats);
-		Ok(())
-	    }
-	)?;
+	let (_, _, len_sum) = range.gate.inner_product(
+	    ctx,
+	    &rlc_and_len_inputs.iter().map(|(a, b)| Constant(F::from(1))).collect(),
+	    &rlc_and_len_inputs.iter().map(|(a, b)| Existing(&b)).collect(),
+	)?;	
+	range.gate.assert_equal(ctx, &Existing(&len_sum), &Existing(&concat.1))?;
 
 	let mut gamma_pows = Vec::new();
 	for (idx, (rlc, len)) in rlc_and_len_inputs.iter().enumerate() {
 	    let gamma_pow = self.rlc_pow(
-		layouter,
+		ctx,
 		range,
 		len.clone(),
 		max(1, log2(max_lens[idx])),
@@ -390,330 +513,171 @@ impl<F: Field> RlcChip<F> {
 	    )?;
 	    gamma_pows.push(gamma_pow);
 	}
-	
-	let rlc_concat = layouter.assign_region(
-	    || "rlc_concat",
-	    |mut region| {
-		let mut intermed = Vec::new();
-		for idx in 0..rlc_and_len_inputs.len() {
-		    let rlc = rlc_and_len_inputs[idx].0.clone();
 
-		    if idx == 0 {
-			let rlc_copy = rlc.copy_advice(
-			    || "rlc_copy",
-			    &mut region,
-			    self.rlc,
-			    0
-			)?;
-			intermed.push(rlc_copy);
-		    } else {
-			let gamma_pow = gamma_pows[idx].clone();
-			let rlc_copy = rlc.copy_advice(
-			    || "rlc_copy",
-			    &mut region,
-			    self.rlc,
-			    4 * idx - 3
-			)?;
-			let prev_prod_copy = intermed[intermed.len() - 1].copy_advice(
-			    || "prev_prod_copy",
-			    &mut region,
-			    self.rlc,
-			    4 * idx - 2
-			)?;
-			let gamma_pow_copy = gamma_pow.copy_advice(
-			    || "gamma_pow_copy",
-			    &mut region,
-			    self.rlc,
-			    4 * idx - 1
-			)?;
-			let prod = region.assign_advice(
-			    || "prod",
-			    self.rlc,
-			    4 * idx,
-			    || rlc.value().copied() + gamma_pow.value().copied() * prev_prod_copy.value().copied()
-			)?;
-			self.q_mul.enable(&mut region, 4 * idx - 3)?;
-			intermed.push(prod);
-		    }		    
-		}
-		
-		let zero = region.assign_advice(
-		    || "zero",
-		    self.rlc,
-		    4 * rlc_and_len_inputs.len() - 3,
-		    || Value::known(F::from(0))
-		)?;
-		region.constrain_constant(zero.cell(), F::from(0))?;
-		let zero2 = zero.copy_advice(
-		    || "zero2",
-		    &mut region,
-		    self.rlc,
-		    4 * rlc_and_len_inputs.len() - 2,
-		)?;
-		let compare = concat.0.copy_advice(
-		    || "concat_copy",
-		    &mut region,
-		    self.rlc,
-		    4 * rlc_and_len_inputs.len() - 1,
-		)?;
-		self.q_mul.enable(&mut region, 4 * rlc_and_len_inputs.len() - 4)?;
-		Ok(())		    
+	let mut inputs = Vec::new();
+	let mut intermed = Vec::new();
+	let mut gate_offsets = Vec::new();
+	for idx in 0..rlc_and_len_inputs.len() {
+	    if idx == 0 {
+		inputs.push(Existing(&rlc_and_len_inputs[idx].0));
+		intermed.push(rlc_and_len_inputs[idx].0.value().copied());
+	    } else {
+		inputs.push(Existing(&rlc_and_len_inputs[idx].0));
+		inputs.push(Witness(intermed[intermed.len() - 1]));
+		inputs.push(Existing(&gamma_pows[idx]));
+		inputs.push(Witness(rlc_and_len_inputs[idx].0.value().copied()
+				    + gamma_pows[idx].value().copied() * intermed[intermed.len() - 1]));
+		intermed.push(rlc_and_len_inputs[idx].0.value().copied()
+			      + gamma_pows[idx].value().copied() * intermed[intermed.len() - 1]);
+
+		gate_offsets.push(4 * idx - 3);
 	    }
+	}
+	inputs.push(Constant(F::from(0)));
+	inputs.push(Constant(F::from(0)));
+	inputs.push(Existing(&concat.0));
+	gate_offsets.push(4 * rlc_and_len_inputs.len() - 4);
+
+	let rlc_concat = self.assign_region_rlc(
+	    ctx,
+	    &inputs,
+	    vec![],
+	    gate_offsets,
+	    None
 	)?;
+
+	for idx in 0..(rlc_and_len_inputs.len() - 1) {	    
+	    ctx.region.constrain_equal(rlc_concat[4 * idx].assigned.cell(),
+				       rlc_concat[4 * idx + 2].assigned.cell())?;
+	}
 	Ok(())
     }
     
     pub fn load_rlc_cache(
 	&self,
-	layouter: &mut impl Layouter<F>,
+	ctx: &mut Context<'_, F>,
 	cache_bits: usize,
-    ) -> Result<Vec<AssignedCell<F, F>>, Error> {
-	let gamma = layouter.get_challenge(self.gamma);
+    ) -> Result<Vec<AssignedValue<F>>, Error> {
+	let gamma = ctx.challenge.get::<String>(Rc::borrow(&self.challenge_id))
+	    .expect(format!("challenge_id {} should exist", self.challenge_id).as_str());
 
-	let cache = layouter.assign_region(
-	    || "gamma cache",
-	    |mut region| {
-		let mut cache = Vec::new();
-		for idx in 0..cache_bits {
-		    // rlc:   | 1 | g | 0 | g | g | g^2 
-		    // val:   |   | 0 |   |
-		    // q_rlc: |   | 1 |   | 
-		    // q_mul: |   |   | 1 | 
-		    if idx == 0 {
-			let one = region.assign_advice(
-			    || "one",
-			    self.rlc,
-			    0,
-			    || Value::known(F::from(1))
-			)?;
-			region.constrain_constant(one.cell(), F::from(1))?;
-			let zero = region.assign_advice(
-			    || "zero",
-			    self.val,
-			    1,
-			    || Value::known(F::from(0))
-			)?;
-			region.constrain_constant(zero.cell(), F::from(0))?;
-			let cache0 = region.assign_advice(
-			    || "gamma",
-			    self.rlc,
-			    1,
-			    || gamma
-			)?;
-			self.q_rlc.enable(&mut region, 1)?;
-			cache.push(cache0);
-		    } else {
-			let zero = region.assign_advice(
-			    || "zero",
-			    self.rlc,
-			    4 * idx - 2,
-			    || Value::known(F::from(0))
-			)?;
-			region.constrain_constant(zero.cell(), F::from(0))?;
-			let next = cache[cache.len() - 1].copy_advice(
-			    || "prev copy",
-			    &mut region,
-			    self.rlc,
-			    4 * idx - 1
-			)?;
-			let next2 = cache[cache.len() - 1].copy_advice(
-			    || "prev copy",
-			    &mut region,
-			    self.rlc,
-			    4 * idx
-			)?;
-			region.constrain_equal(next.cell(), cache[cache.len() - 1].cell())?;
-			region.constrain_equal(next2.cell(), cache[cache.len() - 1].cell())?;
-			let next3 = region.assign_advice(
-			    || "gamma next",
-			    self.rlc,
-			    4 * idx + 1,
-			    || cache[cache.len() - 1].value().map(|x| (*x) * (*x))
-			)?;
-			self.q_mul.enable(&mut region, 4 * idx - 2)?;
-			cache.push(next3);
-		    }
-		}
-		Ok(cache)
+	let mut rlc_inputs = Vec::new();
+	let mut val_inputs = vec![(1, Constant(F::from(0)))];
+	let mut rlc_offsets = vec![1];
+	let mut gate_offsets = Vec::new();
+	let mut vals = Vec::new();
+	for idx in 0..cache_bits {
+	    // rlc:   | 1 | g | 0 | g | g | g^2 
+	    // val:   |   | 0 |   |
+	    // q_rlc: |   | 1 |   | 
+	    // q_mul: |   |   | 1 | 
+	    if idx == 0 {
+		rlc_inputs.push(Constant(F::from(1)));
+		rlc_inputs.push(Witness(*gamma));
+		vals.push(*gamma);
+	    } else {
+		rlc_inputs.push(Constant(F::from(0)));
+		rlc_inputs.push(Witness(vals[vals.len() - 1]));
+		rlc_inputs.push(Witness(vals[vals.len() - 1]));
+		rlc_inputs.push(Witness(vals[vals.len() - 1] * vals[vals.len() - 1]));
+		gate_offsets.push(4 * idx - 2);
+		vals.push(vals[vals.len() - 1] * vals[vals.len() - 1]);
 	    }
+	}
+	
+	let cache = self.assign_region_rlc_and_val_idx(
+	    ctx,
+	    &rlc_inputs,
+	    &val_inputs,
+	    rlc_offsets,
+	    gate_offsets,
+	    None
 	)?;
-	Ok(cache)
+	for idx in 0..(cache_bits - 1) {
+	    ctx.region.constrain_equal(cache.0[4 * idx + 1].assigned.cell(),
+				       cache.0[4 * idx + 3].assigned.cell())?;
+	    ctx.region.constrain_equal(cache.0[4 * idx + 1].assigned.cell(),
+				       cache.0[4 * idx + 4].assigned.cell())?;
+	}
+	let mut ret = Vec::new();
+	for idx in 0..cache_bits {
+	    ret.push(cache.0[4 * idx + 1].clone());
+	}
+	Ok(ret)
     }
     
     pub fn rlc_pow(
 	&self,
-	layouter: &mut impl Layouter<F>,
+	ctx: &mut Context<'_, F>,
 	range: &RangeConfig<F>,
-	pow: AssignedCell<F, F>,
+	pow: AssignedValue<F>,
 	pow_bits: usize,
-	rlc_cache: &Vec<AssignedCell<F, F>>,
-    ) -> Result<AssignedCell<F, F>, Error> {
+	rlc_cache: &Vec<AssignedValue<F>>,
+    ) -> Result<AssignedValue<F>, Error> {
 	assert!(pow_bits <= rlc_cache.len());
 	
-	let using_simple_floor_planner = true;
-	let mut first_pass = true;
-	let bits = layouter.assign_region(
-	    || "num_to_bits",
-	    |mut region| {
-		if first_pass && using_simple_floor_planner {
-		    first_pass = false;
-		}
-		
-		let mut aux = Context::new(
-		    region,
-		    ContextParams {
-			num_advice: range.gate.num_advice,
-			using_simple_floor_planner,
-			first_pass,
-		    },
-		);
-		let ctx = &mut aux;
+	let bits = range.num_to_bits(ctx, &pow, pow_bits)?;
 
-		let bits = range.num_to_bits(
-		    ctx,
-		    &pow,
-		    pow_bits,
-		)?;
-		let stats = range.finalize(ctx)?;
-		println!("stats: {:?}", stats);
-		Ok(bits)
-	    }
-	)?;
-	
+
+	let mut inputs = Vec::new();
+	let mut gate_offsets = Vec::new();
+	for idx in 0..pow_bits {
+	    // prod = bit * x + (1 - bit)
+	    // | 1   | bit  | x | 1 + bit * x | bit | prod | 1 | bit + prod |
+	    inputs.push(Constant(F::from(1)));
+	    inputs.push(Existing(&bits[idx]));
+	    inputs.push(Existing(&rlc_cache[idx]));
+	    inputs.push(Witness(Value::known(F::from(1))
+				+ bits[idx].value().copied() * rlc_cache[idx].value().copied()));
+	    gate_offsets.push(8 * idx);
+
+	    inputs.push(Existing(&bits[idx]));
+	    inputs.push(Witness(Value::known(F::from(1))
+				+ bits[idx].value().copied() * rlc_cache[idx].value().copied()
+				- bits[idx].value().copied()));
+	    inputs.push(Constant(F::from(1)));
+	    inputs.push(Witness(Value::known(F::from(1))
+				+ bits[idx].value().copied() * rlc_cache[idx].value().copied()));
+	    gate_offsets.push(8 * idx + 4);		    
+	}
+
 	// multi-exp of bits and rlc_cache
-	let dot = layouter.assign_region(
-	    || "bit product",
-	    |mut region| {
-		let mut prod_cells = Vec::new();
-		for idx in 0..pow_bits {
-		    // prod = bit * x + (1 - bit)
-		    // | 1   | bit  | x | 1 + bit * x | bit | prod | 1 | bit + prod |
-		    let one = region.assign_advice(
-			|| "one",
-			self.rlc,
-			8 * idx,
-			|| Value::known(F::from(1))
-		    )?;
-		    region.constrain_constant(one.cell(), F::from(1))?;
-		    let bit_copy = bits[idx].copy_advice(
-			|| "bit_copy",
-			&mut region,
-			self.rlc,
-			8 * idx + 1
-		    )?;
-		    let cache_copy = rlc_cache[idx].copy_advice(
-			|| "cache_copy",
-			&mut region,
-			self.rlc,
-			8 * idx + 2
-		    )?;
-		    let eq_check = region.assign_advice(
-			|| "eq",
-			self.rlc,
-			8 * idx + 3,
-			|| bits[idx].value().zip(rlc_cache[idx].value()).map(|(a, b)| F::from(1) + (*a) * (*b))
-		    )?;
-		    self.q_mul.enable(&mut region, 8 * idx)?;
+	let dot = self.assign_region_rlc(ctx, &inputs, vec![], gate_offsets, None)?;
+	for idx in 0..pow_bits {
+	    ctx.region.constrain_equal(dot[8 * idx + 3].assigned.cell(),
+				       dot[8 * idx + 7].assigned.cell())?;
+	}
 
-		    let bit_copy2 = bits[idx].copy_advice(
-			|| "bit_copy",
-			&mut region,
-			self.rlc,
-			8 * idx + 4
-		    )?;
-		    let prod = region.assign_advice(
-			|| "eq",
-			self.rlc,
-			8 * idx + 5,
-			|| bits[idx].value().zip(rlc_cache[idx].value()).map(|(a, b)| F::from(1) + (*a) * (*b) - (*a))
-		    )?;
-		    let one2 = region.assign_advice(
-			|| "one",
-			self.rlc,
-			8 * idx + 6,
-			|| Value::known(F::from(1))
-		    )?;
-		    region.constrain_constant(one2.cell(), F::from(1))?;
-		    eq_check.copy_advice(
-			|| "eq2",
-			&mut region,
-			self.rlc,
-			8 * idx + 7
-		    )?;
-		    self.q_mul.enable(&mut region, 8 * idx + 4)?;
-
-		    prod_cells.push(prod);		    
-		}
-
-		if pow_bits == 1 {
-		    Ok(prod_cells[0].clone())
+	if pow_bits == 1 {
+	    Ok(dot[5].clone())
+	} else {
+	    let mut inputs2 = Vec::new();
+	    let mut gate_offsets2 = Vec::new();
+	    let mut intermed = Vec::new();
+	    for idx in 0..(pow_bits - 1) {
+		if idx == 0 {
+		    inputs2.push(Constant(F::from(0)));
+		    inputs2.push(Existing(&dot[5]));
+		    inputs2.push(Existing(&dot[13]));
+		    inputs2.push(Witness(dot[5].value().copied() * dot[13].value().copied()));
+		    gate_offsets2.push(0);
+		    intermed.push(dot[5].value().copied() * dot[13].value().copied());
 		} else {
-		    let mut intermed = Vec::new();
-		    for idx in 0..(pow_bits - 1) {
-			if idx == 0 {
-			    let zero = region.assign_advice(
-				|| "zero",
-				self.rlc,
-				8 * pow_bits,
-				|| Value::known(F::from(0))
-			    )?;
-			    region.constrain_constant(zero.cell(), F::from(0))?;
-			    prod_cells[0].copy_advice(
-				|| "cache0",
-				&mut region,
-				self.rlc,
-				8 * pow_bits + 1
-			    )?;
-			    prod_cells[1].copy_advice(
-				|| "cache1",
-				&mut region,
-				self.rlc,
-				8 * pow_bits + 2
-			    )?;
-			    let prod1 = region.assign_advice(
-				|| "prod1",
-				self.rlc,
-				8 * pow_bits + 3,
-				|| prod_cells[0].value().zip(prod_cells[1].value()).map(|(a, b)| (*a) * (*b))
-			    )?;
-			    self.q_mul.enable(&mut region, 8 * pow_bits)?;
-			    intermed.push(prod1);
-			} else {
-			    let zero = region.assign_advice(
-				|| "zero",
-				self.rlc,
-				8 * pow_bits + 4 * idx,
-				|| Value::known(F::from(0))
-			    )?;
-			    region.constrain_constant(zero.cell(), F::from(0))?;
-			    prod_cells[idx + 1].copy_advice(
-				|| "cache",
-				&mut region,
-				self.rlc,
-				8 * pow_bits + 4 * idx + 1,
-			    )?;
-			    intermed[intermed.len() - 1].copy_advice(
-				|| "intermed",
-				&mut region,
-				self.rlc,
-				8 * pow_bits + 4 * idx + 2,
-			    )?;
-			    let prod = region.assign_advice(
-				|| "prod",
-				self.rlc,
-				8 * pow_bits + 4 * idx + 3,
-				|| prod_cells[idx + 1].value().zip(intermed[intermed.len() - 1].value()).map(|(a, b)| (*a) * (*b))
-			    )?;
-			    self.q_mul.enable(&mut region, 8 * pow_bits + 4 * idx)?;
-			    intermed.push(prod);			
-			}
-		    }
-		    Ok(intermed[pow_bits - 2].clone())
+		    inputs2.push(Constant(F::from(0)));
+		    inputs2.push(Existing(&dot[8 * (idx + 1) + 5]));
+		    inputs2.push(Witness(intermed[intermed.len() - 1]));
+		    inputs2.push(Witness(dot[8 * (idx + 1) + 5].value().copied() * intermed[intermed.len() - 1]));
+		    gate_offsets2.push(4 * idx);
+		    intermed.push(dot[8 * (idx + 1) + 5].value().copied() * intermed[intermed.len() - 1]);
 		}
 	    }
-	)?;
-	
-	Ok(dot)
+	    let prods = self.assign_region_rlc(ctx, &inputs2, vec![], gate_offsets2, None)?;
+	    for idx in 0..(pow_bits - 2) {
+		ctx.region.constrain_equal(prods[4 * idx + 3].assigned.cell(),
+					   prods[4 * idx + 6].assigned.cell())?;
+	    }
+	    Ok(prods[prods.len() - 1].clone())
+	}
     }
 }
 
@@ -726,20 +690,29 @@ pub struct TestConfig<F: Field> {
 impl<F: Field> TestConfig<F> {
     pub fn configure(
 	meta: &mut ConstraintSystem<F>,
+	num_basic_chips: usize,
+	num_chip_fixed: usize,
         range_strategy: RangeStrategy,
-        num_advice: usize,
-        mut num_lookup_advice: usize,
+        num_advice: &[usize],
+        mut num_lookup_advice: &[usize],
         num_fixed: usize,
         lookup_bits: usize,
     ) -> Self {
-	let rlc = RlcChip::configure(meta);
+	let rlc = RlcChip::configure(
+	    meta,
+	    num_basic_chips,
+	    num_chip_fixed,
+	    "gamma".to_string(),
+	    "rlc".to_string()
+	);
 	let range = RangeConfig::configure(
 	    meta,
 	    range_strategy,
 	    num_advice,
 	    num_lookup_advice,
 	    num_fixed,
-	    lookup_bits
+	    lookup_bits,
+	    "default".to_string(),
 	);
 	Self {
 	    rlc,
@@ -767,9 +740,11 @@ impl<F: Field> Circuit<F> for TestCircuit<F> {
     fn configure(meta: &mut ConstraintSystem<F>) -> Self::Config {
 	TestConfig::configure(
 	    meta,
-	    Vertical,
 	    1,
-	    0,
+	    1,
+	    Vertical,
+	    &[1],
+	    &[0],
 	    1,
 	    10		    
 	)
@@ -782,24 +757,22 @@ impl<F: Field> Circuit<F> for TestCircuit<F> {
     ) -> Result<(), Error> {
 	config.range.load_lookup_table(&mut layouter)?;
 
+	let gamma = layouter.get_challenge(config.rlc.gamma);
 	let using_simple_floor_planner = true;
-	let mut first_pass = true;	   
-	let (inputs_assigned, len_assigned) = layouter.assign_region(
+	let mut first_pass = true;
+	let rlc_trace = layouter.assign_region(
 	    || "load_inputs",
 	    |mut region| {
-		if first_pass && using_simple_floor_planner {
-		    first_pass = false;
-		}
-		
+		if first_pass && using_simple_floor_planner { first_pass = false; }		
 		let mut aux = Context::new(
 		    region,
-		    ContextParams {
-			num_advice: config.range.gate.num_advice,
-			using_simple_floor_planner,
-			first_pass,
-		    },
+		    ContextParams { num_advice: vec![
+			("default".to_string(), config.range.gate.num_advice),
+			("rlc".to_string(), config.rlc.basic_chips.len())
+		    ] }
 		);
 		let ctx = &mut aux;
+		ctx.challenge.insert("gamma".to_string(), gamma);
 		
 		let inputs_assigned = config.range.gate.assign_region_smart(
 		    ctx,
@@ -815,22 +788,23 @@ impl<F: Field> Circuit<F> for TestCircuit<F> {
 		    vec![],
 		    vec![]
 		)?;
+
+		let rlc_trace = config.rlc.compute_rlc(
+		    ctx,
+		    &config.range,
+		    &inputs_assigned,
+		    len_assigned[0].clone(),
+		    self.max_len,
+		)?;
+
 		let stats = config.range.finalize(ctx)?;
-		Ok((inputs_assigned, len_assigned[0].clone()))
+		Ok(rlc_trace)
 	    }
 	)?;
 	
-	let rlc_trace = config.rlc.compute_rlc(
-	    &mut layouter,
-	    &config.range,
-	    &inputs_assigned,
-	    len_assigned,
-	    self.max_len,
-	)?;
-
-	let gamma = layouter.get_challenge(config.rlc.gamma);
 	let real_rlc = gamma.map(|g| compute_rlc_acc(&self.inputs[..self.len].to_vec(), g));
 	rlc_trace.rlc_val.value().zip(real_rlc).assert_if_known(|(a, b)| *a == b);
+	
 	Ok(())
     }
 }

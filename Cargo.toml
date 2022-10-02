@@ -21,7 +21,7 @@ num-integer = "0.1"
 num-traits = "0.2"
 ff = "0.12.0"
 group = "0.11"
-halo2_ecc = { git = "ssh://github.com/jonathanpwang/halo2-ecc.git", branch = "value" }
+halo2_base = { git = "ssh://github.com/jonathanpwang/halo2-ecc.git", branch = "refactor/10-01" }
 halo2_proofs = { git = "https://github.com/privacy-scaling-explorations/halo2.git", tag = "v2022_09_10" }
 hex = "0.4.3"
 ecdsa = { git = "https://github.com/privacy-scaling-explorations/halo2wrong", tag = "v2022_09_09" }

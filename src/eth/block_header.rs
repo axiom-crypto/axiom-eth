@@ -2,11 +2,12 @@ use std::cmp::max;
 use std::marker::PhantomData;
 use num_bigint::BigUint;
 use num_traits::cast::ToPrimitive;
-use halo2_ecc::{
+use halo2_base::{
+    AssignedValue, Context, ContextParams,
+    QuantumCell,
+    QuantumCell::{Constant, Existing, Witness},
     gates::{
-	Context, ContextParams,
 	GateInstructions,
-	QuantumCell::{Constant, Existing, Witness},
 	range::{RangeConfig, RangeStrategy, RangeStrategy::Vertical},
 	RangeInstructions},
     utils::fe_to_biguint,
@@ -16,7 +17,16 @@ use halo2_proofs::{
     halo2curves::bn256::Fr,
     plonk::{Advice, Challenge, Circuit, Column, ConstraintSystem, Error,
 	    Expression, FirstPhase, Fixed, Instance, SecondPhase, Selector},
-    poly::Rotation,
+    poly::{
+	Rotation,
+	commitment::{Params, ParamsProver},
+	kzg::{
+	    commitment::{KZGCommitmentScheme, ParamsKZG},
+            multiopen::{ProverSHPLONK, VerifierSHPLONK},
+            strategy::SingleStrategy,
+	},
+    },
+    transcript::{Blake2bRead, Blake2bWrite, Challenge255, TranscriptReadBuffer, TranscriptWriterBuffer},
 };
 
 use eth_types::Field;
@@ -64,9 +74,9 @@ pub struct EthBlockHeaderTrace<F: Field> {
     nonce: RlcTrace<F>,
     basefee: RlcTrace<F>,
 
-    prefix: AssignedCell<F, F>,
+    prefix: AssignedValue<F>,
     len_trace: RlcTrace<F>,
-    field_prefixs: Vec<AssignedCell<F, F>>,
+    field_prefixs: Vec<AssignedValue<F>>,
     field_len_traces: Vec<RlcTrace<F>>,    
 }
 
@@ -79,14 +89,22 @@ pub struct EthBlockHeaderChip<F: Field> {
 impl<F: Field> EthBlockHeaderChip<F> {
     pub fn configure(
 	meta: &mut ConstraintSystem<F>,
+	num_basic_chips: usize,
+	num_chips_fixed: usize,
+	challenge_id: String,
+	context_id: String,
 	range_strategy: RangeStrategy,
-	num_advice: usize,
-	mut num_lookup_advice: usize,
+	num_advice: &[usize],
+	mut num_lookup_advice: &[usize],
 	num_fixed: usize,
 	lookup_bits: usize,
     ) -> Self {
 	let rlp = RlpArrayChip::configure(
 	    meta,
+	    num_basic_chips,
+	    num_chips_fixed,
+	    challenge_id,
+	    context_id,
 	    range_strategy,
 	    num_advice,
 	    num_lookup_advice,
@@ -102,9 +120,9 @@ impl<F: Field> EthBlockHeaderChip<F> {
 
     pub fn decompose_eth_block_header(
 	&self,
-	layouter: &mut impl Layouter<F>,
+	ctx: &mut Context<'_, F>,
 	range: &RangeConfig<F>,
-	block_header: &Vec<AssignedCell<F, F>>,
+	block_header: &Vec<AssignedValue<F>>,
     ) -> Result<EthBlockHeaderTrace<F>, Error> {
 	let max_len = 1 + 2 + 553;
 	let max_field_lens = vec![
@@ -112,7 +130,7 @@ impl<F: Field> EthBlockHeaderChip<F> {
 	];
 	let num_fields = 16;
 	let rlp_array_trace = self.rlp.decompose_rlp_array(
-	    layouter, range, block_header, max_field_lens, max_len, num_fields
+	    ctx, range, block_header, max_field_lens, max_len, num_fields
 	)?;
 	
 	let block_header_trace = EthBlockHeaderTrace {
@@ -160,9 +178,13 @@ impl<F: Field> Circuit<F> for EthBlockHeaderTestCircuit<F> {
     fn configure(meta: &mut ConstraintSystem<F>) -> Self::Config {
 	EthBlockHeaderChip::configure(
 	    meta,
-	    Vertical,
 	    1,
-	    0,
+	    1,
+	    "gamma".to_string(),
+	    "rlc".to_string(),
+	    Vertical,
+	    &[1],
+	    &[0],
 	    1,
 	    10		    
 	)
@@ -174,25 +196,23 @@ impl<F: Field> Circuit<F> for EthBlockHeaderTestCircuit<F> {
 	mut layouter: impl Layouter<F>,
     ) -> Result<(), Error> {
 	config.rlp.range.load_lookup_table(&mut layouter)?;
-
+	
+	let gamma = layouter.get_challenge(config.rlp.rlc.gamma);
 	let using_simple_floor_planner = true;
 	let mut first_pass = true;	   
-	let inputs_assigned = layouter.assign_region(
-	    || "load_inputs",
+	let ok = layouter.assign_region(
+	    || "EthBlockHeader Test",
 	    |mut region| {
-		if first_pass && using_simple_floor_planner {
-		    first_pass = false;
-		}
-		
+		if first_pass && using_simple_floor_planner { first_pass = false; }		
 		let mut aux = Context::new(
 		    region,
-		    ContextParams {
-			num_advice: config.rlp.range.gate.num_advice,
-			using_simple_floor_planner,
-			first_pass,
-		    },
+		    ContextParams { num_advice: vec![
+			("default".to_string(), config.rlp.range.gate.num_advice),
+			("rlc".to_string(), config.rlp.rlc.basic_chips.len())
+		    ] }
 		);
 		let ctx = &mut aux;
+		ctx.challenge.insert("gamma".to_string(), gamma);
 		
 		let inputs_assigned = config.rlp.range.gate.assign_region_smart(
 		    ctx,
@@ -201,16 +221,19 @@ impl<F: Field> Circuit<F> for EthBlockHeaderTestCircuit<F> {
 		    vec![],
 		    vec![]
 		)?;
+
+		let block_header_trace = config.decompose_eth_block_header(
+		    ctx,
+		    &config.rlp.range,
+		    &inputs_assigned,
+		)?;
+
 		let stats = config.rlp.range.finalize(ctx)?;
-		Ok(inputs_assigned)
+		println!("stats {:?}", stats);
+		Ok(())
 	    }
 	)?;
 
-	let block_header_trace = config.decompose_eth_block_header(
-	    &mut layouter,
-	    &config.rlp.range,
-	    &inputs_assigned,
-	)?;
 	Ok(())
     }
 }
@@ -222,15 +245,24 @@ mod tests {
     use hex::FromHex;
     use std::marker::PhantomData;
     use halo2_proofs::{
-	dev::{MockProver},
-	halo2curves::bn256::Fr,
+	circuit::{AssignedCell, Layouter, SimpleFloorPlanner, Value},
+	dev::MockProver,
+	halo2curves::bn256::{Bn256, Fr, G1Affine, G2Affine},
+	plonk::*,
+	poly::commitment::ParamsProver,
+	poly::kzg::{
+            commitment::{KZGCommitmentScheme, ParamsKZG},
+            multiopen::{ProverGWC, ProverSHPLONK, VerifierGWC, VerifierSHPLONK},
+            strategy::SingleStrategy,
+	},
+	transcript::{Blake2bRead, Blake2bWrite, Challenge255, TranscriptReadBuffer, TranscriptWriterBuffer},
     };
     use crate::{
 	eth::block_header::{EthBlockHeaderTestCircuit},
     };
 
     #[test]
-    pub fn test_eth_block_header() {
+    pub fn test_mock_eth_block_header() {
 	let k = 18;
 	let input_bytes: Vec<u8> = Vec::from_hex("f90201a0d7519abd494a823b2c9c28908eaf250fe4a6287d747f1cc53a5a193b6533a549a01dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347944675c7e5baafbffbca748158becba61ef3b0a263a025000d51f040ee5c473fed74eda9ace87d55a35187b11bcde6f5176025c395bfa0a5800a6de6d28d7425ff72714af2af769b9f8f9e1baf56fb42f793fbb40fde07a056e1062a3dc63791e8a8496837606b14062da70ee69178cea97d6eeb5047550cb9010000236420014dc00423903000840002280080282100004704018340c0241c20011211400426000f900001d8088000011006020002ce98bc00c0000020c9a02040000688040200348c3a0082b81402002814922008085d008008200802802c4000130000101703124801400400018008a6108002020420144011200070020bc0202681810804221304004800088600300000040463614a000e200201c00611c0008e800b014081608010a0218a0b410010082000428209080200f50260a00840006700100f40a000000400000448301008c4a00341040e343500800d06250020010215200c008018002c88350404000bc5000a8000210c00724a0d0a4010210a448083eee2468401c9c3808343107884633899e780a07980d8d1f15474c9185e4d1cef5f207167735009daad2eb6af6da37ffba213c28800000000000000008501e08469e600000000000000000000000000000000000000000000000000000000000000000000000000000000").unwrap();
 	    
@@ -242,5 +274,48 @@ mod tests {
 	let prover = prover_try.unwrap();
 	prover.assert_satisfied();
 	assert_eq!(prover.verify(), Ok(()));
+    }
+
+    #[test]
+    pub fn test_eth_block_header() -> Result<(), Box<dyn std::error::Error>> {
+	let k = 18;
+	let mut rng = rand::thread_rng();
+	let params = ParamsKZG::<Bn256>::setup(k, &mut rng);
+	
+	let input_bytes: Vec<u8> = Vec::from_hex("f90201a0d7519abd494a823b2c9c28908eaf250fe4a6287d747f1cc53a5a193b6533a549a01dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347944675c7e5baafbffbca748158becba61ef3b0a263a025000d51f040ee5c473fed74eda9ace87d55a35187b11bcde6f5176025c395bfa0a5800a6de6d28d7425ff72714af2af769b9f8f9e1baf56fb42f793fbb40fde07a056e1062a3dc63791e8a8496837606b14062da70ee69178cea97d6eeb5047550cb9010000236420014dc00423903000840002280080282100004704018340c0241c20011211400426000f900001d8088000011006020002ce98bc00c0000020c9a02040000688040200348c3a0082b81402002814922008085d008008200802802c4000130000101703124801400400018008a6108002020420144011200070020bc0202681810804221304004800088600300000040463614a000e200201c00611c0008e800b014081608010a0218a0b410010082000428209080200f50260a00840006700100f40a000000400000448301008c4a00341040e343500800d06250020010215200c008018002c88350404000bc5000a8000210c00724a0d0a4010210a448083eee2468401c9c3808343107884633899e780a07980d8d1f15474c9185e4d1cef5f207167735009daad2eb6af6da37ffba213c28800000000000000008501e08469e600000000000000000000000000000000000000000000000000000000000000000000000000000000").unwrap();    
+	let circuit = EthBlockHeaderTestCircuit::<Fr> {
+	    inputs: input_bytes,
+	    _marker: PhantomData
+	};
+
+	println!("vk gen started");
+	let vk = keygen_vk(&params, &circuit)?;
+	println!("vk gen done");
+        let pk = keygen_pk(&params, vk, &circuit)?;
+	println!("pk gen done");
+	let mut transcript = Blake2bWrite::<_, _, Challenge255<_>>::init(vec![]);
+	create_proof::<
+            KZGCommitmentScheme<Bn256>,
+            ProverGWC<'_, Bn256>,
+            Challenge255<G1Affine>,
+            _,
+            Blake2bWrite<Vec<u8>, G1Affine, Challenge255<G1Affine>>,
+            EthBlockHeaderTestCircuit<Fr>,
+        >(&params, &pk, &[circuit], &[&[]], rng, &mut transcript)?;
+        let proof = transcript.finalize();
+	println!("proof gen done");
+	let verifier_params = params.verifier_params();
+        let strategy = SingleStrategy::new(&params);
+        let mut transcript = Blake2bRead::<_, _, Challenge255<_>>::init(&proof[..]);
+        assert!(verify_proof::<
+            KZGCommitmentScheme<Bn256>,
+            VerifierGWC<'_, Bn256>,
+            Challenge255<G1Affine>,
+            Blake2bRead<&[u8], G1Affine, Challenge255<G1Affine>>,
+            SingleStrategy<'_, Bn256>,
+        >(verifier_params, pk.get_vk(), strategy, &[&[]], &mut transcript)
+		.is_ok());
+	println!("verify done");
+	Ok(())
     }
 }
