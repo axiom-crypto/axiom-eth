@@ -196,22 +196,26 @@ impl<F: Field> Circuit<F> for EthBlockHeaderTestCircuit<F> {
 	mut layouter: impl Layouter<F>,
     ) -> Result<(), Error> {
 	config.rlp.range.load_lookup_table(&mut layouter)?;
+	let gamma = layouter.get_challenge(config.rlp.rlc.gamma);
+	println!("gamma {:?}", gamma);
 	
 	let using_simple_floor_planner = true;
 	let mut phase = 0u8;
-	let inputs_assigned = layouter.assign_region(
-	    || "Private input assignment",
+	let res = layouter.assign_region(
+	    || "Eth block test",
 	    |mut region| {
 		phase = phase + 1u8;
 
-		println!("phase {:?} private inputs", phase);
+		println!("phase {:?}", phase);
 		let mut aux = Context::new(
 		    region,
 		    ContextParams { num_advice: vec![
 			("default".to_string(), config.rlp.range.gate.num_advice),
+			("rlc".to_string(), config.rlp.rlc.basic_chips.len())			    
 		    ] }
 		);
 		let ctx = &mut aux;
+		ctx.challenge.insert("gamma".to_string(), gamma);
 		
 		let inputs_assigned = config.rlp.range.gate.assign_region_smart(
 		    ctx,
@@ -221,50 +225,18 @@ impl<F: Field> Circuit<F> for EthBlockHeaderTestCircuit<F> {
 		    vec![]
 		)?;
 
-//		let stats = config.rlp.range.finalize(ctx)?;
-//		println!("stats {:?}", stats);
-//		println!("ctx.rows {:?}", ctx.advice_rows.get::<String>(&"rlc".to_string()));
-		Ok(inputs_assigned)
-	    }
-	)?;
-
-	let gamma = layouter.get_challenge(config.rlp.rlc.gamma);
-	println!("gamma {:?}", gamma);
-	println!("inputs_assigned {:?}", inputs_assigned[0]);
-	let mut phase2 = 0u8;
-	let ok = layouter.assign_region(
-	    || "Eth block test",
-	    |mut region| {
-		if using_simple_floor_planner && phase2 == 0u8 {
-		    phase2 = phase2 + 1u8;
-		    return Ok(());
-		}
-		phase2 = phase2 + 1u8;
-
-		println!("phase {:?} RLC", phase2);
-		let mut aux = Context::new(
-		    region,
-		    ContextParams { num_advice: vec![
-			("default".to_string(), config.rlp.range.gate.num_advice),
-			("rlc".to_string(), config.rlp.rlc.basic_chips.len())
-		    ] }
-		);
-		let ctx = &mut aux;
-		ctx.challenge.insert("gamma".to_string(), gamma);
-
 		let block_header_trace = config.decompose_eth_block_header(
 		    ctx,
 		    &config.rlp.range,
 		    &inputs_assigned,
 		)?;
-
+		
 		let stats = config.rlp.range.finalize(ctx)?;
 		println!("stats {:?}", stats);
 		println!("ctx.rows {:?}", ctx.advice_rows.get::<String>(&"rlc".to_string()));
 		Ok(())
 	    }
 	)?;
-
 	Ok(())
     }
 }

@@ -494,7 +494,6 @@ impl<F: Field> RlpArrayChip<F> {
 	//                        (field_rlc.rlc_val, field_rlc.rlc_len)])
 
 	let prefix = rlp_array[0].clone();
-	println!("prefix {:?}", prefix);
 	let prefix_parsed = self.parse_rlp_array_prefix(ctx, range, &prefix)?;
 	
 	let len_len = prefix_parsed.len_len.clone();
