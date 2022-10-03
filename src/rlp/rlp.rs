@@ -494,8 +494,9 @@ impl<F: Field> RlpArrayChip<F> {
 	//                        (field_rlc.rlc_val, field_rlc.rlc_len)])
 
 	let prefix = rlp_array[0].clone();
+	println!("prefix {:?}", prefix);
 	let prefix_parsed = self.parse_rlp_array_prefix(ctx, range, &prefix)?;
-		
+	
 	let len_len = prefix_parsed.len_len.clone();
 	let (len_cells, len_byte_val) = self.parse_rlp_len(
 	    ctx,
@@ -504,7 +505,7 @@ impl<F: Field> RlpArrayChip<F> {
 	    &len_len,
 	    max_len_len
 	)?;
-
+	
 	let all_fields_len = range.gate.select(
 	    ctx,
 	    &Existing(&len_byte_val),
@@ -601,7 +602,7 @@ impl<F: Field> RlpArrayChip<F> {
 	    field_cells_rlcs.push(field_cells_rlc);
 	}
 	let rlp_rlc = self.rlc.compute_rlc(ctx, range, &rlp_array, rlp_len, max_array_len)?;
-	let one_vec = self.rlc.assign_region_rlc(ctx, &vec![Constant(F::from(1))], vec![], vec![], None)?;
+	let one_vec = self.range.gate.assign_region_smart(ctx, vec![Constant(F::from(1))], vec![], vec![], vec![])?;
 	let one = one_vec[0].clone();
 
 	let rlc_cache = self.rlc.load_rlc_cache(ctx, log2(max_array_len))?;
@@ -629,7 +630,7 @@ impl<F: Field> RlpArrayChip<F> {
 	    max_array_len,
 	    &rlc_cache
 	)?;
-		
+
 	let parsed_rlp_array = RlpArrayTrace {
 	    array_trace: rlp_rlc,
 	    prefix,

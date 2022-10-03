@@ -71,14 +71,11 @@ impl<F: Field> BasicRlcChip<F> {
     pub fn configure(meta: &mut ConstraintSystem<F>) -> Self {
 	let q_rlc = meta.selector();
 	let q_mul = meta.selector();
-	let cons = meta.fixed_column();
 	let val = meta.advice_column();
 	let rlc = meta.advice_column_in(SecondPhase);
 
 	meta.enable_equality(val);
 	meta.enable_equality(rlc);
-	meta.enable_equality(cons);
-	meta.enable_constant(cons);
 	
 	let config = Self {
 	    val,
@@ -499,9 +496,9 @@ impl<F: Field> RlcChip<F> {
 	    ctx,
 	    &rlc_and_len_inputs.iter().map(|(a, b)| Constant(F::from(1))).collect(),
 	    &rlc_and_len_inputs.iter().map(|(a, b)| Existing(&b)).collect(),
-	)?;	
+	)?;
 	range.gate.assert_equal(ctx, &Existing(&len_sum), &Existing(&concat.1))?;
-
+	
 	let mut gamma_pows = Vec::new();
 	for (idx, (rlc, len)) in rlc_and_len_inputs.iter().enumerate() {
 	    let gamma_pow = self.rlc_pow(
