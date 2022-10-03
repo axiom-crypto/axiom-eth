@@ -65,7 +65,6 @@ pub struct BasicRlcChip<F: Field> {
 
 impl<F: Field> BasicRlcChip<F> {
     pub fn configure(meta: &mut ConstraintSystem<F>) -> Self {
-<<<<<<< HEAD
 	let q_rlc = meta.selector();
 	let q_mul = meta.selector();
 	let val = meta.advice_column();
@@ -74,31 +73,9 @@ impl<F: Field> BasicRlcChip<F> {
 	meta.enable_equality(val);
 	meta.enable_equality(rlc);
 	
-	let config = Self {
-	    val,
-	    rlc,
-	    q_rlc,
-	    q_mul,
-	    _marker: PhantomData
-	};
+	let config = Self { val, rlc, q_rlc, q_mul, _marker: PhantomData };
 
 	config
-=======
-        let q_rlc = meta.selector();
-        let q_mul = meta.selector();
-        let cons = meta.fixed_column();
-        let val = meta.advice_column();
-        let rlc = meta.advice_column_in(SecondPhase);
-
-        meta.enable_equality(val);
-        meta.enable_equality(rlc);
-        meta.enable_equality(cons);
-        meta.enable_constant(cons);
-
-        let config = Self { val, rlc, q_rlc, q_mul, _marker: PhantomData };
-
-        config
->>>>>>> d81badaa03408ace3591b59a65d622cd27927ea7
     }
 
     pub fn create_gates(&self, meta: &mut ConstraintSystem<F>, gamma: Challenge) {
