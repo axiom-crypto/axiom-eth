@@ -140,33 +140,6 @@ impl<F: Field> KeccakChip<F> {
 	Ok((output_rlc, keccak_val))
     }
 
-    pub fn copy_keccak_pair(
-	&mut self,
-	layouter: &mut impl Layouter<F>,
-	input_rlc: AssignedCell<F, F>,
-	output_rlc: AssignedCell<F, F>,
-	inputs: &Vec<Value<F>>,
-    ) -> Result<(), Error> {
-	layouter.assign_region(
-	    || "keccak pair",
-	    |mut region| {
-		region.assign_fixed(
-		    || "keccak lookup selector",
-		    self.q_keccak,
-		    0,
-		    || Value::known(F::from(1))
-		)?;
-
-		// pending https://github.com/privacy-scaling-explorations/zkevm-circuits/issues/799,
-		// input_rlc is in reverse order
-		input_rlc.copy_advice(|| "input_rlc", &mut region, self.keccak_in_rlc, 0)?;
-		output_rlc.copy_advice(|| "output_rlc", &mut region, self.keccak_out_rlc, 0)?;
-		Ok(())
-	    }
-	)?;
-	Ok(())
-    }
-
     // Call this at the end of synthesize
     pub fn load_and_witness_keccak(
 	&self,
