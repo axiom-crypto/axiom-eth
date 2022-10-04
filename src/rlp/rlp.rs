@@ -102,7 +102,6 @@ pub fn array_to_byte_val<'a, F: Field>(
 
 #[derive(Clone, Debug)]
 pub struct RlpFieldPrefixParsed<F: Field> {
-    is_valid: AssignedValue<F>,
     is_literal: AssignedValue<F>,
     is_big: AssignedValue<F>,
     
@@ -113,7 +112,6 @@ pub struct RlpFieldPrefixParsed<F: Field> {
 
 #[derive(Clone, Debug)]
 pub struct RlpArrayPrefixParsed<F: Field> {
-    is_valid: AssignedValue<F>,
     is_empty: AssignedValue<F>,
     is_big: AssignedValue<F>,
     
@@ -205,7 +203,7 @@ impl<F: Field> RlpArrayChip<F> {
 	    &Constant(F::from(184u64)),
 	    8,
 	)?;
-	let is_valid = range.is_less_than(
+	let is_valid = range.check_less_than(
 	    ctx,
 	    &Existing(prefix),
 	    &Constant(F::from(192u64)),
@@ -223,14 +221,9 @@ impl<F: Field> RlpArrayChip<F> {
 	    &Constant(F::from(183u64)),
 	)?;
 
-	let is_possibly_big = range.gate.not(
+	let is_big = range.gate.not(
 	    ctx,
 	    &Existing(&is_len_or_literal)
-	)?;
-	let is_big = range.gate.and(
-	    ctx,
-	    &Existing(&is_valid),
-	    &Existing(&is_possibly_big)
 	)?;
 
 	// length of the next RLP field
@@ -248,7 +241,6 @@ impl<F: Field> RlpArrayChip<F> {
 	)?;
 	
 	Ok(RlpFieldPrefixParsed {
-		    is_valid,
 	    is_literal,
 	    is_big,
 	    next_len,
@@ -263,15 +255,11 @@ impl<F: Field> RlpArrayChip<F> {
 	range: &RangeConfig<F>,
 	prefix: &AssignedValue<F>,
     ) -> Result<RlpArrayPrefixParsed<F>, Error> {	
-	let is_field = range.is_less_than(
+	let is_valid = range.check_less_than(
 	    ctx,
+	    &Constant(F::from(191u64)),
 	    &Existing(prefix),
-	    &Constant(F::from(192u64)),
 	    8,
-	)?;
-	let is_valid = range.gate.not(
-	    ctx,
-	    &Existing(&is_field)
 	)?;
 	
 	let is_empty = range.is_equal(
@@ -279,21 +267,11 @@ impl<F: Field> RlpArrayChip<F> {
 	    &Existing(prefix),
 	    &Constant(F::from(192u64))
 	)?;
-	let is_empty_or_small_array = range.is_less_than(
+	let is_big = range.is_less_than(
 	    ctx,
+	    &Constant(F::from(247u64)),
 	    &Existing(prefix),
-	    &Constant(F::from(248u64)),
 	    8
-	)?;
-
-	let is_possibly_big = range.gate.not(
-	    ctx,
-	    &Existing(&is_empty_or_small_array)
-	)?;
-	let is_big = range.gate.and(
-	    ctx,
-	    &Existing(&is_possibly_big),
-	    &Existing(&is_valid)
 	)?;
 
 	let array_len = range.gate.sub(
@@ -320,7 +298,6 @@ impl<F: Field> RlpArrayChip<F> {
 	)?;
 	
 	Ok(RlpArrayPrefixParsed {
-	    is_valid,
 	    is_empty,
 	    is_big,
 	    next_len,
