@@ -11,9 +11,12 @@ halo2_proofs = { git = "https://github.com/privacy-scaling-explorations/halo2.gi
 halo2_proofs = { git = "https:///github.com//privacy-scaling-explorations/halo2", tag =  "v2022_09_10" }
 
 [patch."https://github.com/privacy-scaling-explorations/zkevm-circuits"]
-zkevm-circuits = { git = "https://github.com/yi-sun/zkevm-circuits.git", branch = "expose-keccak" }
-eth-types = { git = "https://github.com/yi-sun/zkevm-circuits.git", branch = "expose-keccak" }
-keccak256 = { git = "https://github.com/yi-sun/zkevm-circuits.git", branch = "expose-keccak" }
+zkevm-circuits = { git = "https://github.com/yi-sun/zkevm-circuits.git", branch = "expose-keccak-new" }
+eth-types = { git = "https://github.com/yi-sun/zkevm-circuits.git", branch = "expose-keccak-new" }
+keccak256 = { git = "https://github.com/yi-sun/zkevm-circuits.git", branch = "expose-keccak-new" }
+#zkevm-circuits = { path = "../zkevm-circuits/zkevm-circuits" }
+#eth-types = { path = "../zkevm-circuits/eth-types" }
+#keccak256 = { path = "../zkevm-circuits/keccak256" }
 
 [dependencies]
 num-bigint = { version = "0.4", features = ["rand"] }
@@ -27,8 +30,10 @@ halo2_proofs = { git = "https://github.com/privacy-scaling-explorations/halo2.gi
 hex = "0.4.3"
 ecdsa = { git = "https://github.com/privacy-scaling-explorations/halo2wrong", tag = "v2022_09_09" }
 ecc =       { git = "https://github.com/privacy-scaling-explorations/halo2wrong", tag = "v2022_09_09" }
-eth-types = { git = "https://github.com/yi-sun/zkevm-circuits.git", branch = "expose-keccak" }
-keccak256 = { git = "https://github.com/yi-sun/zkevm-circuits.git", branch = "expose-keccak" }
+eth-types = { git = "https://github.com/yi-sun/zkevm-circuits.git", branch = "expose-keccak-new" }
+#eth-types = { path = "../zkevm-circuits/eth-types" }		     
+keccak256 = { git = "https://github.com/yi-sun/zkevm-circuits.git", branch = "expose-keccak-new" }
+#keccak256 = { path = "../zkevm-circuits/keccak256" }
 maingate =  { git = "https://github.com/privacy-scaling-explorations/halo2wrong", tag = "v2022_09_09" }
 integer =   { git = "https://github.com/privacy-scaling-explorations/halo2wrong", tag = "v2022_09_09" }
 plotters = { version = "0.3.0", optional = true }
@@ -37,7 +42,8 @@ rand = "0.8"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tabbycat = { version = "0.1", features = ["attributes"], optional = true }
-zkevm-circuits = { git = "https://github.com/yi-sun/zkevm-circuits.git", branch = "expose-keccak" }
+zkevm-circuits = { git = "https://github.com/yi-sun/zkevm-circuits.git", branch = "expose-keccak-new" }
+#zkevm-circuits = { path = "../zkevm-circuits/zkevm-circuits" }
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 jemallocator = "0.3.2"

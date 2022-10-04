@@ -186,7 +186,7 @@ impl<F: Field> Circuit<F> for EthBlockHeaderTestCircuit<F> {
 	    &[1],
 	    &[0],
 	    1,
-	    10		    
+	    11		    
 	)
     }
 
@@ -233,7 +233,8 @@ impl<F: Field> Circuit<F> for EthBlockHeaderTestCircuit<F> {
 		
 		let stats = config.rlp.range.finalize(ctx)?;
 		println!("stats {:?}", stats);
-		println!("ctx.rows {:?}", ctx.advice_rows.get::<String>(&"rlc".to_string()));
+		println!("ctx.rows rlc {:?}", ctx.advice_rows.get::<String>(&"rlc".to_string()));
+		println!("ctx.rows default {:?}", ctx.advice_rows.get::<String>(&"default".to_string()));
 		Ok(())
 	    }
 	)?;

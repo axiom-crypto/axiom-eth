@@ -19,11 +19,11 @@ use std::{cmp::max, marker::PhantomData, rc::Rc};
 
 use eth_types::Field;
 
-pub fn compute_rlc<F: Field>(msg: &Vec<u8>, r: F) -> F {
+pub fn compute_rlc<F: Field>(msg: &Vec<Value<F>>, r: Value<F>) -> Value<F> {
     let mut coeff = r;
-    let mut rlc = F::from(msg[0] as u64);
+    let mut rlc = msg[0];
     for val in msg[1..].iter() {
-        rlc = rlc + F::from(*val as u64) * coeff;
+        rlc = rlc + *val * coeff;
         coeff = coeff * r;
     }
     rlc
