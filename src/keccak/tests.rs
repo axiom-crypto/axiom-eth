@@ -1,218 +1,152 @@
-use std::marker::PhantomData;
+use super::*;
+use ark_std::{end_timer, start_timer};
+use halo2_base::{utils::fe_to_biguint, ContextParams};
 use halo2_proofs::{
-    circuit::{AssignedCell, Layouter, SimpleFloorPlanner, Value},
-    halo2curves::bn256::Fr,
-    plonk::{Advice, Circuit, Column, ConstraintSystem, Error, Expression, Fixed, Instance, Selector},
-    poly::Rotation,
-};
-
-use eth_types::Field;
-use keccak256::plain::Keccak;
-use zkevm_circuits::{
-    keccak_circuit::{
-	keccak_bit::{KeccakBitCircuit, KeccakBitConfig, multi_keccak},
-	util::{compose_rlc}
+    arithmetic::FieldExt,
+    circuit::{Layouter, SimpleFloorPlanner, Value},
+    dev::MockProver,
+    halo2curves::bn256::{Bn256, Fr, G1Affine},
+    plonk::*,
+    poly::commitment::{Params, ParamsProver},
+    poly::kzg::{
+        commitment::{KZGCommitmentScheme, ParamsKZG},
+        multiopen::{ProverSHPLONK, VerifierSHPLONK},
+        strategy::SingleStrategy,
     },
-    table::KeccakTable
+    transcript::{Blake2bRead, Blake2bWrite, Challenge255},
+    transcript::{TranscriptReadBuffer, TranscriptWriterBuffer},
 };
-
-use crate::rlp::{
-    rlc::compute_rlc,
-};
-
-pub fn compute_keccak(msg: &[u8]) -> Vec<u8> {
-    let mut keccak = Keccak::default();
-    keccak.update(msg);
-    keccak.digest()
-}
-
-#[derive(Clone, Debug)]
-pub struct TestConfig<F> {
-    a: Column<Advice>,
-    b: Column<Advice>,
-    keccak_in_rlc: Column<Advice>,
-    keccak_out_rlc: Column<Advice>,
-    keccak_in_len: Column<Advice>,
-    q: Column<Fixed>,
-    keccak_config: KeccakBitConfig<F>,
-    _marker: PhantomData<F>
-}
-
-impl<F: Field> TestConfig<F> {
-    pub(crate) fn configure(meta: &mut ConstraintSystem<F>) -> Self {
-	let a = meta.advice_column();
-	let b = meta.advice_column();
-	let keccak_in_rlc = meta.advice_column();
-	let keccak_out_rlc = meta.advice_column();
-	let keccak_in_len = meta.advice_column();
-	let q = meta.fixed_column();
-	let keccak_config = KeccakBitCircuit::configure(meta);
-
-	let config = Self {
-	    a,
-	    b,
-	    keccak_in_rlc,
-	    keccak_out_rlc,
-	    keccak_in_len,
-	    q,
-	    keccak_config,
-	    _marker: PhantomData,
-	};
-
-	// Lookup in Keccak table
-	meta.lookup_any("keccak lookup", |meta| {
-	    let input_rlc = meta.query_advice(config.keccak_config.keccak_table.input_rlc, Rotation::cur());
-	    let output_rlc = meta.query_advice(config.keccak_config.keccak_table.output_rlc, Rotation::cur());
-	    
-	    let in_rlc = meta.query_advice(keccak_in_rlc, Rotation::cur());
-	    let out_rlc = meta.query_advice(keccak_out_rlc, Rotation::cur());
-	    let sel = meta.query_fixed(q, Rotation::cur());
-
-	    vec![(sel.clone() * in_rlc, input_rlc),
-		 (sel.clone() * out_rlc, output_rlc)]
-	});
-
-	// RLC prep
-	meta.create_gate("RLC input gate", |meta| {
-	    // TODO: Reverse the order of the inputs once bug(?) in keccak_bit is fixed
-	    let inputs = vec![
-		meta.query_advice(a, Rotation(2)),
-		meta.query_advice(a, Rotation(1)),
-		meta.query_advice(a, Rotation(0)),
-	    ];
-	    let sel = meta.query_fixed(q, Rotation::cur());
-	    let in_rlc = meta.query_advice(keccak_in_rlc, Rotation::cur());
-	    vec![sel * (compose_rlc::expr(&inputs, F::from(123456)) - in_rlc)]
-	});
-	meta.create_gate("RLC output gate", |meta| {
-	    let mut outputs = Vec::new();
-	    for idx in 0..32 {
-		outputs.push(meta.query_advice(b, Rotation(idx)));
-	    }
-	    let sel = meta.query_fixed(q, Rotation::cur());
-	    let out_rlc = meta.query_advice(keccak_out_rlc, Rotation::cur());
-	    vec![sel * (compose_rlc::expr(&outputs, F::from(123456)) - out_rlc)]
-	});
-	
-	config
-    }
-}
+use std::marker::PhantomData;
 
 #[derive(Default)]
-pub struct TestCircuit<'a, F: Field> {
-    inputs: &'a [Vec<u8>], 
-    size: usize,
+pub struct KeccakCircuit<F: FieldExt> {
+    lanes: [u64; 25],
     _marker: PhantomData<F>,
 }
 
-impl<'a, F: Field> Circuit<F> for TestCircuit<'_, F> {
-    type Config = TestConfig<F>;
+impl<F: FieldExt> Circuit<F> for KeccakCircuit<F> {
+    type Config = KeccakBitConfig<F>;
     type FloorPlanner = SimpleFloorPlanner;
 
     fn without_witnesses(&self) -> Self {
-	Self::default()
+        Self::default()
     }
 
     fn configure(meta: &mut ConstraintSystem<F>) -> Self::Config {
-	TestConfig::configure(meta)
+        KeccakBitConfig::configure(meta, "keccak".to_string())
     }
 
     fn synthesize(
-	&self,
-	config: Self::Config,
-	mut layouter: impl Layouter<F>,
+        &self,
+        config: Self::Config,
+        mut layouter: impl Layouter<F>,
     ) -> Result<(), Error> {
-	config.keccak_config.load(&mut layouter)?;
-	let r = F::from(123456);
-	let witness = multi_keccak(self.inputs, r);
-	config.keccak_config.assign(&mut layouter, &witness)?;
-	
-	
-	layouter.assign_region(
-	    || "RLC verify",
-	    |mut region| {
-		for (idx, input) in self.inputs[0].iter().enumerate() {
-		    region.assign_advice(
-			|| "input RLC",
-			config.a,
-			idx,
-			|| Value::known(F::from(*input as u64))
-		    )?;
-		}
-		// TODO: Remove this once zkevm keccak_bit bug is fixed
-		let reversed = self.inputs[0].clone().into_iter().rev().collect();
-		let input_rlc = compute_rlc(&reversed, F::from(123456));
-//		println!("input_rlc {:?}", input_rlc);
-		region.assign_advice(
-		    || "input RLC value",
-		    config.keccak_in_rlc,
-		    0,
-		    || Value::known(input_rlc)
-		)?;
-		
-		let outputs = compute_keccak(&self.inputs[0]);
-		for (idx, output) in outputs.iter().enumerate() {
-		    region.assign_advice(
-			|| "output RLC",
-			config.b,
-			idx,
-			|| Value::known(F::from(*output as u64))
-		    )?;
-		}
-		let output_rlc = compute_rlc(&outputs, F::from(123456));
-		println!("outputs    {:?}", outputs);
-		println!("output_rlc {:?}", output_rlc);
-		region.assign_advice(
-		    || "output RLC value",
-		    config.keccak_out_rlc,
-		    0,
-		    || Value::known(output_rlc)
-		)?;
+        let using_simple_floor_planner = true;
+        let mut first_pass = true;
+        layouter.assign_region(
+            || "keccak",
+            |region| {
+                if first_pass && using_simple_floor_planner {
+                    first_pass = false;
+                    return Ok(());
+                }
 
-		region.assign_fixed(
-		    || "selector",
-		    config.q,
-		    0,
-		    || Value::known(F::from(1))
-		)?;
-		region.assign_advice(
-		    || "input len",
-		    config.keccak_in_len,
-		    0,
-		    || Value::known(F::from(3))
-		)?;
-		Ok(())
-	    }
-	)?;
-	
-	Ok(())
+                let mut aux = Context::new(
+                    region,
+                    ContextParams { num_advice: vec![(config.context_id.as_ref().clone(), 1)] },
+                );
+                let ctx = &mut aux;
+
+                let mut lanes = config.assign_row(
+                    ctx,
+                    self.lanes.map(|x| Witness(Value::known(F::from(x)))),
+                    0,
+                )?;
+                let mut row_offset = 1;
+                for round in 0..24 {
+                    lanes = config.keccak_f1600_round(ctx, &lanes, round, row_offset)?;
+                    row_offset += 37;
+                }
+                for lane in &lanes {
+                    println!("{:?}", lane.value().map(|v| fe_to_biguint(v)));
+                }
+
+                Ok(())
+            },
+        )?;
+
+        Ok(())
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use halo2_proofs::{dev::MockProver, halo2curves::bn256::Fr};
+#[test]
+pub fn test_keccak() {
+    let k = 10;
+    let circuit =
+        KeccakCircuit { lanes: (0..25).collect_vec().try_into().unwrap(), _marker: PhantomData };
 
-    #[test]
-    pub fn test_keccak_packed_multi() {
-	let k = 9;
-	let inputs = vec![vec![1, 2, 3]];
-	let mut circuit = TestCircuit {
-	    inputs: &inputs,
-	    size: 2usize.pow(k),
-	    _marker: PhantomData,
-	};
-	
-        let prover = MockProver::<Fr>::run(k, &circuit, vec![]).unwrap();
-        let verify_result = prover.verify();
-        if verify_result.is_ok() != true {
-            if let Some(errors) = verify_result.err() {
-                for error in errors.iter() {
-                    println!("{}", error);
-                }
-            }
-            panic!();
-        }
-    }
+    let prover = MockProver::<Fr>::run(k, &circuit, vec![]).unwrap();
+    prover.assert_satisfied();
+}
+
+#[test]
+fn bench_keccak() -> Result<(), Box<dyn std::error::Error>> {
+    const K: u32 = 10;
+
+    let mut rng = rand::thread_rng();
+    let params_time = start_timer!(|| "Params construction");
+    let path = format!("./params/kzg_bn254_{}.params", K);
+    let fd = std::fs::File::open(path.as_str());
+    let params = if let Ok(mut f) = fd {
+        println!("Found existing params file. Reading params...");
+        ParamsKZG::<Bn256>::read(&mut f).unwrap()
+    } else {
+        println!("Creating new params file...");
+        let mut f = std::fs::File::create(path.as_str())?;
+        let params = ParamsKZG::<Bn256>::setup(K, &mut rng);
+        params.write(&mut f).unwrap();
+        params
+    };
+    end_timer!(params_time);
+
+    let circuit =
+        KeccakCircuit { lanes: (0..25).collect_vec().try_into().unwrap(), _marker: PhantomData };
+
+    let vk_time = start_timer!(|| "Generating vkey");
+    let vk = keygen_vk(&params, &circuit)?;
+    end_timer!(vk_time);
+
+    let pk_time = start_timer!(|| "Generating pkey");
+    let pk = keygen_pk(&params, vk, &circuit)?;
+    end_timer!(pk_time);
+
+    // create a proof
+    let proof_time = start_timer!(|| "Proving time");
+    let mut transcript = Blake2bWrite::<_, _, Challenge255<_>>::init(vec![]);
+    create_proof::<
+        KZGCommitmentScheme<Bn256>,
+        ProverSHPLONK<'_, Bn256>,
+        Challenge255<G1Affine>,
+        _,
+        Blake2bWrite<Vec<u8>, G1Affine, Challenge255<G1Affine>>,
+        _,
+    >(&params, &pk, &[circuit], &[&[]], rng, &mut transcript)?;
+    let proof = transcript.finalize();
+    end_timer!(proof_time);
+
+    let verify_time = start_timer!(|| "Verify time");
+    let verifier_params = params.verifier_params();
+    let strategy = SingleStrategy::new(&params);
+    let mut transcript = Blake2bRead::<_, _, Challenge255<_>>::init(&proof[..]);
+    assert!(verify_proof::<
+        KZGCommitmentScheme<Bn256>,
+        VerifierSHPLONK<'_, Bn256>,
+        Challenge255<G1Affine>,
+        Blake2bRead<&[u8], G1Affine, Challenge255<G1Affine>>,
+        SingleStrategy<'_, Bn256>,
+    >(verifier_params, pk.get_vk(), strategy, &[&[]], &mut transcript)
+    .is_ok());
+    end_timer!(verify_time);
+
+    Ok(())
 }
