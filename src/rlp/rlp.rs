@@ -26,6 +26,14 @@ use crate::rlp::rlc::{
     log2, RlcChip, RlcTrace
 };
 
+pub fn max_rlp_len_len(max_len: usize) -> usize {
+    if max_len > 55 {
+	(log2(max_len) + 7) / 8
+    } else {
+	0
+    }
+}
+
 // returns array whose first end_idx - start_idx cells are
 //     array[start_idx..end_idx]
 // and whose last cells are 0.
@@ -333,13 +341,7 @@ impl<F: Field> RlpArrayChip<F> {
 	rlp_field: &Vec<AssignedValue<F>>,
 	max_field_len: usize,
     ) -> Result<RlpFieldTrace<F>, Error> {
- 	let max_len_len = {
-	    if max_field_len > 55 {
-		(log2(max_field_len) + 7) / 8
-	    } else {
-		0
-	    }
-	};
+ 	let max_len_len = max_rlp_len_len(max_field_len);
 	let max_rlp_field_len = 1 + max_len_len + max_field_len;
 	assert_eq!(rlp_field.len(), max_rlp_field_len);
 	
@@ -440,13 +442,7 @@ impl<F: Field> RlpArrayChip<F> {
 	max_array_len: usize,
 	num_fields: usize,
     ) -> Result<RlpArrayTrace<F>, Error> {
-	let max_len_len = {
-	    if max_array_len > 55 {
-		(log2(max_array_len) + 7) / 8
-	    } else {
-		0
-	    }
-	};
+	let max_len_len = max_rlp_len_len(max_array_len);
 	assert_eq!(rlp_array.len(), max_array_len);
 
 	// Witness consists of
@@ -522,7 +518,7 @@ impl<F: Field> RlpArrayChip<F> {
 		&rlp_array,
 		prefix_idxs[idx].value().copied() + Value::known(F::from(1)),
 		prefix_idxs[idx].value().copied() + Value::known(F::from(1)) + len_len.value().copied(),
-		(log2(max_field_lens[idx]) + 7) / 8,			
+		max_rlp_len_len(max_field_lens[idx]),			
 	    )?;
 	    let field_byte_val = array_to_byte_val(ctx, range, &field_len_cells, &len_len)?;
 	    let field_len = range.gate.select(
@@ -565,7 +561,7 @@ impl<F: Field> RlpArrayChip<F> {
 		range,
 		&field_len_cells_vec[idx],
 		field_len_len_vec[idx].clone(),
-		(log2(max_field_lens[idx]) + 7) / 8,
+		max_rlp_len_len(max_field_lens[idx]),
 	    )?;
 	    let field_cells_rlc = self.rlc.compute_rlc(
 		ctx,
@@ -589,7 +585,7 @@ impl<F: Field> RlpArrayChip<F> {
 	    (len_rlc.rlc_val.clone(), len_rlc.rlc_len.clone())
 	];
 	for idx in 0..num_fields {
-	    max_lens.extend(vec![1, (log2(max_field_lens[idx]) + 7) / 8, max_field_lens[idx]]);
+	    max_lens.extend(vec![1, max_rlp_len_len(max_field_lens[idx]), max_field_lens[idx]]);
 	    rlc_and_len_inputs.extend(vec![
 		(prefix_vec[idx].clone(), one.clone()),
 		(field_len_rlcs[idx].rlc_val.clone(), field_len_rlcs[idx].rlc_len.clone()),
