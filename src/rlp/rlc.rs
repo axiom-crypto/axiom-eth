@@ -125,7 +125,7 @@ impl<F: Field> RlcChip<F> {
             basic_chips.push(basic_chip);
         }
 
-        let [gamma] = [(); 1].map(|_| meta.challenge_usable_after(FirstPhase));
+	let gamma = meta.challenge_usable_after(FirstPhase);
         for idx in 0..num_basic_chips {
             basic_chips[idx].create_gates(meta, gamma);
         }
@@ -632,6 +632,7 @@ impl<F: Field> TestConfig<F> {
         num_fixed: usize,
         lookup_bits: usize,
     ) -> Self {
+	let col = meta.advice_column();
         let rlc = RlcChip::configure(
             meta,
             num_basic_chips,

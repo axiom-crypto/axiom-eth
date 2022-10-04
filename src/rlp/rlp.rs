@@ -673,6 +673,7 @@ impl<F: Field> Circuit<F> for RlpTestCircuit<F> {
     }
 
     fn configure(meta: &mut ConstraintSystem<F>) -> Self::Config {
+	let col = meta.advice_column();
 	RlpArrayChip::configure(
 	    meta,
 	    1,
