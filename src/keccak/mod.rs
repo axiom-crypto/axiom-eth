@@ -1,6 +1,10 @@
-use std::marker::PhantomData;
+use std::{marker::PhantomData, rc::Rc};
 use num_bigint::BigUint;
-use halo2_base::utils::fe_to_biguint;
+use halo2_base::{
+    AssignedValue, Context, ContextParams,
+    QuantumCell::{Constant, Existing, Witness},
+    utils::fe_to_biguint
+};
 use halo2_proofs::{
     circuit::{AssignedCell, Layouter, SimpleFloorPlanner, Value},
     halo2curves::bn256::Fr,
@@ -20,7 +24,7 @@ use zkevm_circuits::{
 };
 
 use crate::rlp::{
-    rlc::compute_rlc,
+    rlc::{compute_rlc, compute_rlc_acc},
 };
 
 pub fn compute_keccak<F: Field>(msg: &Vec<Value<F>>) -> Vec<Value<F>> {    
@@ -39,24 +43,27 @@ pub fn compute_keccak<F: Field>(msg: &Vec<Value<F>>) -> Vec<Value<F>> {
 pub struct KeccakChip<F> {
     keccak_in_rlc: Column<Advice>,
     keccak_out_rlc: Column<Advice>,
-    keccak_in_len: Column<Advice>,
     q_keccak: Column<Fixed>,
     gamma: Challenge,
+    context_id: Rc<String>,
+    challenge_id: Rc<String>,
 
-    keccak_inputs: Vec<Vec<Value<F>>>,
     keccak_config: KeccakPackedConfig<F>,
     _marker: PhantomData<F>
 }
 
 impl<F: Field> KeccakChip<F> {
-    pub fn configure(meta: &mut ConstraintSystem<F>, gamma: Challenge) -> Self {
+    pub fn configure(
+	meta: &mut ConstraintSystem<F>,
+	gamma: Challenge,
+	context_id: String,
+	challenge_id: String,
+    ) -> Self {
 	let keccak_in_rlc = meta.advice_column_in(SecondPhase);
 	let keccak_out_rlc = meta.advice_column_in(SecondPhase);
-	let keccak_in_len = meta.advice_column();
 	let q_keccak = meta.fixed_column();
 
 	meta.enable_equality(keccak_in_rlc);
-	meta.enable_equality(keccak_in_len);
 	meta.enable_equality(keccak_out_rlc);
 
 	let keccak_config = KeccakPackedConfig::configure(meta, gamma);
@@ -64,10 +71,10 @@ impl<F: Field> KeccakChip<F> {
 	let config = Self {
 	    keccak_in_rlc,
 	    keccak_out_rlc,
-	    keccak_in_len,
 	    q_keccak,
 	    gamma,
-	    keccak_inputs: Vec::new(),
+	    context_id: Rc::new(context_id),
+	    challenge_id: Rc::new(challenge_id),
 	    keccak_config,
 	    _marker: PhantomData,
 	};
@@ -86,6 +93,51 @@ impl<F: Field> KeccakChip<F> {
 	});
 	
 	config
+    }
+
+    pub fn compute_keccak(
+	&self,
+	ctx: &mut Context<'_, F>,
+	input_rlc: AssignedValue<F>,
+	inputs: &Vec<Value<F>>,
+    ) -> Result<(AssignedValue<F>, Vec<Value<F>>), Error> {
+	let gamma = ctx.challenge_get(&self.challenge_id);
+	let keccak_val = compute_keccak(inputs);
+	let out_rlc_val = compute_rlc(&keccak_val, *gamma);
+
+	println!("keccak_val {:?}", keccak_val);
+	println!("out_rlc_val {:?}", out_rlc_val);
+
+	let row_idx = ctx.advice_rows_get(&self.context_id)[0];
+	let input_rlc_copy = ctx.assign_cell(
+	    Existing(&input_rlc),
+	    self.keccak_in_rlc,
+	    &self.context_id,
+	    0,
+	    row_idx,
+	    1u8
+	)?;
+	println!("input_rlc_copy {:?}", input_rlc_copy);
+	let output_rlc = ctx.assign_cell(
+	    Witness(out_rlc_val),
+	    self.keccak_out_rlc,
+	    &self.context_id,
+	    0,
+	    row_idx,
+	    1u8
+	)?;
+	println!("output_rlc {:?}", output_rlc);
+	let sel = ctx.region.assign_fixed(
+	    || "",
+	    self.q_keccak,
+	    row_idx,
+	    || Value::known(F::one())
+	)?;
+	println!("sel {:?}", sel);
+	ctx.advice_rows_get_mut(&self.context_id)[0] += 1;
+
+	println!("inputs {:?}", inputs);
+	Ok((output_rlc, keccak_val))
     }
 
     pub fn copy_keccak_pair(
@@ -112,8 +164,6 @@ impl<F: Field> KeccakChip<F> {
 		Ok(())
 	    }
 	)?;
-	self.keccak_inputs.push(inputs.clone());
-	
 	Ok(())
     }
 
@@ -121,10 +171,14 @@ impl<F: Field> KeccakChip<F> {
     pub fn load_and_witness_keccak(
 	&self,
 	layouter: &mut impl Layouter<F>,
+	keccak_inputs: &Vec<Vec<Value<F>>>,
     ) -> Result<(), Error> {
 	self.keccak_config.load(layouter)?;
 	let gamma: Value<F> = layouter.get_challenge(self.gamma);
-	let witness = multi_keccak(&self.keccak_inputs, gamma);
+	println!("keccak_inputs {:?}", keccak_inputs);
+	println!("gamma {:?}", gamma);
+	let witness = multi_keccak(keccak_inputs, gamma);
+	println!("witness {:?}", witness);
 	self.keccak_config.assign(layouter, &witness)?;
 	Ok(())
     }
@@ -137,7 +191,6 @@ pub struct TestConfig<F> {
     q: Column<Fixed>,
     keccak_in_rlc: Column<Advice>,
     keccak_out_rlc: Column<Advice>,
-    keccak_in_len: Column<Advice>,
     chip: KeccakChip<F>,
 }
 
@@ -147,10 +200,20 @@ impl<F: Field> TestConfig<F> {
 	let b = meta.advice_column();
 	let keccak_in_rlc = meta.advice_column_in(SecondPhase);
 	let keccak_out_rlc = meta.advice_column_in(SecondPhase);
-	let keccak_in_len = meta.advice_column();
 	let q = meta.fixed_column();
 	let gamma = meta.challenge_usable_after(FirstPhase);
-	let keccak_config = KeccakChip::configure(meta, gamma);
+
+	meta.enable_equality(a);
+	meta.enable_equality(b);
+	meta.enable_equality(keccak_in_rlc);
+	meta.enable_equality(keccak_out_rlc);
+	
+	let keccak_config = KeccakChip::configure(
+	    meta,
+	    gamma,
+	    "keccak".to_string(),
+	    "gamma".to_string()
+	);
 
 	let config = Self {
 	    a,
@@ -158,7 +221,6 @@ impl<F: Field> TestConfig<F> {
 	    q,
 	    keccak_in_rlc,
 	    keccak_out_rlc,
-	    keccak_in_len,
 	    chip: keccak_config,
 	};
 
@@ -215,8 +277,8 @@ impl<F: Field> Circuit<F> for TestCircuit<F> {
 	mut layouter: impl Layouter<F>,
     ) -> Result<(), Error> {
 	let gamma = layouter.get_challenge(config.chip.gamma);
-	layouter.assign_region(
-	    || "RLC verify",
+	let input_rlc = layouter.assign_region(
+	    || "load inputs",
 	    |mut region| {
 		for (idx, input) in self.inputs[0].iter().enumerate() {
 		    region.assign_advice(
@@ -229,48 +291,56 @@ impl<F: Field> Circuit<F> for TestCircuit<F> {
 		// TODO: Remove this once zkevm keccak_bit bug is fixed
 		let reversed = self.inputs[0].clone().into_iter().rev().collect();
 		let input_rlc = compute_rlc(&reversed, gamma);
-		region.assign_advice(
+		let assigned = region.assign_advice(
 		    || "input RLC value",
 		    config.keccak_in_rlc,
 		    0,
 		    || input_rlc
 		)?;
-		
-		let outputs = compute_keccak(&self.inputs[0]);
-		for (idx, output) in outputs.iter().enumerate() {
-		    region.assign_advice(
-			|| "output RLC",
-			config.b,
-			idx,
-			|| *output
-		    )?;
-		}
-		let output_rlc = compute_rlc(&outputs, gamma);
-		println!("output_rlc {:?}", output_rlc);
-		region.assign_advice(
-		    || "output RLC value",
-		    config.keccak_out_rlc,
+		let input_rlc_val = AssignedValue::new(
+		    assigned.cell(),
+		    input_rlc,
+		    Rc::new("keccak".to_string()),
 		    0,
-		    || output_rlc
-		)?;
+		    0,
+		    1u8,
+		);
+		Ok(input_rlc_val)
+	    }
+	)?;
+	
+        let using_simple_floor_planner = true;
+        let mut first_pass = true;
+        layouter.assign_region(
+            || "load_inputs",
+            |mut region| {
+                if first_pass && using_simple_floor_planner {
+                    first_pass = false;
+                }
+                let mut aux = Context::new(
+                    region,
+                    ContextParams {
+                        num_advice: vec![
+                            ("keccak".to_string(), 1),
+                        ],
+                    },
+                );
+                let ctx = &mut aux;
+                ctx.challenge.insert("gamma".to_string(), gamma);
 
-		region.assign_fixed(
-		    || "selector",
-		    config.q,
-		    0,
-		    || Value::known(F::from(1))
-		)?;
-		region.assign_advice(
-		    || "input len",
-		    config.keccak_in_len,
-		    0,
-		    || Value::known(F::from(3))
-		)?;
+		println!("input_rlc {:?}", input_rlc);
+		println!("inputs {:?}", self.inputs[0].clone());
+
+		let (out_rlc, out_val) = config.chip.compute_keccak(
+		    ctx,
+		    input_rlc.clone(),
+		    &self.inputs[0].clone()
+		)?; 
 		Ok(())
 	    }
 	)?;
-
-	config.chip.load_and_witness_keccak(&mut layouter)?;
+	config.chip.load_and_witness_keccak(&mut layouter,
+					    &vec![self.inputs[0].clone()])?;
 	Ok(())
     }
 }

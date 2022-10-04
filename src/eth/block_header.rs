@@ -37,7 +37,6 @@ use crate::{
     rlp::rlp::{RlpArrayChip, RlpArrayTrace},    
 };
 
-
 // parentHash	256 bits	32	33	264
 // ommersHash	256 bits	32	33	264
 // beneficiary	160 bits	20	21	168
@@ -74,6 +73,8 @@ pub struct EthBlockHeaderTrace<F: Field> {
     nonce: RlcTrace<F>,
     basefee: RlcTrace<F>,
 
+    block_hash: RlcTrace<F>,
+    
     prefix: AssignedValue<F>,
     len_trace: RlcTrace<F>,
     field_prefixs: Vec<AssignedValue<F>>,
@@ -103,7 +104,7 @@ impl<F: Field> EthBlockHeaderChip<F> {
 	    meta,
 	    num_basic_chips,
 	    num_chips_fixed,
-	    challenge_id,
+	    challenge_id.clone(),
 	    context_id,
 	    range_strategy,
 	    num_advice,
@@ -111,7 +112,8 @@ impl<F: Field> EthBlockHeaderChip<F> {
 	    num_fixed,
 	    lookup_bits
 	);
-	let keccak = KeccakChip::configure(meta, rlp.rlc.gamma);
+	let keccak = KeccakChip::configure(meta, rlp.rlc.gamma,
+					   "keccak".to_string(), challenge_id);
 	Self { rlp, keccak }
     }
 
@@ -129,6 +131,24 @@ impl<F: Field> EthBlockHeaderChip<F> {
 	let rlp_array_trace = self.rlp.decompose_rlp_array(
 	    ctx, range, block_header, max_field_lens, max_len, num_fields
 	)?;
+
+	let (hash_rlc, hash) = self.keccak.compute_keccak(
+	    ctx,
+	    rlp_array_trace.array_trace.rlc_val.clone(),
+	    &block_header.iter().map(|b| b.value().copied()).collect()
+	)?;
+	let hash_len = range.gate.assign_region_smart(
+	    ctx,
+	    vec![Constant(F::from(32))],
+	    vec![],
+	    vec![],
+	    vec![]
+	)?;
+	let block_hash = RlcTrace {
+	    rlc_val: hash_rlc,
+	    rlc_len: hash_len[0].clone(),
+	    max_len: 32usize,
+	};
 	
 	let block_header_trace = EthBlockHeaderTrace {
 	    rlp_trace: rlp_array_trace.array_trace.clone(),
@@ -148,6 +168,8 @@ impl<F: Field> EthBlockHeaderChip<F> {
 	    mix_hash: rlp_array_trace.field_traces[13].clone(),
 	    nonce: rlp_array_trace.field_traces[14].clone(),
 	    basefee: rlp_array_trace.field_traces[15].clone(),
+
+	    block_hash: block_hash,
 	    
 	    prefix: rlp_array_trace.prefix.clone(),
 	    len_trace: rlp_array_trace.len_trace.clone(),
@@ -198,7 +220,7 @@ impl<F: Field> Circuit<F> for EthBlockHeaderTestCircuit<F> {
 	
 	let using_simple_floor_planner = true;
 	let mut phase = 0u8;
-	let res = layouter.assign_region(
+	let keccak_inputs = layouter.assign_region(
 	    || "Eth block test",
 	    |mut region| {
 		phase = phase + 1u8;
@@ -208,7 +230,8 @@ impl<F: Field> Circuit<F> for EthBlockHeaderTestCircuit<F> {
 		    region,
 		    ContextParams { num_advice: vec![
 			("default".to_string(), config.rlp.range.gate.num_advice),
-			("rlc".to_string(), config.rlp.rlc.basic_chips.len())			    
+			("rlc".to_string(), config.rlp.rlc.basic_chips.len()),
+			("keccak".to_string(), 1),
 		    ] }
 		);
 		let ctx = &mut aux;
@@ -221,21 +244,23 @@ impl<F: Field> Circuit<F> for EthBlockHeaderTestCircuit<F> {
 		    vec![],
 		    vec![]
 		)?;
-
+		
 		let block_header_trace = config.decompose_eth_block_header(
 		    ctx,
 		    &config.rlp.range,
 		    &inputs_assigned,
 		)?;
+		let keccak_inputs_iter = inputs_assigned.iter().map(|x| x.value().copied());
+		let keccak_inputs: Vec<Vec<Value<F>>> = vec![keccak_inputs_iter.collect()];
 		
 		let stats = config.rlp.range.finalize(ctx)?;
 		println!("stats {:?}", stats);
 		println!("ctx.rows rlc {:?}", ctx.advice_rows.get::<String>(&"rlc".to_string()));
 		println!("ctx.rows default {:?}", ctx.advice_rows.get::<String>(&"default".to_string()));
-		Ok(())
+		Ok(keccak_inputs)
 	    }
 	)?;
-	config.keccak.load_and_witness_keccak(&mut layouter)?;
+	config.keccak.load_and_witness_keccak(&mut layouter, &keccak_inputs)?;
 	Ok(())
     }
 }
