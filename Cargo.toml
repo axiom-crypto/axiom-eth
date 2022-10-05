@@ -30,6 +30,7 @@ rand_core = { version = "0.6", default-features = false }
 rand = "0.8"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+ark-std = { version = "0.3.0", features = ["print-trace"] }
 
 # zkevm
 ecdsa = { git = "https://github.com/privacy-scaling-explorations/halo2wrong", tag = "v2022_09_09", optional = true }
@@ -47,7 +48,6 @@ tabbycat = { version = "0.1", features = ["attributes"], optional = true }
 jemallocator = { version = "0.3.2", optional = true }
 
 [dev-dependencies]
-ark-std = { version = "0.3.0", features = ["print-trace"] }
 num-bigint = { version = "0.4.3" }
 
 [features]

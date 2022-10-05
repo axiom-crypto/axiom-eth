@@ -1,3 +1,4 @@
+use ark_std::{end_timer, start_timer};
 use halo2_base::{
     gates::{
         range::{RangeConfig, RangeStrategy, RangeStrategy::Vertical},
@@ -240,15 +241,22 @@ impl<F: Field> Circuit<F> for EthBlockHeaderTestCircuit<F> {
         config: Self::Config,
         mut layouter: impl Layouter<F>,
     ) -> Result<(), Error> {
+        let witness_time = start_timer!(|| "witness gen");
         config.rlp.range.load_lookup_table(&mut layouter)?;
         let gamma = layouter.get_challenge(config.rlp.rlc.gamma);
         println!("gamma {:?}", gamma);
 
         let using_simple_floor_planner = true;
+        let mut first_pass = true;
         let mut phase = 0u8;
-        let block_header_trace = layouter.assign_region(
+        let mut block_header_trace = None;
+        layouter.assign_region(
             || "Eth block test",
-            |mut region| {
+            |region| {
+                if using_simple_floor_planner && first_pass {
+                    first_pass = false;
+                    return Ok(());
+                }
                 phase = phase + 1u8;
 
                 println!("phase {:?}", phase);
@@ -282,8 +290,11 @@ impl<F: Field> Circuit<F> for EthBlockHeaderTestCircuit<F> {
                     vec![],
                 )?;
 
-                let block_header_trace =
-                    config.decompose_eth_block_header(ctx, &config.rlp.range, &inputs_assigned)?;
+                block_header_trace = Some(
+                    config
+                        .decompose_eth_block_header(ctx, &config.rlp.range, &inputs_assigned)
+                        .unwrap(),
+                );
 
                 let stats = config.rlp.range.finalize(ctx)?;
                 println!("stats {:?}", stats);
@@ -302,9 +313,10 @@ impl<F: Field> Circuit<F> for EthBlockHeaderTestCircuit<F> {
                     "ctx.cells keccak_1 {:?}",
                     ctx.advice_rows["keccak_1"].iter().sum::<usize>()
                 );
-                Ok(block_header_trace)
+                Ok(())
             },
         )?;
+        end_timer!(witness_time);
         Ok(())
     }
 }
@@ -368,7 +380,6 @@ mod tests {
         let pk = keygen_pk(&params, vk, &circuit)?;
         end_timer!(pk_time);
 
-        let proof_timer = start_timer!(|| "proof gen");
         let proof_circuit =
             EthBlockHeaderTestCircuit::<Fr> { inputs: input_bytes, _marker: PhantomData };
         let mut transcript = Blake2bWrite::<_, _, Challenge255<_>>::init(vec![]);

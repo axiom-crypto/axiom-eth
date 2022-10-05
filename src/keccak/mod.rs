@@ -763,7 +763,7 @@ impl<F: FieldExt> KeccakChip<F> {
                 state_bits = Some(self.keccak_f1600(ctx, state_bits.unwrap()).unwrap());
             }
 
-            if (idx >= min_rounds - 1 && idx < max_rounds) {
+            if idx >= min_rounds - 1 && idx < max_rounds {
                 let mut state_bits_out = state_bits.clone().unwrap();
                 let mut output: Vec<AssignedValue<F>> =
                     state_bits_out[..self.output_bit_len].iter().map(|a| a.clone()).collect();
