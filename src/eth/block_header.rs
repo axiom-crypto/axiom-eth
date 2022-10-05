@@ -115,7 +115,7 @@ impl<F: Field> EthBlockHeaderChip<F> {
             num_fixed,
             lookup_bits,
         );
-        let params_str = std::fs::read_to_string("configs/keccak.config").unwrap();
+        let params_str = std::fs::read_to_string("configs/block_header_keccak.config").unwrap();
         let params: crate::keccak::KeccakCircuitParams =
             serde_json::from_str(params_str.as_str()).unwrap();
         println!("params adv {:?} fix {:?}", params.num_advice, params.num_fixed);
@@ -258,7 +258,8 @@ impl<F: Field> Circuit<F> for EthBlockHeaderTestCircuit<F> {
                         num_advice: vec![
                             ("default".to_string(), config.rlp.range.gate.num_advice),
                             ("rlc".to_string(), config.rlp.rlc.basic_chips.len()),
-                            ("keccak".to_string(), config.keccak.values.len()),
+                            ("keccak_0".to_string(), config.keccak.values[0].len()),
+                            ("keccak_1".to_string(), config.keccak.values[1].len()),
                         ],
                     },
                 );
@@ -291,8 +292,16 @@ impl<F: Field> Circuit<F> for EthBlockHeaderTestCircuit<F> {
                     "ctx.rows default {:?}",
                     ctx.advice_rows.get::<String>(&"default".to_string())
                 );
-                println!("ctx.rows keccak {:?}", ctx.advice_rows["keccak"]);
-                println!("ctx.cells keccak {:?}", ctx.advice_rows["keccak"].iter().sum::<usize>());
+                println!("ctx.rows keccak_0 {:?}", ctx.advice_rows["keccak_0"]);
+                println!("ctx.rows keccak_1 {:?}", ctx.advice_rows["keccak_1"]);
+                println!(
+                    "ctx.cells keccak_0 {:?}",
+                    ctx.advice_rows["keccak_0"].iter().sum::<usize>()
+                );
+                println!(
+                    "ctx.cells keccak_1 {:?}",
+                    ctx.advice_rows["keccak_1"].iter().sum::<usize>()
+                );
                 Ok(block_header_trace)
             },
         )?;
@@ -339,7 +348,7 @@ mod tests {
 
     #[test]
     pub fn test_eth_block_header() -> Result<(), Box<dyn std::error::Error>> {
-        let params_str = std::fs::read_to_string("configs/keccak.config").unwrap();
+        let params_str = std::fs::read_to_string("configs/block_header_keccak.config").unwrap();
         let params: crate::keccak::KeccakCircuitParams =
             serde_json::from_str(params_str.as_str()).unwrap();
         let k = params.degree;
