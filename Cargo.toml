@@ -23,7 +23,7 @@ ff = "0.12.0"
 group = "0.11"
 itertools = "0.10"
 lazy_static = "1.4.0"
-halo2_base = { git = "https://github.com/jonathanpwang/halo2-ecc.git", branch = "refactor/10-01" }
+halo2_base = { git = "ssh://github.com/jonathanpwang/halo2-ecc.git", branch = "refactor/10-01" }
 halo2_proofs = { git = "https://github.com/privacy-scaling-explorations/halo2.git", tag = "v2022_09_10" }
 hex = "0.4.3"
 rand_core = { version = "0.6", default-features = false }
