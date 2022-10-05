@@ -146,6 +146,9 @@ pub struct KeccakF1600Chip<F: FieldExt> {
     pub q_absorb: Selector,
     pub q_bits_to_lanes: Selector,
     pub q_lanes_to_bits: Selector,
+    pub q_check_bits: Selector,
+    pub q_c_cp: Selector,
+    pub q_d: Selector,
     // pub q_batch_xor: Selector,
     column_offset: usize,
     _marker: PhantomData<F>,
@@ -166,27 +169,22 @@ impl<F: FieldExt> KeccakF1600Chip<F> {
             .collect_vec()
             .try_into()
             .unwrap();
-        let q_rounds = meta.fixed_column();
-        let q_absorb = meta.selector();
-        let q_bits_to_lanes = meta.selector();
-        let q_lanes_to_bits = meta.selector();
 
         let config = Self {
             values,
             context_id: context_id.clone(),
-            q_rounds,
-            q_absorb,
-            q_bits_to_lanes,
-            q_lanes_to_bits,
+            q_rounds: meta.fixed_column(),
+            q_absorb: meta.selector(),
+            q_bits_to_lanes: meta.selector(),
+            q_lanes_to_bits: meta.selector(),
+            q_check_bits: meta.selector(),
+            q_c_cp: meta.selector(),
+            q_d: meta.selector(),
             column_offset,
             _marker: PhantomData,
         };
         for round in 0..ROUNDS {
-            config.create_keccak_f_round_gate(
-                meta,
-                |meta| meta.query_fixed(config.q_rounds, Rotation(-(round as i32) * 37)),
-                round,
-            );
+            config.create_keccak_f_round_gate(meta, round);
         }
 
         meta.create_gate("absorb 1600 bits and convert to 64bit lanes", |meta| {
@@ -255,32 +253,11 @@ impl<F: FieldExt> KeccakF1600Chip<F> {
                 .collect_vec();
 
             let mut constraints = Vec::new();
-            for x in 0..25 {
-                constraints.extend((0..64).map(|i| q.clone() * is_bit(&bits[x][i])));
-            }
             constraints.extend(
                 (0..25).map(|x| q.clone() * (lanes[x].clone() - bits_to_num(bits[x].clone()))),
             );
             constraints
         });
-        /*
-        meta.create_gate("32 bit batch xor", |meta| {
-            let q = meta.query_selector(config.q_batch_xor);
-            let x = config
-                .values
-                .iter()
-                .map(|&column| meta.query_advice(column, Rotation::cur()))
-                .collect_vec();
-            [q.clone() * (xor(&x[0], &x[1]) - x[2].clone())]
-                .into_iter()
-                .chain(
-                    (1..32).map(|i| {
-                        q.clone() * (xor(&x[2 * i - 1], &x[2 * i]) - x[2 * i + 1].clone())
-                    }),
-                )
-                .collect_vec()
-        });
-        */
 
         config
     }
@@ -304,6 +281,10 @@ impl<F: FieldExt> KeccakF1600Chip<F> {
                     .map(|x| F::from(x))
             })
             .collect_vec();
+        let row_offset = self.get_row_offset(ctx);
+        for i in 0..25 {
+            self.q_check_bits.enable(&mut ctx.region, row_offset + i)?;
+        }
         for chunk in bits.chunks(64) {
             self.assign_row_silent(ctx, chunk.iter().map(|x| x.clone()).collect_vec())?;
         }
@@ -388,36 +369,6 @@ impl<F: FieldExt> KeccakF1600Chip<F> {
         )
     }
 
-    /*
-    pub fn batch_xor(
-        &self,
-        ctx: &mut Context<'_, F>,
-        bits: &[AssignedValue<F>],
-    ) -> Result<AssignedValue<F>, Error> {
-        assert!(bits.len() <= 32);
-        if bits.len() == 1 {
-            return Ok(bits[0].clone());
-        }
-        self.q_batch_xor.enable(&mut ctx.region, self.get_row_offset(ctx))?;
-        let row_cells = Vec::with_capacity(64);
-        row_cells.push(Existing(&bits[0]));
-        let acc = bits[0].value().copied();
-        for bit in bits.iter().skip(1) {
-            row_cells.push(Existing(bit));
-            acc = acc
-                .zip(bit.value())
-                .map(|(x, y)| F::from((x.get_lower_32() ^ y.get_lower_32()) as u64));
-            row_cells.push(Witness(acc));
-        }
-        let output_index = row_cells.len();
-        while row_cells.len() < 64 {
-            row_cells.push(Constant(F::zero()));
-            row_cells.push(Witness(acc));
-        }
-        Ok(self.assign_row(ctx, row_cells).unwrap().last().unwrap().clone())
-    }
-    */
-
     /// returns lanes and updates row_offset to new offset
     pub fn keccak_f1600(
         &self,
@@ -438,26 +389,106 @@ impl<F: FieldExt> KeccakF1600Chip<F> {
         Ok(lanes)
     }
 
-    fn create_keccak_f_round_gate(
-        &self,
-        meta: &mut ConstraintSystem<F>,
-        q_enable: impl FnOnce(&mut VirtualCells<'_, F>) -> Expression<F>,
-        round: usize,
-    ) {
+    fn create_keccak_f_round_gate(&self, meta: &mut ConstraintSystem<F>, round: usize) {
         // We closely follow PolygonZero's paper, except that since our field F is >64 bits, we can use 64-bit packed words instead of 32-bit packed words
         // In these comments, `A` will mean bold A in their paper (so A[x,y] means the 64-bit word in lane (x,y)), `a` will mean non-bold A (so a[x,y,z] means the z-th bit of A[x,y])
 
         // This gate will constrain one round of keccak-f[1600]
         // The gate will access all cells in a 64 column by 37 row matrix:
-        // The inputs A[0..5, 0..5] and outputs A''[0..5, 0..5], A'''[0,0] -- 51 values in total, are all in the first row
-        // Each of c[x,0..64] takes up one row for each x
-        // Each of a'[x,y,0..64] takes up one row
-        // Each of c'[x,0..64] takes up one row
-        // a''[0,0,0..64] takes up one row
+        // 0: The inputs A[0..5, 0..5] and outputs A''[0..5, 0..5], A'''[0,0] -- 51 values in total, are all in the first row
+        // 1: a''[0,0,0..64] takes up one row
+        // 2..27: Each of a'[x,y,0..64] takes up one row
+        // 27..32: Each of c'[x,0..64] takes up one row
+        // 32..37: Each of c[x,0..64] takes up one row for each x
 
-        // For fast proving speed, it is better to have all gates use the same set of Rotations
-        // thus we will put all constraints into a single gate which accesses Rotation(0..37)
+        meta.create_gate("check all 64 cells in row are bits", |meta| {
+            let q = meta.query_selector(self.q_check_bits);
+            self.values
+                .iter()
+                .map(|column| {
+                    let a = meta.query_advice(*column, Rotation::cur());
+                    q.clone() * is_bit(&a)
+                })
+                .collect_vec()
+        });
+
+        meta.create_gate("check d", |meta| {
+            let q = meta.query_selector(self.q_d);
+            let mut constraints: Vec<Expression<F>> = Vec::new();
+            let ap: Vec<Vec<Vec<Expression<F>>>> = (0..5)
+                .map(|x| {
+                    (0..5)
+                        .map(|y| {
+                            self.values
+                                .iter()
+                                .map(|column| {
+                                    meta.query_advice(column.clone(), Rotation((x + 5 * y) as i32))
+                                })
+                                .collect_vec()
+                        })
+                        .collect_vec()
+                })
+                .collect_vec();
+
+            let cp: Vec<Vec<Expression<F>>> = (0..5)
+                .map(|x| {
+                    self.values
+                        .iter()
+                        .map(|column| meta.query_advice(column.clone(), Rotation((25 + x) as i32)))
+                        .collect_vec()
+                })
+                .collect_vec();
+            for x in 0..5 {
+                for z in 0..64 {
+                    let d: Expression<F> = (0..5)
+                        .map(|i| ap[x][i][z].clone())
+                        .fold(Expression::Constant(F::from(0)), |acc, a| acc + a)
+                        - cp[x][z].clone();
+                    constraints.push(
+                        d.clone()
+                            * (d.clone() - Expression::Constant(F::from(2)))
+                            * (d - Expression::Constant(F::from(4))),
+                    );
+                }
+            }
+            constraints.into_iter().map(|expression| q.clone() * expression).collect_vec()
+        });
+
+        meta.create_gate("check relation between c and c'", |meta| {
+            // let q = meta.query_fixed(self.q_rounds, Rotation(-(round as i32) * 37 - 27));
+            let q = meta.query_selector(self.q_c_cp);
+            let mut constraints: Vec<Expression<F>> = Vec::new();
+
+            let c: Vec<Vec<Expression<F>>> = (0..5)
+                .map(|x| {
+                    self.values
+                        .iter()
+                        .map(|column| meta.query_advice(column.clone(), Rotation((5 + x) as i32)))
+                        .collect_vec()
+                })
+                .collect_vec();
+
+            let cp: Vec<Vec<Expression<F>>> = (0..5)
+                .map(|x| {
+                    self.values
+                        .iter()
+                        .map(|column| meta.query_advice(column.clone(), Rotation(x as i32)))
+                        .collect_vec()
+                })
+                .collect_vec();
+            for x in 0..5 {
+                for z in 0..64 {
+                    constraints.push(
+                        xor3(&c[x][z], &c[(x + 4) % 5][z], &c[(x + 1) % 5][(z + 63) % 64])
+                            - cp[x][z].clone(),
+                    );
+                }
+            }
+            constraints.into_iter().map(|expression| q.clone() * expression).collect_vec()
+        });
+
         meta.create_gate("one round of keccak-f[1600]", |meta| {
+            let q = meta.query_fixed(self.q_rounds, Rotation(-(round as i32) * 37));
             let A: Vec<Vec<Expression<F>>> = (0..5)
                 .map(|x| {
                     (0..5)
@@ -476,13 +507,10 @@ impl<F: FieldExt> KeccakF1600Chip<F> {
 
             let Appp_00 = meta.query_advice(self.values[50], Rotation::cur());
 
-            let c: Vec<Vec<Expression<F>>> = (0..5)
-                .map(|x| {
-                    self.values
-                        .iter()
-                        .map(|column| meta.query_advice(column.clone(), Rotation((1 + x) as i32)))
-                        .collect_vec()
-                })
+            let app_00: Vec<Expression<F>> = self
+                .values
+                .iter()
+                .map(|column| meta.query_advice(column.clone(), Rotation(1)))
                 .collect_vec();
 
             let ap: Vec<Vec<Vec<Expression<F>>>> = (0..5)
@@ -494,7 +522,7 @@ impl<F: FieldExt> KeccakF1600Chip<F> {
                                 .map(|column| {
                                     meta.query_advice(
                                         column.clone(),
-                                        Rotation((6 + x + 5 * y) as i32),
+                                        Rotation((2 + x + 5 * y) as i32),
                                     )
                                 })
                                 .collect_vec()
@@ -503,56 +531,32 @@ impl<F: FieldExt> KeccakF1600Chip<F> {
                 })
                 .collect_vec();
 
-            let cp: Vec<Vec<Expression<F>>> = (0..5)
+            let c: Vec<Vec<Expression<F>>> = (0..5)
                 .map(|x| {
                     self.values
                         .iter()
-                        .map(|column| meta.query_advice(column.clone(), Rotation((31 + x) as i32)))
+                        .map(|column| meta.query_advice(column.clone(), Rotation((32 + x) as i32)))
                         .collect_vec()
                 })
                 .collect_vec();
 
-            let app_00: Vec<Expression<F>> = self
-                .values
-                .iter()
-                .map(|column| meta.query_advice(column.clone(), Rotation(36)))
+            let cp: Vec<Vec<Expression<F>>> = (0..5)
+                .map(|x| {
+                    self.values
+                        .iter()
+                        .map(|column| meta.query_advice(column.clone(), Rotation((27 + x) as i32)))
+                        .collect_vec()
+                })
                 .collect_vec();
 
             let mut constraints: Vec<Expression<F>> = Vec::new();
-            // check all entries of c are bits
-            // check relation between c and c'
-            for x in 0..5 {
-                for z in 0..64 {
-                    constraints.push(is_bit(&c[x][z]));
-                    constraints.push(
-                        xor3(&c[x][z], &c[(x + 4) % 5][z], &c[(x + 1) % 5][(z + 63) % 64])
-                            - cp[x][z].clone(),
-                    );
-                }
-            }
-            // check a'[x,y,z] are all bits
+
             // a[x,y,z] == a'[x,y,z] xor c[x,z] xor c'[x,z]
             for x in 0..5 {
                 for y in 0..5 {
-                    for z in 0..64 {
-                        constraints.push(is_bit(&ap[x][y][z]));
-                    }
                     constraints.push(
                         A[x][y].clone()
                             - bits_to_num((0..64).map(|z| xor3(&ap[x][y][z], &c[x][z], &cp[x][z]))),
-                    );
-                }
-            }
-            for x in 0..5 {
-                for z in 0..64 {
-                    let d: Expression<F> = (0..5)
-                        .map(|i| ap[x][i][z].clone())
-                        .fold(Expression::Constant(F::from(0)), |acc, a| acc + a)
-                        - cp[x][z].clone();
-                    constraints.push(
-                        d.clone()
-                            * (d.clone() - Expression::Constant(F::from(2)))
-                            * (d - Expression::Constant(F::from(4))),
                     );
                 }
             }
@@ -586,8 +590,7 @@ impl<F: FieldExt> KeccakF1600Chip<F> {
                 }
             }
 
-            // check entries of a''[0][0][0..64] are bits and it actually is the bit representation of A''[0][0]
-            constraints.extend(app_00.iter().map(|bit| is_bit(bit)));
+            // check a''[0][0][0..64] is actually the bit representation of A''[0][0]
             constraints.push(bits_to_num(app_00.clone()) - App[0][0].clone());
 
             // verifying computation of A'''
@@ -596,9 +599,6 @@ impl<F: FieldExt> KeccakF1600Chip<F> {
                     xor(&app_00[i], &Expression::Constant(F::from(((RC[round] >> i) & 1) as u64)))
                 })) - Appp_00.clone(),
             );
-
-            dbg!(constraints.len());
-            let q = q_enable(meta);
             constraints.into_iter().map(|expression| q.clone() * expression).collect_vec()
         })
     }
@@ -682,6 +682,15 @@ impl<F: FieldExt> KeccakF1600Chip<F> {
             *self.get_row_offset_mut(ctx) -= 1;
         }
         let row_offset = self.get_row_offset(ctx);
+        // check entries of a''[0][0][0..64] are bits
+        // check a'[x,y,z] are all bits
+        // check all entries of c are bits
+        for i in (1..27).chain(32..37) {
+            self.q_check_bits.enable(&mut ctx.region, row_offset + i)?;
+        }
+        self.q_c_cp.enable(&mut ctx.region, row_offset + 27)?;
+        self.q_d.enable(&mut ctx.region, row_offset + 2)?;
+
         let mut output = Vec::with_capacity(25);
         let phase = ctx.current_phase();
         output.push(ctx.assign_cell(
@@ -722,9 +731,7 @@ impl<F: FieldExt> KeccakF1600Chip<F> {
             }
         }
         *self.get_row_offset_mut(ctx) += 1;
-        for c_row in c.into_iter() {
-            self.assign_row_silent(ctx, c_row.into_iter().map(|v| Witness(v)))?;
-        }
+        self.assign_row_silent(ctx, app_00.into_iter().map(|v| Witness(v)))?;
         for y in 0..5 {
             for x in 0..5 {
                 self.assign_row_silent(ctx, ap[x][y].into_iter().map(|v| Witness(v)))?;
@@ -733,7 +740,9 @@ impl<F: FieldExt> KeccakF1600Chip<F> {
         for c_row in cp.into_iter() {
             self.assign_row_silent(ctx, c_row.into_iter().map(|v| Witness(v)))?;
         }
-        self.assign_row_silent(ctx, app_00.into_iter().map(|v| Witness(v)))?;
+        for c_row in c.into_iter() {
+            self.assign_row_silent(ctx, c_row.into_iter().map(|v| Witness(v)))?;
+        }
 
         Ok(output)
     }
