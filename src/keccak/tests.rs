@@ -13,21 +13,15 @@ use halo2_proofs::{
     poly::commitment::{Params, ParamsProver},
     poly::kzg::{
         commitment::{KZGCommitmentScheme, ParamsKZG},
-        multiopen::{ProverSHPLONK, VerifierSHPLONK},
+        multiopen::{ProverGWC, ProverSHPLONK, VerifierSHPLONK},
         strategy::SingleStrategy,
     },
     transcript::{Blake2bRead, Blake2bWrite, Challenge255},
     transcript::{TranscriptReadBuffer, TranscriptWriterBuffer},
 };
 use num_bigint::BigUint;
+use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
-
-#[derive(Serialize, Deserialize)]
-struct KeccakCircuitParams {
-    degree: u32,
-    num_advice: usize,
-    num_fixed: usize,
-}
 
 pub struct KeccakCircuit {
     input: Vec<u64>,
@@ -55,8 +49,8 @@ impl<F: FieldExt> Circuit<F> for KeccakCircuit {
             "keccak".to_string(),
             1088,
             256,
-            params.num_advice,
-            params.num_advice,
+            &params.num_advice,
+            params.num_fixed,
         );
         println!("blinding factors: {}", meta.blinding_factors());
         config
@@ -67,6 +61,7 @@ impl<F: FieldExt> Circuit<F> for KeccakCircuit {
         config: Self::Config,
         mut layouter: impl Layouter<F>,
     ) -> Result<(), Error> {
+        let witness_time = start_timer!(|| "time witness gen");
         let using_simple_floor_planner = true;
         let mut first_pass = true;
         layouter.assign_region(
@@ -80,7 +75,11 @@ impl<F: FieldExt> Circuit<F> for KeccakCircuit {
                 let mut aux = Context::new(
                     region,
                     ContextParams {
-                        num_advice: vec![(config.context_id.as_ref().clone(), config.values.len())],
+                        num_advice: (0..2)
+                            .map(|i| {
+                                (format!("{}_{}", config.context_id, i), config.values[i].len())
+                            })
+                            .collect_vec(),
                     },
                 );
                 let ctx = &mut aux;
@@ -88,6 +87,7 @@ impl<F: FieldExt> Circuit<F> for KeccakCircuit {
                 let input_bits = config
                     .assign_region(
                         ctx,
+                        0,
                         self.input
                             .iter()
                             .map(|&b| {
@@ -95,7 +95,6 @@ impl<F: FieldExt> Circuit<F> for KeccakCircuit {
                                 Witness(Value::known(F::from(b)))
                             })
                             .collect_vec(),
-                        vec![],
                         vec![],
                         None,
                     )
@@ -114,22 +113,22 @@ impl<F: FieldExt> Circuit<F> for KeccakCircuit {
                 }
                 let (_fixed_rows, total_fixed) =
                     ctx.assign_and_constrain_constants(&config.constants)?;
-                let advice_rows = ctx.advice_rows["keccak"].iter();
                 println!(
-                    "maximum rows used by an advice column: {}",
-                    advice_rows.clone().max().or(Some(&0)).unwrap(),
+                    "keccak_0 cells used: {}",
+                    ctx.advice_rows["keccak_0"].iter().sum::<usize>()
                 );
                 println!(
-                    "minimum rows used by an advice column: {}",
-                    advice_rows.clone().min().or(Some(&usize::MAX)).unwrap(),
+                    "keccak_1 cells used: {}",
+                    ctx.advice_rows["keccak_1"].iter().sum::<usize>()
                 );
-                let total_cells = advice_rows.sum::<usize>();
-                println!("total cells used: {}", total_cells);
                 println!("total fixed cells: {}", total_fixed);
+                #[cfg(feature = "display")]
+                println!("{:#?}", ctx.op_count);
 
                 Ok(())
             },
         )?;
+        end_timer!(witness_time);
 
         Ok(())
     }
@@ -178,7 +177,7 @@ fn bench_keccak() -> Result<(), Box<dyn std::error::Error>> {
     end_timer!(pk_time);
 
     // create a proof
-    let proof_time = start_timer!(|| "Proving time");
+    let proof_time = start_timer!(|| "SPLONK");
     let mut transcript = Blake2bWrite::<_, _, Challenge255<_>>::init(vec![]);
     create_proof::<
         KZGCommitmentScheme<Bn256>,
@@ -204,6 +203,20 @@ fn bench_keccak() -> Result<(), Box<dyn std::error::Error>> {
     >(verifier_params, pk.get_vk(), strategy, &[&[]], &mut transcript)
     .is_ok());
     end_timer!(verify_time);
+
+    let circuit = KeccakCircuit::default();
+    let proof_time = start_timer!(|| "GWC");
+    let mut transcript = Blake2bWrite::<_, _, Challenge255<_>>::init(vec![]);
+    create_proof::<
+        KZGCommitmentScheme<Bn256>,
+        ProverGWC<'_, Bn256>,
+        Challenge255<G1Affine>,
+        _,
+        Blake2bWrite<Vec<u8>, G1Affine, Challenge255<G1Affine>>,
+        _,
+    >(&params, &pk, &[circuit], &[&[]], OsRng::default(), &mut transcript)?;
+    let proof = transcript.finalize();
+    end_timer!(proof_time);
 
     Ok(())
 }

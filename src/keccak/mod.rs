@@ -41,7 +41,7 @@ lazy_static! {
 
 #[derive(Clone, Debug)]
 pub struct KeccakChip<F: FieldExt> {
-    pub values: Vec<Column<Advice>>,
+    pub values: Vec<Vec<Column<Advice>>>,
     pub q_xor: Vec<Selector>,
     pub q_xorandn: Vec<Selector>,
     pub constants: Vec<Column<Fixed>>,
@@ -59,19 +59,24 @@ impl<F: FieldExt> KeccakChip<F> {
         rate: usize,
         // delimited_suffix: u8,
         output_bit_len: usize,
-        num_advice: usize,
+        num_advice: &[usize],
         num_fixed: usize,
     ) -> Self {
         assert!(rate % 8 == 0);
-        let values = (0..num_advice)
-            .map(|_| {
-                let a = meta.advice_column();
-                meta.enable_equality(a);
-                a
-            })
-            .collect_vec();
-        let q_xor = (0..num_advice).map(|_| meta.selector()).collect_vec();
-        let q_xorandn = (0..num_advice).map(|_| meta.selector()).collect_vec();
+        let mut values = Vec::new();
+        for &n in num_advice {
+            values.push(
+                (0..n)
+                    .map(|_| {
+                        let a = meta.advice_column();
+                        meta.enable_equality(a);
+                        a
+                    })
+                    .collect_vec(),
+            );
+        }
+        let q_xor = (0..num_advice[0]).map(|_| meta.selector()).collect_vec();
+        let q_xorandn = (0..num_advice[1]).map(|_| meta.selector()).collect_vec();
         let constants = (0..num_fixed)
             .map(|_| {
                 let f = meta.fixed_column();
@@ -81,20 +86,22 @@ impl<F: FieldExt> KeccakChip<F> {
             .collect_vec();
         let context_id = Rc::new(context_id);
 
-        for i in 0..num_advice {
+        for i in 0..num_advice[0] {
             meta.create_gate("xor gate", |meta| {
                 let q = meta.query_selector(q_xor[i]);
-                let a = meta.query_advice(values[i], Rotation::cur());
-                let b = meta.query_advice(values[i], Rotation::next());
-                let c = meta.query_advice(values[i], Rotation(2));
+                let a = meta.query_advice(values[0][i], Rotation::cur());
+                let b = meta.query_advice(values[0][i], Rotation::next());
+                let c = meta.query_advice(values[0][i], Rotation(2));
                 vec![q * (a.clone() + b.clone() - Expression::Constant(F::from(2)) * a * b - c)]
             });
+        }
+        for i in 0..num_advice[1] {
             meta.create_gate("a ^ (!b & c) gate", |meta| {
                 let q = meta.query_selector(q_xorandn[i]);
-                let x = meta.query_advice(values[i], Rotation::cur());
-                let y = meta.query_advice(values[i], Rotation::next());
-                let z = meta.query_advice(values[i], Rotation(2));
-                let d = meta.query_advice(values[i], Rotation(3));
+                let x = meta.query_advice(values[1][i], Rotation::cur());
+                let y = meta.query_advice(values[1][i], Rotation::next());
+                let z = meta.query_advice(values[1][i], Rotation(2));
+                let d = meta.query_advice(values[1][i], Rotation(3));
 
                 // x + z − yz − 2xz + 2xyz
                 vec![
@@ -255,14 +262,15 @@ impl<F: FieldExt> KeccakChip<F> {
     }
     
     fn load_const(&self, ctx: &mut Context<'_, F>, c: F) -> AssignedValue<F> {
-        self.assign_region(ctx, vec![Constant(c)], vec![], vec![], None).unwrap()[0].clone()
+        self.assign_region(ctx, 0, vec![Constant(c)], vec![], None).unwrap()[0].clone()
     }
 
     /// returns leftmost `i` where `advice_rows[context_id][i]` is minimum amongst all `i` where `column[i]` is in phase `phase`
-    fn min_gate_index_in(&self, ctx: &Context<'_, F>, phase: u8) -> usize {
-        let advice_rows = ctx.advice_rows_get(&self.context_id);
+    fn min_gate_index_in(&self, ctx: &Context<'_, F>, advice_type: usize, phase: u8) -> usize {
+        let context_id = format!("{}_{}", self.context_id, advice_type);
+        let advice_rows = ctx.advice_rows_get(&context_id);
 
-        self.values
+        self.values[advice_type]
             .iter()
             .enumerate()
             .filter(|(_, column)| column.column_type().phase() == phase)
@@ -274,16 +282,16 @@ impl<F: FieldExt> KeccakChip<F> {
     pub fn assign_region(
         &self,
         ctx: &mut Context<'_, F>,
+        advice_type: usize,
         inputs: Vec<QuantumCell<F>>,
-        xor_offsets: Vec<isize>,
-        xorandn_offsets: Vec<isize>,
+        gate_offsets: Vec<isize>,
         gate_index: Option<usize>,
     ) -> Result<Vec<AssignedValue<F>>, Error> {
         self.assign_region_in(
             ctx,
+            advice_type,
             inputs,
-            xor_offsets,
-            xorandn_offsets,
+            gate_offsets,
             gate_index,
             ctx.current_phase(),
         )
@@ -293,26 +301,27 @@ impl<F: FieldExt> KeccakChip<F> {
     pub fn assign_region_in(
         &self,
         ctx: &mut Context<'_, F>,
+        advice_type: usize,
         inputs: Vec<QuantumCell<F>>,
-        xor_offsets: Vec<isize>,
-        xorandn_offsets: Vec<isize>,
+        gate_offsets: Vec<isize>,
         gate_index: Option<usize>,
         phase: u8,
     ) -> Result<Vec<AssignedValue<F>>, Error> {
         let gate_index = if let Some(id) = gate_index {
-            assert_eq!(phase, self.values[id].column_type().phase());
+            assert_eq!(phase, self.values[advice_type][id].column_type().phase());
             id
         } else {
-            self.min_gate_index_in(ctx, phase)
+            self.min_gate_index_in(ctx, advice_type, phase)
         };
-        let row_offset = ctx.advice_rows_get(&self.context_id)[gate_index];
+        let context_id = format!("{}_{}", self.context_id, advice_type);
+        let row_offset = ctx.advice_rows_get(&context_id)[gate_index];
         let input_len = inputs.len();
 
         let mut assignments = Vec::with_capacity(inputs.len());
         for (i, input) in inputs.into_iter().enumerate() {
             let assigned = ctx.assign_cell(
                 input,
-                self.values[gate_index],
+                self.values[advice_type][gate_index],
                 &self.context_id,
                 gate_index,
                 row_offset + i,
@@ -320,14 +329,16 @@ impl<F: FieldExt> KeccakChip<F> {
             )?;
             assignments.push(assigned);
         }
-        for &i in &xor_offsets {
-            self.q_xor[gate_index].enable(&mut ctx.region, ((row_offset as isize) + i) as usize)?;
+        for &i in &gate_offsets {
+            match advice_type {
+                0 => self.q_xor[gate_index]
+                    .enable(&mut ctx.region, ((row_offset as isize) + i) as usize)?,
+                1 => self.q_xorandn[gate_index]
+                    .enable(&mut ctx.region, ((row_offset as isize) + i) as usize)?,
+                _ => unreachable!(),
+            };
         }
-        for &i in &xorandn_offsets {
-            self.q_xorandn[gate_index]
-                .enable(&mut ctx.region, ((row_offset as isize) + i) as usize)?;
-        }
-        ctx.advice_rows_get_mut(&self.context_id)[gate_index] += input_len;
+        ctx.advice_rows_get_mut(&context_id)[gate_index] += input_len;
 
         Ok(assignments)
     }
@@ -346,6 +357,11 @@ impl<F: FieldExt> KeccakChip<F> {
         inputs: &[QuantumCell<F>],
     ) -> Result<AssignedValue<F>, Error> {
         assert!(inputs.len() > 1);
+        #[cfg(feature = "display")]
+        {
+            let count = ctx.op_count.entry("xor".to_string()).or_insert(0);
+            *count += 1;
+        }
         let mut acc = inputs[0]
             .value()
             .zip(inputs[1].value())
@@ -353,9 +369,9 @@ impl<F: FieldExt> KeccakChip<F> {
         let mut output = self
             .assign_region(
                 ctx,
+                0,
                 vec![inputs[0].clone(), inputs[1].clone(), Witness(acc.map(F::from))],
                 vec![0],
-                vec![],
                 None,
             )
             .unwrap()[2]
@@ -366,9 +382,9 @@ impl<F: FieldExt> KeccakChip<F> {
             output = self
                 .assign_region(
                     ctx,
+                    0,
                     vec![inputs[idx].clone(), Witness(acc.map(F::from))],
                     vec![-1],
-                    vec![],
                     Some(gate_index),
                 )
                 .unwrap()[1]
@@ -384,14 +400,19 @@ impl<F: FieldExt> KeccakChip<F> {
         y: &AssignedValue<F>,
         z: &AssignedValue<F>,
     ) -> Result<AssignedValue<F>, Error> {
+        #[cfg(feature = "display")]
+        {
+            let count = ctx.op_count.entry("xor_and_n".to_string()).or_insert(0);
+            *count += 1;
+        }
         let v = x.value().zip(y.value()).zip(z.value()).map(|((x, y), z)| {
             F::from((x.get_lower_32() ^ (!y.get_lower_32() & z.get_lower_32())) as u64)
         });
         Ok(self
             .assign_region(
                 ctx,
+                1,
                 vec![Existing(x), Existing(y), Existing(z), Witness(v)],
-                vec![],
                 vec![0],
                 None,
             )
@@ -561,7 +582,7 @@ impl<F: FieldExt> KeccakChip<F> {
 #[derive(Serialize, Deserialize)]
 pub struct KeccakCircuitParams {
     pub degree: u32,
-    pub num_advice: usize,
+    pub num_advice: [usize; 2],
     pub num_fixed: usize,
 }
 

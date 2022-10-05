@@ -123,8 +123,8 @@ impl<F: Field> EthBlockHeaderChip<F> {
             "keccak".to_string(),
             1088,
             256,
-            params.num_advice,
-            params.num_advice,
+            &params.num_advice,
+            params.num_fixed,
         );
         Self { rlp, keccak }
     }
