@@ -1,5 +1,3 @@
-#![allow(unused_imports, unused_variables)]
-
 // different memory allocator options:
 // empirically jemalloc still seems to give best speeds for witness generation
 //#[cfg(not(target_env = "msvc"))]

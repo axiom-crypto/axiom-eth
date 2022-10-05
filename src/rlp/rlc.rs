@@ -74,8 +74,7 @@ impl<F: Field> BasicRlcChip<F> {
 	meta.enable_equality(rlc);
 	
 	let config = Self { val, rlc, q_rlc, q_mul, _marker: PhantomData };
-
-	config
+        config
     }
 
     pub fn create_gates(&self, meta: &mut ConstraintSystem<F>, gamma: Challenge) {
@@ -738,7 +737,6 @@ impl<F: Field> Circuit<F> for TestCircuit<F> {
             rlc_trace.rlc_val.value().zip(real_rlc).assert_if_known(|(a, b)| *a == b);
 	    println!("test passed");
 	}
-
         Ok(())
     }
 }
@@ -777,6 +775,7 @@ mod tests {
 	    max_len,
 	    _marker: PhantomData
 	};
+	
         let prover = MockProver::run(k, &circuit, vec![]).unwrap();
         assert_eq!(prover.verify(), Ok(()));
     }
