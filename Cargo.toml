@@ -34,7 +34,7 @@ serde_json = "1.0"
 # zkevm
 ecdsa = { git = "https://github.com/privacy-scaling-explorations/halo2wrong", tag = "v2022_09_09", optional = true }
 ecc =       { git = "https://github.com/privacy-scaling-explorations/halo2wrong", tag = "v2022_09_09", optional = true }
-eth-types = { git = "https://github.com/yi-sun/zkevm-circuits.git", branch = "expose-keccak-new", optional = true  }
+eth-types = { git = "https://github.com/yi-sun/zkevm-circuits.git", branch = "expose-keccak-new" }
 keccak256 = { git = "https://github.com/yi-sun/zkevm-circuits.git", branch = "expose-keccak-new", optional = true }
 maingate =  { git = "https://github.com/privacy-scaling-explorations/halo2wrong", tag = "v2022_09_09", optional = true }
 integer =   { git = "https://github.com/privacy-scaling-explorations/halo2wrong", tag = "v2022_09_09", optional = true }
@@ -52,7 +52,7 @@ num-bigint = { version = "0.4.3" }
 
 [features]
 default = []
-zkevm = ["dep:ecdsa", "dep:ecc", "dep:eth-types", "dep:keccak256", "dep:maingate", "dep:integer", "dep:zkevm-circuits"]
+zkevm = ["dep:ecdsa", "dep:ecc", "dep:keccak256", "dep:maingate", "dep:integer", "dep:zkevm-circuits"]
 dev-graph = ["halo2_proofs/dev-graph", "plotters"]
 
 [profile.release]

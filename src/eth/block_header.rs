@@ -137,28 +137,34 @@ impl<F: Field> EthBlockHeaderChip<F> {
             num_fields,
         )?;
 
-	let mut block_bits = Vec::with_capacity(8 * block_header.len());
-	for byte in block_header.iter() {
-	    let mut bits = range.num_to_bits(ctx, byte, 8)?;
-	    block_bits.append(&mut bits);
-	}
-	println!("block_bits {:?}", block_bits.len());
-	let hash = self.keccak.keccak(ctx, block_bits.iter().map(|a| Existing(a)).collect())?;
-	let mut hash_bytes = Vec::with_capacity(32);
-	for idx in 0..32 {
-	    let (_, _, byte) = range.gate.inner_product(
-		ctx,
-		&hash[8 * idx..(8 * (idx + 1))].iter().map(|a| Existing(a)).collect(),
-		&vec![128u64, 64u64, 32u64, 16u64, 8u64, 4u64, 2u64, 1u64].iter().map(|a| Constant(F::from(*a))).collect()
-	    )?;
-	    hash_bytes.push(byte);
-	}
-	let hash_len = range.gate.assign_region_smart(
-	    ctx, vec![Constant(F::from(32))], vec![], vec![], vec![]
-	)?;
-	let block_hash = self.rlp.rlc.compute_rlc(
-	    ctx, range, &hash_bytes, hash_len[0].clone(), 32
-	)?;
+        let mut block_bits = Vec::with_capacity(8 * block_header.len());
+        for byte in block_header.iter() {
+            let mut bits = range.num_to_bits(ctx, byte, 8)?;
+            block_bits.append(&mut bits);
+        }
+        println!("block_bits {:?}", block_bits.len());
+        let hash = self.keccak.keccak(ctx, block_bits.iter().map(|a| Existing(a)).collect())?;
+        let mut hash_bytes = Vec::with_capacity(32);
+        for idx in 0..32 {
+            let (_, _, byte) = range.gate.inner_product(
+                ctx,
+                &hash[8 * idx..(8 * (idx + 1))].iter().map(|a| Existing(a)).collect(),
+                &vec![128u64, 64u64, 32u64, 16u64, 8u64, 4u64, 2u64, 1u64]
+                    .iter()
+                    .map(|a| Constant(F::from(*a)))
+                    .collect(),
+            )?;
+            hash_bytes.push(byte);
+        }
+        let hash_len = range.gate.assign_region_smart(
+            ctx,
+            vec![Constant(F::from(32))],
+            vec![],
+            vec![],
+            vec![],
+        )?;
+        let block_hash =
+            self.rlp.rlc.compute_rlc(ctx, range, &hash_bytes, hash_len[0].clone(), 32)?;
 
         let block_header_trace = EthBlockHeaderTrace {
             rlp_trace: rlp_array_trace.array_trace.clone(),
@@ -308,7 +314,7 @@ mod tests {
 
     #[test]
     pub fn test_mock_eth_block_header() {
-        let k = 13;
+        let k = 15;
         let input_hex = "f90201a0d7519abd494a823b2c9c28908eaf250fe4a6287d747f1cc53a5a193b6533a549a01dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347944675c7e5baafbffbca748158becba61ef3b0a263a025000d51f040ee5c473fed74eda9ace87d55a35187b11bcde6f5176025c395bfa0a5800a6de6d28d7425ff72714af2af769b9f8f9e1baf56fb42f793fbb40fde07a056e1062a3dc63791e8a8496837606b14062da70ee69178cea97d6eeb5047550cb9010000236420014dc00423903000840002280080282100004704018340c0241c20011211400426000f900001d8088000011006020002ce98bc00c0000020c9a02040000688040200348c3a0082b81402002814922008085d008008200802802c4000130000101703124801400400018008a6108002020420144011200070020bc0202681810804221304004800088600300000040463614a000e200201c00611c0008e800b014081608010a0218a0b410010082000428209080200f50260a00840006700100f40a000000400000448301008c4a00341040e343500800d06250020010215200c008018002c88350404000bc5000a8000210c00724a0d0a4010210a448083eee2468401c9c3808343107884633899e780a07980d8d1f15474c9185e4d1cef5f207167735009daad2eb6af6da37ffba213c28800000000000000008501e08469e600000000000000000000000000000000000000000000000000000000000000000000000000000000";
         let input_bytes_pre: Vec<u8> = Vec::from_hex(input_hex).unwrap();
         let input_bytes: Vec<Option<u8>> = input_bytes_pre.iter().map(|x| Some(*x)).collect();

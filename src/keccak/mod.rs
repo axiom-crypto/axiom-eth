@@ -96,6 +96,14 @@ impl<F: FieldExt> KeccakChip<F> {
         }
         input_bits.push(Constant(F::one()));
 
+        self.keccak_fully_padded(ctx, input_bits)
+    }
+
+    pub fn keccak_fully_padded(
+        &self,
+        ctx: &mut Context<'_, F>,
+        input_bits: Vec<QuantumCell<F>>,
+    ) -> Result<Vec<AssignedValue<F>>, Error> {
         // === Absorb all the inputs blocks ===
         let mut state_bits: Option<Vec<AssignedValue<F>>> = None;
         let mut chip_id = ctx.min_gate_index(&self.context_id);
@@ -327,10 +335,9 @@ impl<F: FieldExt> KeccakF1600Chip<F> {
         assert_eq!(state_bits.len(), 1600);
         assert!(input_bits.len() <= 1600);
 
-        let input = input_bits
-            .iter()
-            .map(|x| x.clone())
-            .chain((input_bits.len()..1600).map(|_| Constant(F::zero())));
+        let input =
+            [input_bits, &(input_bits.len()..1600).map(|_| Constant(F::zero())).collect_vec()]
+                .concat();
 
         let row_offset = self.get_row_offset(ctx);
         if assign_state {
@@ -341,20 +348,16 @@ impl<F: FieldExt> KeccakF1600Chip<F> {
         } else {
             self.q_absorb.enable(&mut ctx.region, row_offset - 25)?;
         }
-        let input_chunks = input.chunks(64);
-        for word in &input_chunks {
-            self.assign_row_silent(ctx, word)?;
+        for word in &input.iter().chunks(64) {
+            self.assign_row_silent(ctx, word.map(|x| x.clone()).collect_vec())?;
         }
         self.assign_row(
             ctx,
-            state_bits
-                .iter()
-                .chunks(64)
-                .into_iter()
-                .zip(input_chunks.into_iter())
-                .map(|(x, y)| {
-                    x.into_iter()
-                        .zip(y.into_iter())
+            (0..25)
+                .map(|idx| {
+                    state_bits[idx * 64..idx * 64 + 64]
+                        .iter()
+                        .zip(input[idx * 64..idx * 64 + 64].iter())
                         .enumerate()
                         .fold(Value::known(0u64), |acc, (i, (x, y))| {
                             acc + x
