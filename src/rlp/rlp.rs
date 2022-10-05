@@ -26,6 +26,14 @@ use crate::rlp::rlc::{
     log2, RlcChip, RlcTrace
 };
 
+pub fn max_rlp_len_len(max_len: usize) -> usize {
+    if max_len > 55 {
+	(log2(max_len) + 7) / 8
+    } else {
+	0
+    }
+}
+
 // returns array whose first end_idx - start_idx cells are
 //     array[start_idx..end_idx]
 // and whose last cells are 0.
@@ -102,7 +110,6 @@ pub fn array_to_byte_val<'a, F: Field>(
 
 #[derive(Clone, Debug)]
 pub struct RlpFieldPrefixParsed<F: Field> {
-    is_valid: AssignedValue<F>,
     is_literal: AssignedValue<F>,
     is_big: AssignedValue<F>,
     
@@ -113,7 +120,6 @@ pub struct RlpFieldPrefixParsed<F: Field> {
 
 #[derive(Clone, Debug)]
 pub struct RlpArrayPrefixParsed<F: Field> {
-    is_valid: AssignedValue<F>,
     is_empty: AssignedValue<F>,
     is_big: AssignedValue<F>,
     
@@ -205,7 +211,7 @@ impl<F: Field> RlpArrayChip<F> {
 	    &Constant(F::from(184u64)),
 	    8,
 	)?;
-	let is_valid = range.is_less_than(
+	let is_valid = range.check_less_than(
 	    ctx,
 	    &Existing(prefix),
 	    &Constant(F::from(192u64)),
@@ -223,14 +229,9 @@ impl<F: Field> RlpArrayChip<F> {
 	    &Constant(F::from(183u64)),
 	)?;
 
-	let is_possibly_big = range.gate.not(
+	let is_big = range.gate.not(
 	    ctx,
 	    &Existing(&is_len_or_literal)
-	)?;
-	let is_big = range.gate.and(
-	    ctx,
-	    &Existing(&is_valid),
-	    &Existing(&is_possibly_big)
 	)?;
 
 	// length of the next RLP field
@@ -248,7 +249,6 @@ impl<F: Field> RlpArrayChip<F> {
 	)?;
 	
 	Ok(RlpFieldPrefixParsed {
-		    is_valid,
 	    is_literal,
 	    is_big,
 	    next_len,
@@ -263,15 +263,11 @@ impl<F: Field> RlpArrayChip<F> {
 	range: &RangeConfig<F>,
 	prefix: &AssignedValue<F>,
     ) -> Result<RlpArrayPrefixParsed<F>, Error> {	
-	let is_field = range.is_less_than(
+	let is_valid = range.check_less_than(
 	    ctx,
+	    &Constant(F::from(191u64)),
 	    &Existing(prefix),
-	    &Constant(F::from(192u64)),
 	    8,
-	)?;
-	let is_valid = range.gate.not(
-	    ctx,
-	    &Existing(&is_field)
 	)?;
 	
 	let is_empty = range.is_equal(
@@ -279,21 +275,11 @@ impl<F: Field> RlpArrayChip<F> {
 	    &Existing(prefix),
 	    &Constant(F::from(192u64))
 	)?;
-	let is_empty_or_small_array = range.is_less_than(
+	let is_big = range.is_less_than(
 	    ctx,
+	    &Constant(F::from(247u64)),
 	    &Existing(prefix),
-	    &Constant(F::from(248u64)),
 	    8
-	)?;
-
-	let is_possibly_big = range.gate.not(
-	    ctx,
-	    &Existing(&is_empty_or_small_array)
-	)?;
-	let is_big = range.gate.and(
-	    ctx,
-	    &Existing(&is_possibly_big),
-	    &Existing(&is_valid)
 	)?;
 
 	let array_len = range.gate.sub(
@@ -320,7 +306,6 @@ impl<F: Field> RlpArrayChip<F> {
 	)?;
 	
 	Ok(RlpArrayPrefixParsed {
-	    is_valid,
 	    is_empty,
 	    is_big,
 	    next_len,
@@ -356,20 +341,12 @@ impl<F: Field> RlpArrayChip<F> {
 	rlp_field: &Vec<AssignedValue<F>>,
 	max_field_len: usize,
     ) -> Result<RlpFieldTrace<F>, Error> {
- 	let max_len_len = {
-	    if max_field_len > 55 {
-		(log2(max_field_len) + 7) / 8
-	    } else {
-		0
-	    }
-	};
+ 	let max_len_len = max_rlp_len_len(max_field_len);
 	let max_rlp_field_len = 1 + max_len_len + max_field_len;
 	assert_eq!(rlp_field.len(), max_rlp_field_len);
 	
 	let cache_bits = log2(max_rlp_field_len);
 	let rlc_cache = self.rlc.load_rlc_cache(ctx, cache_bits)?;
-
-	// TODO: Do len range checks
 	
 	// Witness consists of
 	// * prefix_parsed
@@ -396,6 +373,12 @@ impl<F: Field> RlpArrayChip<F> {
 	let prefix_parsed = self.parse_rlp_field_prefix(ctx, range, &prefix)?;
 		
 	let len_len = prefix_parsed.len_len.clone();
+	range.check_less_than(
+	    ctx,
+	    &Existing(&len_len),
+	    &Constant(F::from((max_len_len + 1usize) as u64)),
+	    log2(max_len_len + 1)
+	)?;
 	let (len_cells, len_byte_val) = self.parse_rlp_len(
 	    ctx,
 	    range,
@@ -409,6 +392,12 @@ impl<F: Field> RlpArrayChip<F> {
 	    &Existing(&len_byte_val),
 	    &Existing(&prefix_parsed.next_len),
 	    &Existing(&prefix_parsed.is_big)
+	)?;
+	range.check_less_than(
+	    ctx,
+	    &Existing(&field_len),
+	    &Constant(F::from((max_field_len + 1usize) as u64)),
+	    log2(max_field_len + 1)
 	)?;
 	
 	let field_cells = witness_subarray_from_idxs(
@@ -463,13 +452,7 @@ impl<F: Field> RlpArrayChip<F> {
 	max_array_len: usize,
 	num_fields: usize,
     ) -> Result<RlpArrayTrace<F>, Error> {
-	let max_len_len = {
-	    if max_array_len > 55 {
-		(log2(max_array_len) + 7) / 8
-	    } else {
-		0
-	    }
-	};
+	let max_len_len = max_rlp_len_len(max_array_len);
 	assert_eq!(rlp_array.len(), max_array_len);
 
 	// Witness consists of
@@ -495,8 +478,15 @@ impl<F: Field> RlpArrayChip<F> {
 
 	let prefix = rlp_array[0].clone();
 	let prefix_parsed = self.parse_rlp_array_prefix(ctx, range, &prefix)?;
-		
+	
 	let len_len = prefix_parsed.len_len.clone();
+	range.check_less_than(
+	    ctx,
+	    &Existing(&len_len),
+	    &Constant(F::from((max_len_len + 1usize) as u64)),
+	    log2(max_len_len + 1)
+	)?;
+	
 	let (len_cells, len_byte_val) = self.parse_rlp_len(
 	    ctx,
 	    range,
@@ -504,12 +494,18 @@ impl<F: Field> RlpArrayChip<F> {
 	    &len_len,
 	    max_len_len
 	)?;
-
+	
 	let all_fields_len = range.gate.select(
 	    ctx,
 	    &Existing(&len_byte_val),
 	    &Existing(&prefix_parsed.next_len),
 	    &Existing(&prefix_parsed.is_big)
+	)?;
+	range.check_less_than(
+	    ctx,
+	    &Existing(&all_fields_len),
+	    &Constant(F::from((max_array_len + 1usize) as u64)),
+	    log2(max_array_len + 1)
 	)?;
 
 	let (_, _, rlp_len) = range.gate.inner_product(
@@ -539,13 +535,20 @@ impl<F: Field> RlpArrayChip<F> {
 	    let prefix_parsed = self.parse_rlp_field_prefix(ctx, range, &prefix)?;
 
 	    let len_len = prefix_parsed.len_len.clone();
+	    range.check_less_than(
+		ctx,
+		&Existing(&len_len),
+		&Constant(F::from((max_rlp_len_len(max_field_lens[idx]) + 1usize) as u64)),
+		log2(max_rlp_len_len(max_field_lens[idx]) + 1),
+	    )?;
+	    
 	    let field_len_cells = witness_subarray_from_idxs(
 		ctx,
 		range,
 		&rlp_array,
 		prefix_idxs[idx].value().copied() + Value::known(F::from(1)),
 		prefix_idxs[idx].value().copied() + Value::known(F::from(1)) + len_len.value().copied(),
-		(log2(max_field_lens[idx]) + 7) / 8,			
+		max_rlp_len_len(max_field_lens[idx]),			
 	    )?;
 	    let field_byte_val = array_to_byte_val(ctx, range, &field_len_cells, &len_len)?;
 	    let field_len = range.gate.select(
@@ -553,6 +556,12 @@ impl<F: Field> RlpArrayChip<F> {
 		&Existing(&field_byte_val),
 		&Existing(&prefix_parsed.next_len),
 		&Existing(&prefix_parsed.is_big)
+	    )?;
+	    range.check_less_than(
+		ctx,
+		&Existing(&field_len),
+		&Constant(F::from((max_field_lens[idx] + 1usize) as u64)),
+		log2(max_field_lens[idx] + 1),
 	    )?;
 	    let field_cells = witness_subarray_from_idxs(
 		ctx,
@@ -588,7 +597,7 @@ impl<F: Field> RlpArrayChip<F> {
 		range,
 		&field_len_cells_vec[idx],
 		field_len_len_vec[idx].clone(),
-		(log2(max_field_lens[idx]) + 7) / 8,
+		max_rlp_len_len(max_field_lens[idx]),
 	    )?;
 	    let field_cells_rlc = self.rlc.compute_rlc(
 		ctx,
@@ -601,7 +610,7 @@ impl<F: Field> RlpArrayChip<F> {
 	    field_cells_rlcs.push(field_cells_rlc);
 	}
 	let rlp_rlc = self.rlc.compute_rlc(ctx, range, &rlp_array, rlp_len, max_array_len)?;
-	let one_vec = self.rlc.assign_region_rlc(ctx, &vec![Constant(F::from(1))], vec![], vec![], None)?;
+	let one_vec = self.range.gate.assign_region_smart(ctx, vec![Constant(F::from(1))], vec![], vec![], vec![])?;
 	let one = one_vec[0].clone();
 
 	let rlc_cache = self.rlc.load_rlc_cache(ctx, log2(max_array_len))?;
@@ -612,7 +621,7 @@ impl<F: Field> RlpArrayChip<F> {
 	    (len_rlc.rlc_val.clone(), len_rlc.rlc_len.clone())
 	];
 	for idx in 0..num_fields {
-	    max_lens.extend(vec![1, (log2(max_field_lens[idx]) + 7) / 8, max_field_lens[idx]]);
+	    max_lens.extend(vec![1, max_rlp_len_len(max_field_lens[idx]), max_field_lens[idx]]);
 	    rlc_and_len_inputs.extend(vec![
 		(prefix_vec[idx].clone(), one.clone()),
 		(field_len_rlcs[idx].rlc_val.clone(), field_len_rlcs[idx].rlc_len.clone()),
@@ -629,7 +638,7 @@ impl<F: Field> RlpArrayChip<F> {
 	    max_array_len,
 	    &rlc_cache
 	)?;
-		
+
 	let parsed_rlp_array = RlpArrayTrace {
 	    array_trace: rlp_rlc,
 	    prefix,
@@ -664,6 +673,7 @@ impl<F: Field> Circuit<F> for RlpTestCircuit<F> {
     }
 
     fn configure(meta: &mut ConstraintSystem<F>) -> Self::Config {
+	let col = meta.advice_column();
 	RlpArrayChip::configure(
 	    meta,
 	    1,

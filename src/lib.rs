@@ -7,7 +7,7 @@ use jemallocator::Jemalloc;
 #[global_allocator]
 static GLOBAL: Jemalloc = Jemalloc;
 
-//pub mod eth;
+pub mod eth;
 pub mod keccak;
-//pub mod mpt;
-//pub mod rlp;
+pub mod mpt;
+pub mod rlp;

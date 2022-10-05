@@ -186,6 +186,6 @@ fn plot_keccak() {
     root.fill(&WHITE).unwrap();
     let root = root.titled("Keccak Layout", ("sans-serif", 60)).unwrap();
 
-    let circuit = KeccakCircuit::<Fr>::default();
-    halo2_proofs::dev::CircuitLayout::default().render(8, &circuit, &root).unwrap();
+    let circuit = KeccakCircuit::default();
+    halo2_proofs::dev::CircuitLayout::default().render::<Fr, KeccakCircuit, _>(8, &circuit, &root).unwrap();
 }
