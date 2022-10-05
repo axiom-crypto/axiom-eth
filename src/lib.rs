@@ -1,11 +1,11 @@
 // different memory allocator options:
 // empirically jemalloc still seems to give best speeds for witness generation
-//#[cfg(not(target_env = "msvc"))]
-//use jemallocator::Jemalloc;
+#[cfg(feature = "jemalloc")]
+use jemallocator::Jemalloc;
 
-//#[cfg(not(target_env = "msvc"))]
-//#[global_allocator]
-//static GLOBAL: Jemalloc = Jemalloc;
+#[cfg(feature = "jemalloc")]
+#[global_allocator]
+static GLOBAL: Jemalloc = Jemalloc;
 
 pub mod eth;
 pub mod keccak;
