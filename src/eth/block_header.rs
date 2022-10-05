@@ -228,7 +228,7 @@ impl<F: Field> Circuit<F> for EthBlockHeaderTestCircuit<F> {
             "gamma".to_string(),
             "rlc".to_string(),
             Vertical,
-            &[15],
+            &[1],
             &[1],
             1,
             11,
@@ -303,7 +303,8 @@ impl<F: Field> Circuit<F> for EthBlockHeaderTestCircuit<F> {
 
 #[cfg(test)]
 mod tests {
-
+    
+    use ark_std::{end_timer, start_timer};
     use crate::eth::block_header::EthBlockHeaderTestCircuit;
     use ark_std::{end_timer, start_timer};
     use halo2_proofs::{
@@ -344,6 +345,7 @@ mod tests {
         let params: crate::keccak::KeccakCircuitParams =
             serde_json::from_str(params_str.as_str()).unwrap();
         let k = params.degree;
+        
         let input_hex = "f90201a0d7519abd494a823b2c9c28908eaf250fe4a6287d747f1cc53a5a193b6533a549a01dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347944675c7e5baafbffbca748158becba61ef3b0a263a025000d51f040ee5c473fed74eda9ace87d55a35187b11bcde6f5176025c395bfa0a5800a6de6d28d7425ff72714af2af769b9f8f9e1baf56fb42f793fbb40fde07a056e1062a3dc63791e8a8496837606b14062da70ee69178cea97d6eeb5047550cb9010000236420014dc00423903000840002280080282100004704018340c0241c20011211400426000f900001d8088000011006020002ce98bc00c0000020c9a02040000688040200348c3a0082b81402002814922008085d008008200802802c4000130000101703124801400400018008a6108002020420144011200070020bc0202681810804221304004800088600300000040463614a000e200201c00611c0008e800b014081608010a0218a0b410010082000428209080200f50260a00840006700100f40a000000400000448301008c4a00341040e343500800d06250020010215200c008018002c88350404000bc5000a8000210c00724a0d0a4010210a448083eee2468401c9c3808343107884633899e780a07980d8d1f15474c9185e4d1cef5f207167735009daad2eb6af6da37ffba213c28800000000000000008501e08469e600000000000000000000000000000000000000000000000000000000000000000000000000000000";
         let input_bytes_pre: Vec<u8> = Vec::from_hex(input_hex).unwrap();
         let input_bytes: Vec<Option<u8>> = input_bytes_pre.iter().map(|x| Some(*x)).collect();
@@ -362,9 +364,9 @@ mod tests {
         println!("");
         println!("==============STARTING PROOF GEN===================");
 
+	      let proof_timer = start_timer!(||"proof gen");
         let proof_circuit =
             EthBlockHeaderTestCircuit::<Fr> { inputs: input_bytes, _marker: PhantomData };
-
         let mut transcript = Blake2bWrite::<_, _, Challenge255<_>>::init(vec![]);
         let pf_time = start_timer!(|| "proof gen");
         create_proof::<
@@ -374,7 +376,7 @@ mod tests {
             _,
             Blake2bWrite<Vec<u8>, G1Affine, Challenge255<G1Affine>>,
             EthBlockHeaderTestCircuit<Fr>,
-        >(&params, &pk, &[proof_circuit], &[&[]], rng, &mut transcript)?;
+            >(&params, &pk, &[proof_circuit], &[&[]], rng, &mut transcript)?;	
         let proof = transcript.finalize();
         end_timer!(pf_time);
 
@@ -391,6 +393,7 @@ mod tests {
         >(verifier_params, pk.get_vk(), strategy, &[&[]], &mut transcript)
         .is_ok());
         end_timer!(verify_time);
+
         Ok(())
     }
 }

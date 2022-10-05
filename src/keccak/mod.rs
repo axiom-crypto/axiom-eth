@@ -1,4 +1,6 @@
 use halo2_base::{
+    gates::{GateInstructions, RangeInstructions, range::{RangeConfig}},
+    utils::{fe_to_biguint, value_to_option},
     AssignedValue, Context,
     QuantumCell::{self, Constant, Existing, Witness},
 };
@@ -126,8 +128,132 @@ impl<F: FieldExt> KeccakChip<F> {
             ctx.zero_cell = Some(zero.clone());
             zero
         }
-    }
+     }   
 
+    pub fn pad_bits(
+	      ctx: &mut Context<'_, F>,
+	      range: &RangeConfig<F>,
+	      inputs: &Vec<AssignedValue<F>>,
+	      len: AssignedValue<F>,
+	      in_min_len: usize,
+	      in_max_len: usize,
+    ) -> Result<Vec<AssignedValue<F>>, Error> {
+        assert_eq!(in_max_len, inputs.len());
+        assert_eq!(in_max_len % 8, 0);
+        let out_len = ((in_max_len + 8 + 1087) / 1088) * 1088;
+
+        let mut out_vec = Vec::new();
+        for idx in 0..in_min_len {
+            out_vec.push(inputs[idx].clone());
+        }
+        let mut append: Vec<QuantumCell<F>> = (in_min_len..in_max_len).map(|idx| {
+            inputs[idx].value().zip(len.value()).map(|(v, l)| {
+          if idx == usize::try_from(fe_to_biguint(l)).unwrap() {
+              F::one()
+          } else if idx < usize::try_from(fe_to_biguint(l)).unwrap() {
+              *v
+          } else {
+              F::zero()
+          }
+            })
+        }).map(|v| Witness(v)).collect();
+        for idx in in_max_len..out_len {
+            if idx < out_len - 1 {
+          append.push(Constant(F::zero()));
+            } else {
+          append.push(Constant(F::one()));
+            }
+        }
+        let mut new_out_vec = range.gate.assign_region_smart(ctx, append, vec![], vec![], vec![])?;
+        out_vec.append(&mut new_out_vec);
+
+        // check matches up to len
+        let mut is_equal_vec = Vec::new();
+        for idx in in_min_len..in_max_len {
+            let is_equal = range.is_equal(ctx, &Existing(&inputs[idx]), &Existing(&out_vec[idx]))?;
+            is_equal_vec.push(is_equal);		
+        }
+
+        let mut cumulative_inputs = Vec::new();
+        let mut cumulative_gates = Vec::new();
+        let mut sum = is_equal_vec[0].value().copied();
+        cumulative_inputs.push(Existing(&is_equal_vec[0]));
+        for idx in (in_min_len + 1)..in_max_len {
+            cumulative_gates.push(3 * idx - 3);
+            cumulative_inputs.push(Constant(F::one()));
+            cumulative_inputs.push(Existing(&is_equal_vec[idx - in_min_len]));
+            sum = sum + is_equal_vec[idx - in_min_len].value();
+            cumulative_inputs.push(Witness(sum));
+        }
+        let vals = range.gate.assign_region_smart(
+            ctx, cumulative_inputs, cumulative_gates, vec![], vec![],
+        )?;
+        let len_minus_min_val = len.value().copied() - Value::known(F::from(in_min_len as u64));
+        let val = range.gate.assign_region_smart(
+            ctx,
+            vec![Witness(len_minus_min_val),
+           Constant(F::one()),
+           Constant(F::from(in_min_len as u64)),
+           Existing(&len)],
+            vec![0], vec![], vec![]
+        )?;
+        let len_minus_min_assigned = val[0].clone();
+        let is_equal_sum = range.gate.select_from_idx(
+            ctx,
+            &(0..in_max_len-in_min_len).map(|idx| Existing(&vals[3 * idx])).collect(),
+            &Existing(&len_minus_min_assigned),
+        )?;
+        range.gate.assert_equal(ctx, &Existing(&is_equal_sum), &Existing(&len_minus_min_assigned))?;
+
+        // check padding val at index `len`
+        let idx_len_val = range.gate.select_from_idx(
+            ctx,
+            &out_vec[in_min_len..in_max_len].iter().map(|v| Existing(v)).collect(),
+            &Existing(&len)
+        )?;
+        range.gate.assert_equal(ctx, &Existing(&idx_len_val), &Constant(F::from(1)))?;
+
+        // check padding 0s after index `len`
+        let mut is_zero_vec = Vec::new();
+        for idx in in_min_len..in_max_len {
+            let is_zero = range.is_zero(ctx, &out_vec[idx])?;
+            is_zero_vec.push(is_zero);		
+        }
+        let mut cumulative_inputs2 = Vec::new();
+        let mut cumulative_gates2 = Vec::new();
+        let mut sum2 = is_zero_vec[in_max_len - in_min_len - 1].value().copied();
+        cumulative_inputs2.push(Existing(&is_zero_vec[in_max_len - in_min_len - 1]));
+        for idx in (in_min_len + 1)..in_max_len {
+            cumulative_gates2.push(3 * idx - 3);
+            cumulative_inputs2.push(Constant(F::one()));
+            cumulative_inputs2.push(Existing(&is_zero_vec[in_max_len - in_min_len - 1 - idx]));
+            sum2 = sum2 + is_zero_vec[in_max_len - in_min_len - 1 - idx].value().copied();
+            cumulative_inputs2.push(Witness(sum2));
+        }
+        let vals2 = range.gate.assign_region_smart(
+            ctx, cumulative_inputs2, cumulative_gates2, vec![], vec![],
+        )?;
+        let max_minus_len_val = Value::known(F::from(in_max_len as u64)) - len.value().copied();
+        let val2 = range.gate.assign_region_smart(
+            ctx,
+            vec![Witness(max_minus_len_val),
+           Constant(F::one()),
+           Existing(&len),
+           Constant(F::from(in_max_len as u64))],
+            vec![0], vec![], vec![]
+        )?;
+        let max_minus_len_assigned = val2[0].clone();
+        let is_zero_sum = range.gate.select_from_idx(
+            ctx,
+            &(0..in_max_len-in_min_len).map(|idx| Existing(&vals2[3 * idx])).collect(),
+            &Existing(&max_minus_len_assigned),
+        )?;
+        range.gate.assert_equal(ctx, &Existing(&is_zero_sum), &Existing(&max_minus_len_assigned))?;
+
+        assert_eq!(out_len, out_vec.len());
+        Ok(out_vec)
+    }
+    
     fn load_const(&self, ctx: &mut Context<'_, F>, c: F) -> AssignedValue<F> {
         self.assign_region(ctx, vec![Constant(c)], vec![], vec![], None).unwrap()[0].clone()
     }
