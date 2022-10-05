@@ -16,24 +16,31 @@ use halo2_proofs::{
     transcript::{Blake2bRead, Blake2bWrite, Challenge255},
     transcript::{TranscriptReadBuffer, TranscriptWriterBuffer},
 };
+use num_bigint::BigUint;
 use std::marker::PhantomData;
 
-#[derive(Default)]
-pub struct KeccakCircuit<F: FieldExt> {
-    lanes: [u64; 25],
-    _marker: PhantomData<F>,
+pub struct KeccakCircuit {
+    input: Vec<u64>,
 }
 
-impl<F: FieldExt> Circuit<F> for KeccakCircuit<F> {
-    type Config = KeccakBitConfig<F>;
+impl Default for KeccakCircuit {
+    fn default() -> Self {
+        Self { input: vec![] }
+    }
+}
+
+impl<F: FieldExt> Circuit<F> for KeccakCircuit {
+    type Config = KeccakChip<F>;
     type FloorPlanner = SimpleFloorPlanner;
 
     fn without_witnesses(&self) -> Self {
-        Self::default()
+        Self { input: vec![0; self.input.len()] }
     }
 
     fn configure(meta: &mut ConstraintSystem<F>) -> Self::Config {
-        KeccakBitConfig::configure(meta, "keccak".to_string())
+        let config = KeccakChip::configure(meta, "keccak".to_string(), 1088, 256, 64, 1);
+        println!("blinding factors: {}", meta.blinding_factors());
+        config
     }
 
     fn synthesize(
@@ -57,19 +64,40 @@ impl<F: FieldExt> Circuit<F> for KeccakCircuit<F> {
                 );
                 let ctx = &mut aux;
 
-                let mut lanes = config.assign_row(
-                    ctx,
-                    self.lanes.map(|x| Witness(Value::known(F::from(x)))),
-                    0,
-                )?;
-                let mut row_offset = 1;
-                for round in 0..24 {
-                    lanes = config.keccak_f1600_round(ctx, &lanes, round, row_offset)?;
-                    row_offset += 37;
+                let input_bits = self
+                    .input
+                    .iter()
+                    .map(|&b| {
+                        assert!(b == 0 || b == 1);
+                        Witness(Value::known(F::from(b)))
+                    })
+                    .collect_vec();
+                let output_bits = config.keccak(ctx, input_bits)?;
+                if value_to_option(output_bits[0].value()).is_some() {
+                    println!(
+                        "{:?}",
+                        output_bits
+                            .iter()
+                            .rev()
+                            .fold(BigUint::from(0u64), |acc, cell| acc * BigUint::from(2u64)
+                                + fe_to_biguint(value_to_option(cell.value()).unwrap()))
+                            .to_bytes_le()
+                    );
                 }
-                for lane in &lanes {
-                    println!("{:?}", lane.value().map(|v| fe_to_biguint(v)));
-                }
+                let (fixed_rows, total_fixed) =
+                    ctx.assign_and_constrain_constants(&config.constants)?;
+                let advice_rows = ctx.advice_rows["keccak"].iter();
+                println!(
+                    "maximum rows used by an advice column: {}",
+                    advice_rows.clone().max().or(Some(&0)).unwrap(),
+                );
+                println!(
+                    "minimum rows used by an advice column: {}",
+                    advice_rows.clone().min().or(Some(&usize::MAX)).unwrap(),
+                );
+                let total_cells = advice_rows.sum::<usize>();
+                println!("total cells used: {}", total_cells);
+                println!("total fixed cells: {}", total_fixed);
 
                 Ok(())
             },
@@ -82,8 +110,7 @@ impl<F: FieldExt> Circuit<F> for KeccakCircuit<F> {
 #[test]
 pub fn test_keccak() {
     let k = 10;
-    let circuit =
-        KeccakCircuit { lanes: (0..25).collect_vec().try_into().unwrap(), _marker: PhantomData };
+    let circuit = KeccakCircuit::default();
 
     let prover = MockProver::<Fr>::run(k, &circuit, vec![]).unwrap();
     prover.assert_satisfied();
@@ -109,8 +136,7 @@ fn bench_keccak() -> Result<(), Box<dyn std::error::Error>> {
     };
     end_timer!(params_time);
 
-    let circuit =
-        KeccakCircuit { lanes: (0..25).collect_vec().try_into().unwrap(), _marker: PhantomData };
+    let circuit = KeccakCircuit::default();
 
     let vk_time = start_timer!(|| "Generating vkey");
     let vk = keygen_vk(&params, &circuit)?;
@@ -149,4 +175,17 @@ fn bench_keccak() -> Result<(), Box<dyn std::error::Error>> {
     end_timer!(verify_time);
 
     Ok(())
+}
+
+#[cfg(feature = "dev-graph")]
+#[test]
+fn plot_keccak() {
+    use plotters::prelude::*;
+
+    let root = BitMapBackend::new("layout.png", (1024, 1024)).into_drawing_area();
+    root.fill(&WHITE).unwrap();
+    let root = root.titled("Keccak Layout", ("sans-serif", 60)).unwrap();
+
+    let circuit = KeccakCircuit::<Fr>::default();
+    halo2_proofs::dev::CircuitLayout::default().render(8, &circuit, &root).unwrap();
 }

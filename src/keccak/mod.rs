@@ -4,12 +4,12 @@
 use halo2_base::{
     utils::value_to_option,
     AssignedValue, Context,
-    QuantumCell::{self, Existing, Witness},
+    QuantumCell::{self, Constant, Existing, Witness},
 };
 use halo2_proofs::{
     circuit::Value,
     halo2curves::FieldExt,
-    plonk::{Advice, Column, ConstraintSystem, Error, Expression, Selector},
+    plonk::{Advice, Column, ConstraintSystem, Error, Expression, Fixed, Selector, VirtualCells},
     poly::Rotation,
 };
 use itertools::Itertools;
@@ -36,17 +36,128 @@ lazy_static! {
 }
 
 #[derive(Clone, Debug)]
-pub struct KeccakBitConfig<F: FieldExt> {
+pub struct KeccakChip<F: FieldExt> {
+    pub keccak_f_chips: Vec<KeccakF1600Chip<F>>,
+    pub constants: Vec<Column<Fixed>>,
+    context_id: Rc<String>,
+    rate: usize,
+    // delimited_suffix: u8,
+    output_bit_len: usize,
+}
+
+impl<F: FieldExt> KeccakChip<F> {
+    pub fn configure(
+        meta: &mut ConstraintSystem<F>,
+        context_id: String,
+        rate: usize,
+        // delimited_suffix: u8,
+        output_bit_len: usize,
+        num_advice: usize,
+        num_fixed: usize,
+    ) -> Self {
+        assert!(rate % 8 == 0);
+        let num_chips = (num_advice + 63) / 64;
+        println!(
+            "Creating {} keccak_f chips, rounding total advice columns up to {}",
+            num_chips,
+            num_chips * 64
+        );
+        let constants = (0..num_fixed)
+            .map(|_| {
+                let f = meta.fixed_column();
+                meta.enable_equality(f);
+                f
+            })
+            .collect_vec();
+        let context_id = Rc::new(context_id);
+        let keccak_f_chips = (0..num_chips)
+            .map(|i| KeccakF1600Chip::configure(meta, &context_id, i * 64))
+            .collect_vec();
+
+        Self {
+            keccak_f_chips,
+            constants,
+            context_id,
+            rate,
+            // delimited_suffix,
+            output_bit_len,
+        }
+    }
+
+    pub fn keccak(
+        &self,
+        ctx: &mut Context<'_, F>,
+        mut input_bits: Vec<QuantumCell<F>>,
+    ) -> Result<Vec<AssignedValue<F>>, Error> {
+        // === Padding ===
+        input_bits.push(Constant(F::one()));
+        while input_bits.len() % self.rate != self.rate - 1 {
+            input_bits.push(Constant(F::zero()));
+        }
+        input_bits.push(Constant(F::one()));
+
+        // === Absorb all the inputs blocks ===
+        let mut state_bits: Option<Vec<AssignedValue<F>>> = None;
+        let mut chip_id = ctx.min_gate_index(&self.context_id);
+        let mut lanes = None;
+        for block in input_bits.chunks(self.rate) {
+            let mut state_lanes = if let Some(state) = state_bits {
+                self.keccak_f_chips[chip_id].absorb(ctx, &state, block, false).unwrap()
+            } else {
+                self.keccak_f_chips[chip_id].load_1600bits_to_lanes(ctx, block).unwrap()
+            };
+            if block.len() == self.rate {
+                state_lanes = self.keccak_f_chips[chip_id].keccak_f1600(ctx, state_lanes, false)?;
+            }
+            chip_id = ctx.min_gate_index(&self.context_id);
+            state_bits = Some(
+                self.keccak_f_chips[chip_id].store_lanes_to_1600bits(ctx, &state_lanes).unwrap(),
+            );
+            lanes = Some(state_lanes);
+        }
+
+        // === Squeeze phase ===
+        let mut output = Vec::with_capacity(self.output_bit_len);
+        let mut state_lanes = lanes.unwrap();
+        let mut state_bits = state_bits.unwrap();
+        while output.len() < self.output_bit_len {
+            let block_size = std::cmp::min(self.output_bit_len - output.len(), self.rate);
+            output.extend(state_bits[..block_size].iter().map(|a| a.clone()));
+            if output.len() < self.output_bit_len {
+                chip_id = ctx.min_gate_index(&self.context_id);
+                state_lanes =
+                    self.keccak_f_chips[chip_id].keccak_f1600(ctx, state_lanes, true).unwrap();
+                state_bits = self.keccak_f_chips[chip_id]
+                    .store_lanes_to_1600bits(ctx, &state_lanes)
+                    .unwrap();
+            }
+        }
+
+        Ok(output)
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct KeccakF1600Chip<F: FieldExt> {
     // we will represent each 64-bit word as a single row
     pub values: [Column<Advice>; LANE_LEN],
-    pub q_rounds: [Selector; ROUNDS],
     pub context_id: Rc<String>,
+    pub q_rounds: Column<Fixed>, // turns on all 24 rounds
+    pub q_absorb: Selector,
+    pub q_bits_to_lanes: Selector,
+    pub q_lanes_to_bits: Selector,
+    // pub q_batch_xor: Selector,
+    column_offset: usize,
     _marker: PhantomData<F>,
 }
 
-impl<F: FieldExt> KeccakBitConfig<F> {
-    pub fn configure(meta: &mut ConstraintSystem<F>, context_id: String) -> Self {
-        let values: [_; LANE_LEN] = (0..LANE_LEN)
+impl<F: FieldExt> KeccakF1600Chip<F> {
+    pub fn configure(
+        meta: &mut ConstraintSystem<F>,
+        context_id: &Rc<String>,
+        column_offset: usize,
+    ) -> Self {
+        let values = (0..LANE_LEN)
             .map(|_| {
                 let a = meta.advice_column();
                 meta.enable_equality(a);
@@ -55,18 +166,284 @@ impl<F: FieldExt> KeccakBitConfig<F> {
             .collect_vec()
             .try_into()
             .unwrap();
-        let q_rounds: [_; ROUNDS] =
-            (0..ROUNDS).map(|_| meta.selector()).collect_vec().try_into().unwrap();
+        let q_rounds = meta.fixed_column();
+        let q_absorb = meta.selector();
+        let q_bits_to_lanes = meta.selector();
+        let q_lanes_to_bits = meta.selector();
 
-        let config =
-            Self { values, q_rounds, context_id: Rc::new(context_id), _marker: PhantomData };
-        for round in 0..24 {
-            config.create_gate(meta, round);
+        let config = Self {
+            values,
+            context_id: context_id.clone(),
+            q_rounds,
+            q_absorb,
+            q_bits_to_lanes,
+            q_lanes_to_bits,
+            column_offset,
+            _marker: PhantomData,
+        };
+        for round in 0..ROUNDS {
+            config.create_keccak_f_round_gate(
+                meta,
+                |meta| meta.query_fixed(config.q_rounds, Rotation(-(round as i32) * 37)),
+                round,
+            );
         }
+
+        meta.create_gate("absorb 1600 bits and convert to 64bit lanes", |meta| {
+            let state_bits: Vec<Vec<Expression<F>>> = (0..25)
+                .map(|x| {
+                    config
+                        .values
+                        .iter()
+                        .map(|column| meta.query_advice(*column, Rotation(x as i32)))
+                        .collect_vec()
+                })
+                .collect_vec();
+            let input_bits: Vec<Vec<Expression<F>>> = (0..25)
+                .map(|x| {
+                    config
+                        .values
+                        .iter()
+                        .map(|column| meta.query_advice(*column, Rotation(x as i32 + 25)))
+                        .collect_vec()
+                })
+                .collect_vec();
+            let q = meta.query_selector(config.q_absorb);
+            (0..25)
+                .map(|x| {
+                    q.clone()
+                        * (meta.query_advice(config.values[x], Rotation(50))
+                            - bits_to_num(
+                                (0..64).map(|i| xor(&state_bits[x][i], &input_bits[x][i])),
+                            ))
+                })
+                .collect_vec()
+        });
+
+        meta.create_gate("convert 1600 bits to 64bit lanes", |meta| {
+            let state_bits: Vec<Vec<Expression<F>>> = (0..25)
+                .map(|x| {
+                    config
+                        .values
+                        .iter()
+                        .map(|column| meta.query_advice(*column, Rotation(x as i32)))
+                        .collect_vec()
+                })
+                .collect_vec();
+            let q = meta.query_selector(config.q_bits_to_lanes);
+            (0..25)
+                .map(|x| {
+                    q.clone()
+                        * (meta.query_advice(config.values[x], Rotation(25))
+                            - bits_to_num(state_bits[x].clone()))
+                })
+                .collect_vec()
+        });
+
+        meta.create_gate("convert 64bit lanes to 1600 bits", |meta| {
+            let q = meta.query_selector(config.q_lanes_to_bits);
+            let lanes =
+                (0..25).map(|i| meta.query_advice(config.values[i], Rotation::cur())).collect_vec();
+            let bits: Vec<Vec<Expression<F>>> = (0..25)
+                .map(|x| {
+                    config
+                        .values
+                        .iter()
+                        .map(|column| meta.query_advice(*column, Rotation(x as i32 + 1)))
+                        .collect_vec()
+                })
+                .collect_vec();
+
+            let mut constraints = Vec::new();
+            for x in 0..25 {
+                constraints.extend((0..64).map(|i| q.clone() * is_bit(&bits[x][i])));
+            }
+            constraints.extend(
+                (0..25).map(|x| q.clone() * (lanes[x].clone() - bits_to_num(bits[x].clone()))),
+            );
+            constraints
+        });
+        /*
+        meta.create_gate("32 bit batch xor", |meta| {
+            let q = meta.query_selector(config.q_batch_xor);
+            let x = config
+                .values
+                .iter()
+                .map(|&column| meta.query_advice(column, Rotation::cur()))
+                .collect_vec();
+            [q.clone() * (xor(&x[0], &x[1]) - x[2].clone())]
+                .into_iter()
+                .chain(
+                    (1..32).map(|i| {
+                        q.clone() * (xor(&x[2 * i - 1], &x[2 * i]) - x[2 * i + 1].clone())
+                    }),
+                )
+                .collect_vec()
+        });
+        */
+
         config
     }
 
-    fn create_gate(&self, meta: &mut ConstraintSystem<F>, round: usize) {
+    pub fn load_1600bits_to_lanes(
+        &self,
+        ctx: &mut Context<'_, F>,
+        bits: &[QuantumCell<F>],
+    ) -> Result<Vec<AssignedValue<F>>, Error> {
+        let row_offset = self.get_row_offset(ctx);
+        self.q_bits_to_lanes.enable(&mut ctx.region, row_offset)?;
+        let bits = [bits, &(bits.len()..1600).map(|_| Constant(F::zero())).collect_vec()].concat();
+        let lanes = (0..25)
+            .map(|x| {
+                bits[(64 * x)..(64 * x + 64)]
+                    .iter()
+                    .enumerate()
+                    .fold(Value::known(0u64), |acc, (i, x)| {
+                        acc + x.value().map(|x| (x.get_lower_32() as u64) << i)
+                    })
+                    .map(|x| F::from(x))
+            })
+            .collect_vec();
+        for chunk in bits.chunks(64) {
+            self.assign_row_silent(ctx, chunk.iter().map(|x| x.clone()).collect_vec())?;
+        }
+        self.assign_row(ctx, lanes.into_iter().map(|v| Witness(v.clone())))
+    }
+
+    pub fn store_lanes_to_1600bits(
+        &self,
+        ctx: &mut Context<'_, F>,
+        lanes: &[AssignedValue<F>],
+    ) -> Result<Vec<AssignedValue<F>>, Error> {
+        let row_offset = self.get_row_offset(ctx);
+        self.q_lanes_to_bits.enable(&mut ctx.region, row_offset)?;
+        assert_eq!(lanes.len(), 25);
+        self.assign_row(ctx, lanes.iter().map(|a| Existing(a)).collect_vec())?;
+        let mut output = Vec::with_capacity(1600);
+        for lane in lanes {
+            output.extend(
+                self.assign_row(
+                    ctx,
+                    (0..64)
+                        .map(|i| {
+                            lane.value().map(|x| F::from(((x.get_lower_128() as u64) >> i) & 1))
+                        })
+                        .map(|v| Witness(v)),
+                )
+                .unwrap(),
+            );
+        }
+        Ok(output)
+    }
+
+    pub fn absorb(
+        &self,
+        ctx: &mut Context<'_, F>,
+        state_bits: &[AssignedValue<F>],
+        input_bits: &[QuantumCell<F>],
+        assign_state: bool,
+    ) -> Result<Vec<AssignedValue<F>>, Error> {
+        assert_eq!(state_bits.len(), 1600);
+        assert!(input_bits.len() <= 1600);
+
+        let input = input_bits
+            .iter()
+            .map(|x| x.clone())
+            .chain((input_bits.len()..1600).map(|_| Constant(F::zero())));
+
+        let row_offset = self.get_row_offset(ctx);
+        if assign_state {
+            self.q_absorb.enable(&mut ctx.region, row_offset)?;
+            for word in &state_bits.iter().chunks(64) {
+                self.assign_row_silent(ctx, word.map(|a| Existing(a)))?;
+            }
+        } else {
+            self.q_absorb.enable(&mut ctx.region, row_offset - 25)?;
+        }
+        let input_chunks = input.chunks(64);
+        for word in &input_chunks {
+            self.assign_row_silent(ctx, word)?;
+        }
+        self.assign_row(
+            ctx,
+            state_bits
+                .iter()
+                .chunks(64)
+                .into_iter()
+                .zip(input_chunks.into_iter())
+                .map(|(x, y)| {
+                    x.into_iter()
+                        .zip(y.into_iter())
+                        .enumerate()
+                        .fold(Value::known(0u64), |acc, (i, (x, y))| {
+                            acc + x
+                                .value()
+                                .zip(y.value())
+                                .map(|(x, y)| ((x.get_lower_32() ^ y.get_lower_32()) as u64) << i)
+                        })
+                        .map(|x| F::from(x))
+                })
+                .map(|v| Witness(v))
+                .collect_vec(),
+        )
+    }
+
+    /*
+    pub fn batch_xor(
+        &self,
+        ctx: &mut Context<'_, F>,
+        bits: &[AssignedValue<F>],
+    ) -> Result<AssignedValue<F>, Error> {
+        assert!(bits.len() <= 32);
+        if bits.len() == 1 {
+            return Ok(bits[0].clone());
+        }
+        self.q_batch_xor.enable(&mut ctx.region, self.get_row_offset(ctx))?;
+        let row_cells = Vec::with_capacity(64);
+        row_cells.push(Existing(&bits[0]));
+        let acc = bits[0].value().copied();
+        for bit in bits.iter().skip(1) {
+            row_cells.push(Existing(bit));
+            acc = acc
+                .zip(bit.value())
+                .map(|(x, y)| F::from((x.get_lower_32() ^ y.get_lower_32()) as u64));
+            row_cells.push(Witness(acc));
+        }
+        let output_index = row_cells.len();
+        while row_cells.len() < 64 {
+            row_cells.push(Constant(F::zero()));
+            row_cells.push(Witness(acc));
+        }
+        Ok(self.assign_row(ctx, row_cells).unwrap().last().unwrap().clone())
+    }
+    */
+
+    /// returns lanes and updates row_offset to new offset
+    pub fn keccak_f1600(
+        &self,
+        ctx: &mut Context<'_, F>,
+        mut lanes: Vec<AssignedValue<F>>,
+        assign_input: bool,
+    ) -> Result<Vec<AssignedValue<F>>, Error> {
+        ctx.region.assign_fixed(
+            || "keccak_f1600",
+            self.q_rounds,
+            self.get_row_offset(ctx) - 1 + assign_input as usize,
+            || Value::known(F::one()),
+        )?;
+        for round in 0..ROUNDS {
+            lanes =
+                self.keccak_f1600_round(ctx, &lanes, round, assign_input || (round != 0)).unwrap();
+        }
+        Ok(lanes)
+    }
+
+    fn create_keccak_f_round_gate(
+        &self,
+        meta: &mut ConstraintSystem<F>,
+        q_enable: impl FnOnce(&mut VirtualCells<'_, F>) -> Expression<F>,
+        round: usize,
+    ) {
         // We closely follow PolygonZero's paper, except that since our field F is >64 bits, we can use 64-bit packed words instead of 32-bit packed words
         // In these comments, `A` will mean bold A in their paper (so A[x,y] means the 64-bit word in lane (x,y)), `a` will mean non-bold A (so a[x,y,z] means the z-th bit of A[x,y])
 
@@ -81,12 +458,10 @@ impl<F: FieldExt> KeccakBitConfig<F> {
         // For fast proving speed, it is better to have all gates use the same set of Rotations
         // thus we will put all constraints into a single gate which accesses Rotation(0..37)
         meta.create_gate("one round of keccak-f[1600]", |meta| {
-            let q = meta.query_selector(self.q_rounds[round]);
-
             let A: Vec<Vec<Expression<F>>> = (0..5)
                 .map(|x| {
                     (0..5)
-                        .map(|y| meta.query_advice(self.values[5 * x + y], Rotation::cur()))
+                        .map(|y| meta.query_advice(self.values[x + 5 * y], Rotation::cur()))
                         .collect_vec()
                 })
                 .collect_vec();
@@ -94,7 +469,7 @@ impl<F: FieldExt> KeccakBitConfig<F> {
             let App: Vec<Vec<Expression<F>>> = (0..5)
                 .map(|x| {
                     (0..5)
-                        .map(|y| meta.query_advice(self.values[25 + 5 * x + y], Rotation::cur()))
+                        .map(|y| meta.query_advice(self.values[25 + x + 5 * y], Rotation::cur()))
                         .collect_vec()
                 })
                 .collect_vec();
@@ -119,7 +494,7 @@ impl<F: FieldExt> KeccakBitConfig<F> {
                                 .map(|column| {
                                     meta.query_advice(
                                         column.clone(),
-                                        Rotation((6 + 5 * x + y) as i32),
+                                        Rotation((6 + x + 5 * y) as i32),
                                     )
                                 })
                                 .collect_vec()
@@ -223,6 +598,7 @@ impl<F: FieldExt> KeccakBitConfig<F> {
             );
 
             dbg!(constraints.len());
+            let q = q_enable(meta);
             constraints.into_iter().map(|expression| q.clone() * expression).collect_vec()
         })
     }
@@ -232,7 +608,7 @@ impl<F: FieldExt> KeccakBitConfig<F> {
         ctx: &mut Context<'_, F>,
         lanes: &[AssignedValue<F>],
         round: usize,
-        mut row_offset: usize,
+        assign_input: bool,
     ) -> Result<Vec<AssignedValue<F>>, Error> {
         assert_eq!(lanes.len(), 25);
         let mut App = vec![vec![Value::unknown(); 5]; 5];
@@ -242,14 +618,13 @@ impl<F: FieldExt> KeccakBitConfig<F> {
         let mut ap = [[[Value::unknown(); 64]; 5]; 5];
         let mut app_00 = [Value::unknown(); 64];
 
-        self.q_rounds[round].enable(&mut ctx.region, row_offset)?;
         // only do actual keccak computation if values are not None
         if lanes.iter().all(|lane| value_to_option(lane.value()).is_some()) {
             let mut A = [[0; 5]; 5];
             for x in 0..5 {
                 for y in 0..5 {
                     A[x][y] =
-                        value_to_option(lanes[5 * x + y].value()).unwrap().get_lower_128() as u64;
+                        value_to_option(lanes[x + 5 * y].value()).unwrap().get_lower_128() as u64;
                 }
             }
             // θ
@@ -303,79 +678,90 @@ impl<F: FieldExt> KeccakBitConfig<F> {
                 bits >> 1
             });
         }
+        if !assign_input {
+            *self.get_row_offset_mut(ctx) -= 1;
+        }
+        let row_offset = self.get_row_offset(ctx);
         let mut output = Vec::with_capacity(25);
+        let phase = ctx.current_phase();
         output.push(ctx.assign_cell(
             Witness(Appp_00),
             self.values[50],
             &self.context_id,
-            50,
+            self.column_offset + 50,
             row_offset,
-            ctx.current_phase(),
+            phase,
         )?);
-        for x in 0..5 {
-            for y in 0..5 {
-                ctx.assign_cell(
-                    Existing(&lanes[5 * x + y]),
-                    self.values[5 * x + y],
+        if assign_input {
+            for x in 0..5 {
+                for y in 0..5 {
+                    ctx.assign_cell(
+                        Existing(&lanes[x + 5 * y]),
+                        self.values[x + 5 * y],
+                        &self.context_id,
+                        self.column_offset + x + 5 * y,
+                        row_offset,
+                        phase,
+                    )?;
+                }
+            }
+        }
+        for y in 0..5 {
+            for x in 0..5 {
+                let assigned = ctx.assign_cell(
+                    Witness(App[x][y].clone()),
+                    self.values[25 + x + 5 * y],
                     &self.context_id,
-                    5 * x + y,
+                    self.column_offset + 25 + x + 5 * y,
                     row_offset,
-                    ctx.current_phase(),
+                    phase,
                 )?;
+                if x + 5 * y != 0 {
+                    output.push(assigned);
+                }
             }
         }
-        for (i, a) in App.into_iter().flatten().into_iter().enumerate() {
-            let assigned = ctx.assign_cell(
-                Witness(a),
-                self.values[25 + i],
-                &self.context_id,
-                25 + i,
-                row_offset,
-                ctx.current_phase(),
-            )?;
-            if i != 0 {
-                output.push(assigned);
-            }
-        }
-        row_offset += 1;
+        *self.get_row_offset_mut(ctx) += 1;
         for c_row in c.into_iter() {
-            self.assign_row_silent(ctx, c_row.into_iter().map(|v| Witness(v)), row_offset)?;
-            row_offset += 1;
+            self.assign_row_silent(ctx, c_row.into_iter().map(|v| Witness(v)))?;
         }
-        for ap_i in ap.into_iter() {
-            for ap_ij in ap_i.into_iter() {
-                self.assign_row_silent(ctx, ap_ij.into_iter().map(|v| Witness(v)), row_offset)?;
-                row_offset += 1;
+        for y in 0..5 {
+            for x in 0..5 {
+                self.assign_row_silent(ctx, ap[x][y].into_iter().map(|v| Witness(v)))?;
             }
         }
         for c_row in cp.into_iter() {
-            self.assign_row_silent(ctx, c_row.into_iter().map(|v| Witness(v)), row_offset)?;
-            row_offset += 1;
+            self.assign_row_silent(ctx, c_row.into_iter().map(|v| Witness(v)))?;
         }
-        self.assign_row_silent(ctx, app_00.into_iter().map(|v| Witness(v)), row_offset)?;
+        self.assign_row_silent(ctx, app_00.into_iter().map(|v| Witness(v)))?;
 
         Ok(output)
     }
 
-    pub fn assign_row_silent<'a, I>(
-        &self,
-        ctx: &mut Context<'_, F>,
-        inputs: I,
-        row_offset: usize,
-    ) -> Result<(), Error>
+    fn get_row_offset(&self, ctx: &Context<'_, F>) -> usize {
+        ctx.advice_rows_get(&self.context_id)[self.column_offset / 64]
+    }
+
+    fn get_row_offset_mut<'a>(&self, ctx: &'a mut Context<'_, F>) -> &'a mut usize {
+        &mut ctx.advice_rows_get_mut(&self.context_id)[self.column_offset / 64]
+    }
+
+    pub fn assign_row_silent<'a, I>(&self, ctx: &mut Context<'_, F>, inputs: I) -> Result<(), Error>
     where
         I: IntoIterator<Item = QuantumCell<'a, F>>,
     {
+        let row_offset = self.get_row_offset(ctx);
         for (i, input) in inputs.into_iter().enumerate() {
             ctx.assign_cell(
                 input,
                 self.values[i],
                 &self.context_id,
-                i,
+                self.column_offset + i,
                 row_offset,
                 ctx.current_phase(),
             )?;
         }
+        *self.get_row_offset_mut(ctx) += 1;
         Ok(())
     }
 
@@ -383,12 +769,12 @@ impl<F: FieldExt> KeccakBitConfig<F> {
         &self,
         ctx: &mut Context<'_, F>,
         inputs: I,
-        row_offset: usize,
     ) -> Result<Vec<AssignedValue<F>>, Error>
     where
         I: IntoIterator<Item = QuantumCell<'a, F>>,
     {
-        Ok(inputs
+        let row_offset = self.get_row_offset(ctx);
+        let output = inputs
             .into_iter()
             .enumerate()
             .map(|(i, input)| {
@@ -396,13 +782,15 @@ impl<F: FieldExt> KeccakBitConfig<F> {
                     input,
                     self.values[i],
                     &self.context_id,
-                    i,
+                    self.column_offset + i,
                     row_offset,
                     ctx.current_phase(),
                 )
                 .unwrap()
             })
-            .collect_vec())
+            .collect_vec();
+        *self.get_row_offset_mut(ctx) += 1;
+        Ok(output)
     }
 }
 

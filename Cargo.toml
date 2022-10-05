@@ -48,10 +48,12 @@ jemallocator = "0.3.2"
 
 [dev-dependencies]
 ark-std = { version = "0.3.0", features = ["print-trace"] }
+num-bigint = { version = "0.4.3" }
 
 [features]
 default = []
 zkevm = ["dep:ecdsa", "dep:ecc", "dep:eth-types", "dep:keccak256", "dep:maingate", "dep:integer", "dep:zkevm-circuits"]
+dev-graph = ["halo2_proofs/dev-graph", "plotters"]
 
 [profile.release]
 debug = true
