@@ -35,7 +35,7 @@ use std::marker::PhantomData;
 use eth_types::Field;
 
 use crate::{
-    keccak::KeccakChip,
+    keccak::{KeccakChip, print_bytes},
     rlp::rlc::RlcTrace,
     rlp::rlp::{RlpArrayChip, RlpArrayTrace},
 };
@@ -118,13 +118,14 @@ impl<F: Field> EthBlockHeaderChip<F> {
         let params_str = std::fs::read_to_string("configs/keccak.config").unwrap();
         let params: crate::keccak::KeccakCircuitParams =
             serde_json::from_str(params_str.as_str()).unwrap();
+	println!("params adv {:?} fix {:?}", params.num_advice, params.num_fixed);
         let keccak = KeccakChip::configure(
             meta,
             "keccak".to_string(),
             1088,
             256,
             params.num_advice,
-            params.num_advice,
+            params.num_fixed,
         );
         Self { rlp, keccak }
     }
@@ -136,6 +137,7 @@ impl<F: Field> EthBlockHeaderChip<F> {
         block_header: &Vec<AssignedValue<F>>,
     ) -> Result<EthBlockHeaderTrace<F>, Error> {
         let max_len = 1 + 2 + 553;
+	// TODO: Change extra_data for Goerli
         let max_field_lens = vec![33, 33, 21, 33, 33, 33, 259, 8, 4, 5, 5, 5, 33, 33, 9, 6];
         let num_fields = 16;
         let rlp_array_trace = self.rlp.decompose_rlp_array(
@@ -146,26 +148,22 @@ impl<F: Field> EthBlockHeaderChip<F> {
             max_len,
             num_fields,
         )?;
-
-        let mut block_bits = Vec::with_capacity(8 * block_header.len());
-        for byte in block_header.iter() {
-            let mut bits = range.num_to_bits(ctx, byte, 8)?;
-            block_bits.append(&mut bits);
-        }
-        println!("block_bits {:?}", block_bits.len());
-        let hash = self.keccak.keccak(ctx, block_bits).unwrap();
+	let hash = self.keccak.keccak_bytes_var_len(
+	    ctx, range, &block_header, rlp_array_trace.array_trace.rlc_len.clone(), 479, 556
+	)?;
         let mut hash_bytes = Vec::with_capacity(32);
         for idx in 0..32 {
             let (_, _, byte) = range.gate.inner_product(
                 ctx,
                 &hash[8 * idx..(8 * (idx + 1))].iter().map(|a| Existing(a)).collect(),
-                &vec![128u64, 64u64, 32u64, 16u64, 8u64, 4u64, 2u64, 1u64]
+                &vec![1, 2, 4, 8, 16, 32, 64, 128]
                     .iter()
                     .map(|a| Constant(F::from(*a)))
                     .collect(),
             )?;
             hash_bytes.push(byte);
         }
+	print_bytes("hash_bytes".to_string(), &hash_bytes);
         let hash_len = range.gate.assign_region_smart(
             ctx,
             vec![Constant(F::from(32))],
@@ -223,12 +221,12 @@ impl<F: Field> Circuit<F> for EthBlockHeaderTestCircuit<F> {
     fn configure(meta: &mut ConstraintSystem<F>) -> Self::Config {
         EthBlockHeaderChip::configure(
             meta,
-            1,
+            5,
             1,
             "gamma".to_string(),
             "rlc".to_string(),
             Vertical,
-            &[1],
+            &[20],
             &[1],
             1,
             11,
@@ -246,7 +244,7 @@ impl<F: Field> Circuit<F> for EthBlockHeaderTestCircuit<F> {
 
         let using_simple_floor_planner = true;
         let mut phase = 0u8;
-        let keccak_inputs = layouter.assign_region(
+        let block_header_trace = layouter.assign_region(
             || "Eth block test",
             |mut region| {
                 phase = phase + 1u8;
@@ -283,8 +281,6 @@ impl<F: Field> Circuit<F> for EthBlockHeaderTestCircuit<F> {
 
                 let block_header_trace =
                     config.decompose_eth_block_header(ctx, &config.rlp.range, &inputs_assigned)?;
-                let keccak_inputs_iter = inputs_assigned.iter().map(|x| x.value().copied());
-                let keccak_inputs: Vec<Vec<Value<F>>> = vec![keccak_inputs_iter.collect()];
 
                 let stats = config.rlp.range.finalize(ctx)?;
                 println!("stats {:?}", stats);
@@ -293,8 +289,9 @@ impl<F: Field> Circuit<F> for EthBlockHeaderTestCircuit<F> {
                     "ctx.rows default {:?}",
                     ctx.advice_rows.get::<String>(&"default".to_string())
                 );
+		println!("ctx.rows keccak {:?}", ctx.advice_rows["keccak"]);
                 println!("ctx.cells keccak {:?}", ctx.advice_rows["keccak"].iter().sum::<usize>());
-                Ok(keccak_inputs)
+                Ok(block_header_trace)
             },
         )?;
         Ok(())
@@ -306,7 +303,6 @@ mod tests {
     
     use ark_std::{end_timer, start_timer};
     use crate::eth::block_header::EthBlockHeaderTestCircuit;
-    use ark_std::{end_timer, start_timer};
     use halo2_proofs::{
         circuit::{AssignedCell, Layouter, SimpleFloorPlanner, Value},
         dev::MockProver,
@@ -327,7 +323,7 @@ mod tests {
 
     #[test]
     pub fn test_mock_eth_block_header() {
-        let k = 14;
+        let k = 16;
         let input_hex = "f90201a0d7519abd494a823b2c9c28908eaf250fe4a6287d747f1cc53a5a193b6533a549a01dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347944675c7e5baafbffbca748158becba61ef3b0a263a025000d51f040ee5c473fed74eda9ace87d55a35187b11bcde6f5176025c395bfa0a5800a6de6d28d7425ff72714af2af769b9f8f9e1baf56fb42f793fbb40fde07a056e1062a3dc63791e8a8496837606b14062da70ee69178cea97d6eeb5047550cb9010000236420014dc00423903000840002280080282100004704018340c0241c20011211400426000f900001d8088000011006020002ce98bc00c0000020c9a02040000688040200348c3a0082b81402002814922008085d008008200802802c4000130000101703124801400400018008a6108002020420144011200070020bc0202681810804221304004800088600300000040463614a000e200201c00611c0008e800b014081608010a0218a0b410010082000428209080200f50260a00840006700100f40a000000400000448301008c4a00341040e343500800d06250020010215200c008018002c88350404000bc5000a8000210c00724a0d0a4010210a448083eee2468401c9c3808343107884633899e780a07980d8d1f15474c9185e4d1cef5f207167735009daad2eb6af6da37ffba213c28800000000000000008501e08469e600000000000000000000000000000000000000000000000000000000000000000000000000000000";
         let input_bytes_pre: Vec<u8> = Vec::from_hex(input_hex).unwrap();
         let input_bytes: Vec<Option<u8>> = input_bytes_pre.iter().map(|x| Some(*x)).collect();
@@ -345,7 +341,7 @@ mod tests {
         let params: crate::keccak::KeccakCircuitParams =
             serde_json::from_str(params_str.as_str()).unwrap();
         let k = params.degree;
-        
+
         let input_hex = "f90201a0d7519abd494a823b2c9c28908eaf250fe4a6287d747f1cc53a5a193b6533a549a01dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347944675c7e5baafbffbca748158becba61ef3b0a263a025000d51f040ee5c473fed74eda9ace87d55a35187b11bcde6f5176025c395bfa0a5800a6de6d28d7425ff72714af2af769b9f8f9e1baf56fb42f793fbb40fde07a056e1062a3dc63791e8a8496837606b14062da70ee69178cea97d6eeb5047550cb9010000236420014dc00423903000840002280080282100004704018340c0241c20011211400426000f900001d8088000011006020002ce98bc00c0000020c9a02040000688040200348c3a0082b81402002814922008085d008008200802802c4000130000101703124801400400018008a6108002020420144011200070020bc0202681810804221304004800088600300000040463614a000e200201c00611c0008e800b014081608010a0218a0b410010082000428209080200f50260a00840006700100f40a000000400000448301008c4a00341040e343500800d06250020010215200c008018002c88350404000bc5000a8000210c00724a0d0a4010210a448083eee2468401c9c3808343107884633899e780a07980d8d1f15474c9185e4d1cef5f207167735009daad2eb6af6da37ffba213c28800000000000000008501e08469e600000000000000000000000000000000000000000000000000000000000000000000000000000000";
         let input_bytes_pre: Vec<u8> = Vec::from_hex(input_hex).unwrap();
         let input_bytes: Vec<Option<u8>> = input_bytes_pre.iter().map(|x| Some(*x)).collect();
@@ -361,10 +357,8 @@ mod tests {
         let pk_time = start_timer!(|| "pk gen");
         let pk = keygen_pk(&params, vk, &circuit)?;
         end_timer!(pk_time);
-        println!("");
-        println!("==============STARTING PROOF GEN===================");
 
-	      let proof_timer = start_timer!(||"proof gen");
+	let proof_timer = start_timer!(||"proof gen");
         let proof_circuit =
             EthBlockHeaderTestCircuit::<Fr> { inputs: input_bytes, _marker: PhantomData };
         let mut transcript = Blake2bWrite::<_, _, Challenge255<_>>::init(vec![]);
