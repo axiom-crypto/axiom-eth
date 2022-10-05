@@ -2,6 +2,7 @@
 // we implement Keccak without lookups using the custom gates found in https://blog.polygon.technology/zk-white-paper-efficient-zk-proofs-for-keccak/
 // keccak python code reference: https://github.com/XKCP/XKCP/blob/master/Standalone/CompactFIPS202/Python/CompactFIPS202.py
 use halo2_base::{
+    gates::range::{RangeConfig},
     utils::value_to_option,
     AssignedValue, Context,
     QuantumCell::{self, Constant, Existing, Witness},
@@ -34,6 +35,25 @@ lazy_static! {
         rc
     };
 }
+
+/*
+#[derive(Clone, Debug)]
+pub struct KeccakPadChip<F: FieldExt> { }
+
+impl<F: FieldExt> KeccakPadChip<F> {
+    pub fn pad_bits(
+	ctx: &mut Context<'_, F>,
+	range: &RangeConfig<F>,
+	inputs: &Vec<AssignedValue<F>>,
+	in_min_len: usize,
+	in_max_len: usize,
+    ) -> Result<Vec<AssignedValue<F>>, Error> {
+	assert_eq!(in_max_len, inputs.len());
+	let out_len = ((in_max_len + 1087) / 1088) * 1088;
+	
+    }
+}
+*/
 
 #[derive(Clone, Debug)]
 pub struct KeccakChip<F: FieldExt> {
