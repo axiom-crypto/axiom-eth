@@ -1,6 +1,9 @@
 use super::*;
 use ark_std::{end_timer, start_timer};
-use halo2_base::{utils::fe_to_biguint, ContextParams};
+use halo2_base::{
+    utils::{fe_to_biguint, value_to_option},
+    ContextParams,
+};
 use halo2_proofs::{
     arithmetic::FieldExt,
     circuit::{Layouter, SimpleFloorPlanner, Value},
@@ -17,7 +20,14 @@ use halo2_proofs::{
     transcript::{TranscriptReadBuffer, TranscriptWriterBuffer},
 };
 use num_bigint::BigUint;
-use std::marker::PhantomData;
+use serde::{Deserialize, Serialize};
+
+#[derive(Serialize, Deserialize)]
+struct KeccakCircuitParams {
+    degree: u32,
+    num_advice: usize,
+    num_fixed: usize,
+}
 
 pub struct KeccakCircuit {
     input: Vec<u64>,
@@ -38,7 +48,16 @@ impl<F: FieldExt> Circuit<F> for KeccakCircuit {
     }
 
     fn configure(meta: &mut ConstraintSystem<F>) -> Self::Config {
-        let config = KeccakChip::configure(meta, "keccak".to_string(), 1088, 256, 64, 1);
+        let params_str = std::fs::read_to_string("configs/keccak.config").unwrap();
+        let params: KeccakCircuitParams = serde_json::from_str(params_str.as_str()).unwrap();
+        let config = KeccakChip::configure(
+            meta,
+            "keccak".to_string(),
+            1088,
+            256,
+            params.num_advice,
+            params.num_advice,
+        );
         println!("blinding factors: {}", meta.blinding_factors());
         config
     }
@@ -60,18 +79,27 @@ impl<F: FieldExt> Circuit<F> for KeccakCircuit {
 
                 let mut aux = Context::new(
                     region,
-                    ContextParams { num_advice: vec![(config.context_id.as_ref().clone(), 1)] },
+                    ContextParams {
+                        num_advice: vec![(config.context_id.as_ref().clone(), config.values.len())],
+                    },
                 );
                 let ctx = &mut aux;
 
-                let input_bits = self
-                    .input
-                    .iter()
-                    .map(|&b| {
-                        assert!(b == 0 || b == 1);
-                        Witness(Value::known(F::from(b)))
-                    })
-                    .collect_vec();
+                let input_bits = config
+                    .assign_region(
+                        ctx,
+                        self.input
+                            .iter()
+                            .map(|&b| {
+                                assert!(b == 0 || b == 1);
+                                Witness(Value::known(F::from(b)))
+                            })
+                            .collect_vec(),
+                        vec![],
+                        vec![],
+                        None,
+                    )
+                    .unwrap();
                 let output_bits = config.keccak(ctx, input_bits)?;
                 if value_to_option(output_bits[0].value()).is_some() {
                     println!(
@@ -84,7 +112,7 @@ impl<F: FieldExt> Circuit<F> for KeccakCircuit {
                             .to_bytes_le()
                     );
                 }
-                let (fixed_rows, total_fixed) =
+                let (_fixed_rows, total_fixed) =
                     ctx.assign_and_constrain_constants(&config.constants)?;
                 let advice_rows = ctx.advice_rows["keccak"].iter();
                 println!(
@@ -109,7 +137,9 @@ impl<F: FieldExt> Circuit<F> for KeccakCircuit {
 
 #[test]
 pub fn test_keccak() {
-    let k = 10;
+    let params_str = std::fs::read_to_string("configs/keccak.config").unwrap();
+    let params: KeccakCircuitParams = serde_json::from_str(params_str.as_str()).unwrap();
+    let k = params.degree;
     let circuit = KeccakCircuit::default();
 
     let prover = MockProver::<Fr>::run(k, &circuit, vec![]).unwrap();
@@ -118,11 +148,12 @@ pub fn test_keccak() {
 
 #[test]
 fn bench_keccak() -> Result<(), Box<dyn std::error::Error>> {
-    const K: u32 = 10;
+    let params_str = std::fs::read_to_string("configs/keccak.config").unwrap();
+    let params: KeccakCircuitParams = serde_json::from_str(params_str.as_str()).unwrap();
 
     let mut rng = rand::thread_rng();
     let params_time = start_timer!(|| "Params construction");
-    let path = format!("./params/kzg_bn254_{}.params", K);
+    let path = format!("./params/kzg_bn254_{}.params", params.degree);
     let fd = std::fs::File::open(path.as_str());
     let params = if let Ok(mut f) = fd {
         println!("Found existing params file. Reading params...");
@@ -130,7 +161,7 @@ fn bench_keccak() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         println!("Creating new params file...");
         let mut f = std::fs::File::create(path.as_str())?;
-        let params = ParamsKZG::<Bn256>::setup(K, &mut rng);
+        let params = ParamsKZG::<Bn256>::setup(params.degree, &mut rng);
         params.write(&mut f).unwrap();
         params
     };
@@ -187,5 +218,7 @@ fn plot_keccak() {
     let root = root.titled("Keccak Layout", ("sans-serif", 60)).unwrap();
 
     let circuit = KeccakCircuit::default();
-    halo2_proofs::dev::CircuitLayout::default().render::<Fr, KeccakCircuit, _>(8, &circuit, &root).unwrap();
+    halo2_proofs::dev::CircuitLayout::default()
+        .render::<Fr, KeccakCircuit, _>(8, &circuit, &root)
+        .unwrap();
 }
