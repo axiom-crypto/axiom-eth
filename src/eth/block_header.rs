@@ -125,7 +125,9 @@ impl<F: Field> EthBlockHeaderChip<F> {
             "keccak".to_string(),
             1088,
             256,
-            &params.num_advice,
+            params.num_advice,
+            params.num_xor,
+            params.num_xorandn,
             params.num_fixed,
         );
         Self { rlp, keccak }
@@ -272,6 +274,7 @@ impl<F: Field> Circuit<F> for EthBlockHeaderTestCircuit<F> {
     ) -> Result<(), Error> {
         let witness_time = start_timer!(|| "witness gen");
         config.rlp.range.load_lookup_table(&mut layouter)?;
+        config.keccak.load_lookup_table(&mut layouter)?;
         let gamma = layouter.get_challenge(config.rlp.rlc.gamma);
         println!("gamma {:?}", gamma);
 
@@ -295,8 +298,9 @@ impl<F: Field> Circuit<F> for EthBlockHeaderTestCircuit<F> {
                         num_advice: vec![
                             ("default".to_string(), config.rlp.range.gate.num_advice),
                             ("rlc".to_string(), config.rlp.rlc.basic_chips.len()),
-                            ("keccak_0".to_string(), config.keccak.values[0].len()),
-                            ("keccak_1".to_string(), config.keccak.values[1].len()),
+                            ("keccak".to_string(), config.keccak.rotation.len()),
+                            ("keccak_xor".to_string(), config.keccak.xor_values.len() / 3),
+                            ("keccak_xorandn".to_string(), config.keccak.xorandn_values.len() / 4),
                         ],
                     },
                 );
