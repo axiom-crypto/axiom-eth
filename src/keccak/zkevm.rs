@@ -9,7 +9,7 @@ use halo2_proofs::{
     circuit::{AssignedCell, Layouter, SimpleFloorPlanner, Value},
     halo2curves::bn256::Fr,
     plonk::{Advice, Challenge, Circuit, Column, ConstraintSystem, Error, Expression,
-	    FirstPhase, Fixed, Instance, SecondPhase, Selector},
+	    FirstPhase, Fixed, Instance, SecondPhase, Selector},};
 use eth_types::Field;
 use keccak256::plain::Keccak;
 use zkevm_circuits::{
@@ -135,6 +135,9 @@ impl<F: Field> KeccakChip<F> {
 	println!("witness {:?}", witness);
 	self.keccak_config.assign(layouter, &witness)?;
 	Ok(())
+	}
+}
+
 #[derive(Clone, Debug)]
 pub struct TestConfig<F> {
     a: Column<Advice>,
@@ -392,4 +395,5 @@ mod tests {
 	println!("verify done");
 	Ok(())
     }
+}
 }
