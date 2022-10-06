@@ -402,6 +402,22 @@ impl<F: Field> RlcChip<F> {
         Ok(acc_vec[acc_vec.len() - 1].clone())
     }
 
+    pub fn constrain_equal(
+	&self,
+	ctx: &mut Context<'_, F>,
+	a: &QuantumCell<F>,
+	b: &QuantumCell<F>,
+    ) -> Result<(), Error> {
+	self.assign_region_rlc(
+	    ctx,
+	    &vec![a.clone(), Constant(F::zero()), Constant(F::zero()), b.clone()],
+	    vec![],
+	    vec![0],
+	    None
+	)?;
+	Ok(())
+    }
+
     // Define the dynamic RLC: RLC(a, l) = \sum_{i = 0}^{l - 1} a_i r^{l - 1 - i}
     // * We have that:
     //     RLC(a || b, l_a + l_b) = RLC(a, l_a) * r^{l_a} + RLC(b, l_b).

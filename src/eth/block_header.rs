@@ -221,12 +221,12 @@ impl<F: Field> EthBlockHeaderChip<F> {
 
 	// check the hash of headers[idx] is in headers[idx + 1]
 	for idx in 0..traces.len() - 1 {
-	    range.gate.assert_equal(
+	    self.rlp.rlc.constrain_equal(
 		ctx,
 		&Existing(&traces[idx].block_hash.rlc_val),
 		&Existing(&traces[idx + 1].parent_hash.rlc_val)
 	    )?;
-	    range.gate.assert_equal(
+	    self.rlp.rlc.constrain_equal(
 		ctx,
 		&Existing(&traces[idx].block_hash.rlc_len),
 		&Existing(&traces[idx + 1].parent_hash.rlc_len)
@@ -444,6 +444,30 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    pub fn test_mock_multi_eth_header() {
+        let params_str = std::fs::read_to_string("configs/block_header_keccak.config").unwrap();	
+        let params: crate::keccak::KeccakCircuitParams =
+            serde_json::from_str(params_str.as_str()).unwrap();
+        let k = params.degree;
+
+	let blocks_str = std::fs::read_to_string("configs/block_chain.config").unwrap();
+	let blocks: Vec<String> = serde_json::from_str(blocks_str.as_str()).unwrap();
+        let mut input_bytes = Vec::new();
+	for block_str in blocks.iter() {
+	    let mut block_vec: Vec<Option<u8>> = Vec::from_hex(block_str).unwrap().iter().map(|y| Some(*y)).collect();
+	    block_vec.append(&mut vec![Some(0u8); 556 - block_vec.len()]);
+	    input_bytes.push(block_vec);
+	}
+
+        let circuit = EthBlockHeaderTestCircuit::<Fr> { inputs: input_bytes, _marker: PhantomData };
+        let prover_try = MockProver::run(k, &circuit, vec![]);
+        let prover = prover_try.unwrap();
+        prover.assert_satisfied();
+        assert_eq!(prover.verify(), Ok(()));
+    }
+	
+    
     #[test]
     pub fn test_multi_eth_header() -> Result<(), Box<dyn std::error::Error>> {
         let params_str = std::fs::read_to_string("configs/block_header_keccak.config").unwrap();	
