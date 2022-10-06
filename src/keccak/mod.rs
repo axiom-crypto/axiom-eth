@@ -974,33 +974,33 @@ impl<F: FieldExt> KeccakChip<F> {
         max_len: usize,
     ) -> Result<Vec<AssignedValue<F>>, Error> {
         let padded_bytes = KeccakChip::pad_bytes(ctx, range, &input, len.clone(), 479, 556)?;
-        let mut padded_bits = Vec::with_capacity(8 * padded_bytes.len());
+        let mut padded_hexs = Vec::with_capacity(8 * padded_bytes.len());
         for byte in padded_bytes.iter() {
             let mut bits = range.num_to_bits(ctx, byte, 8)?;
-            padded_bits.push(bits[0].clone());
-            padded_bits.push(bits[1].clone());
-            padded_bits.push(bits[2].clone());
-            padded_bits.push(bits[3].clone());
-            padded_bits.push(bits[4].clone());
-            padded_bits.push(bits[5].clone());
-            padded_bits.push(bits[6].clone());
-            padded_bits.push(bits[7].clone());
+	    let hex1 = self.bits_to_num(
+		ctx, &vec![bits[0].clone(), bits[1].clone(), bits[2].clone(), bits[3].clone()]
+	    )?;
+	    let hex2 = self.bits_to_num(
+		ctx, &vec![bits[4].clone(), bits[5].clone(), bits[6].clone(), bits[7].clone()]
+	    )?;
+	    padded_hexs.push(hex1);
+	    padded_hexs.push(hex2);
         }
-        let hash_bits =
-            self.keccak_fully_padded_var_len(ctx, range, &padded_bits[..], len, min_len, max_len)?;
-        Ok(hash_bits)
+        let hash_hexs =
+            self.keccak_fully_padded_var_len(ctx, range, &padded_hexs[..], len, min_len, max_len)?;
+        Ok(hash_hexs)
     }
 
     pub fn keccak_fully_padded_var_len(
         &self,
         ctx: &mut Context<'_, F>,
         range: &RangeConfig<F>,
-        input_bits: &[AssignedValue<F>],
+        input_hexs: &[AssignedValue<F>],
         len: AssignedValue<F>,
         min_len: usize,
         max_len: usize,
     ) -> Result<Vec<AssignedValue<F>>, Error> {
-        assert_eq!(input_bits.len() % self.rate_in_limbs, 0);
+        assert_eq!(input_hexs.len() % self.rate_in_limbs, 0);
         let min_rounds = (min_len + 1 + 135) / 136;
         let max_rounds = (max_len + 1 + 135) / 136;
 
@@ -1008,19 +1008,19 @@ impl<F: FieldExt> KeccakChip<F> {
         let mut state_bits: Option<Vec<AssignedValue<F>>> = None;
         let mut input_offset = 0;
         let mut idx = 0;
-        while input_offset < input_bits.len() {
-            let block_size = std::cmp::min(input_bits.len() - input_offset, self.rate_in_limbs);
+        while input_offset < input_hexs.len() {
+            let block_size = std::cmp::min(input_hexs.len() - input_offset, self.rate_in_limbs);
             state_bits = if let Some(mut state_bits) = state_bits {
                 for i in 0..block_size {
                     state_bits[i] =
-                        self.xor(ctx, &[&state_bits[i], &input_bits[i + input_offset]]).unwrap();
+                        self.xor(ctx, &[&state_bits[i], &input_hexs[i + input_offset]]).unwrap();
                 }
                 Some(state_bits)
             } else {
                 Some(
                     [
-                        &input_bits[0..block_size],
-                        &(block_size..1600).map(|_| self.load_zero(ctx)).collect_vec(),
+                        &input_hexs[0..block_size],
+                        &(block_size..25 * LIMBS_PER_LANE).map(|_| self.load_zero(ctx)).collect_vec(),
                     ]
                     .concat(),
                 )
