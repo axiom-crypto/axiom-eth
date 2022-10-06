@@ -446,7 +446,7 @@ mod tests {
 
     #[test]
     pub fn test_mock_multi_eth_header() {
-        let params_str = std::fs::read_to_string("configs/block_header_keccak.config").unwrap();	
+        let params_str = std::fs::read_to_string("configs/keccak.config").unwrap();	
         let params: crate::keccak::KeccakCircuitParams =
             serde_json::from_str(params_str.as_str()).unwrap();
         let k = params.degree;
@@ -469,7 +469,7 @@ mod tests {
     
     #[test]
     pub fn test_multi_eth_header() -> Result<(), Box<dyn std::error::Error>> {
-        let params_str = std::fs::read_to_string("configs/block_header_keccak.config").unwrap();	
+        let params_str = std::fs::read_to_string("configs/keccak.config").unwrap();	
         let params: crate::keccak::KeccakCircuitParams =
             serde_json::from_str(params_str.as_str()).unwrap();
         let k = params.degree;
