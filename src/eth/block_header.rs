@@ -253,12 +253,12 @@ impl<F: Field> Circuit<F> for EthBlockHeaderTestCircuit<F> {
     fn configure(meta: &mut ConstraintSystem<F>) -> Self::Config {
         EthBlockHeaderChip::configure(
             meta,
-            5,
+            1,
             1,
             "gamma".to_string(),
             "rlc".to_string(),
             Vertical,
-            &[20],
+            &[3],
             &[1],
             1,
             11,
@@ -466,7 +466,6 @@ mod tests {
         prover.assert_satisfied();
         assert_eq!(prover.verify(), Ok(()));
     }
-	
     
     #[test]
     pub fn test_multi_eth_header() -> Result<(), Box<dyn std::error::Error>> {
