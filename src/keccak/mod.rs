@@ -1063,7 +1063,17 @@ impl<F: FieldExt> KeccakChip<F> {
             )?;
         }
 
-        Ok(out)
+	let mut hash_bytes = Vec::with_capacity(32);
+        for idx in 0..32 {
+            let (_, _, byte) = range.gate.inner_product(
+                ctx,
+                &out[2 * idx..(2 * (idx + 1))].iter().map(|a| Existing(a)).collect(),
+                &vec![1, 16].iter().map(|a| Constant(F::from(*a))).collect(),
+            )?;
+            hash_bytes.push(byte);
+        }
+
+        Ok(hash_bytes)
     }
 }
 

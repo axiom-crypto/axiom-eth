@@ -151,7 +151,7 @@ impl<F: Field> EthBlockHeaderChip<F> {
             max_len,
             num_fields,
         )?;
-        let hash = self.keccak.keccak_bytes_var_len(
+        let hash_bytes = self.keccak.keccak_bytes_var_len(
             ctx,
             range,
             &block_header,
@@ -159,26 +159,12 @@ impl<F: Field> EthBlockHeaderChip<F> {
             479,
             556,
         )?;
-        let mut hash_bytes = Vec::with_capacity(32);
-        for idx in 0..32 {
-            let (_, _, byte) = range.gate.inner_product(
-                ctx,
-                &hash[2 * idx..(2 * (idx + 1))].iter().map(|a| Existing(a)).collect(),
-                &vec![1, 16].iter().map(|a| Constant(F::from(*a))).collect(),
-            )?;
-            hash_bytes.push(byte);
-        }
-        print_bytes("hash_bytes".to_string(), &hash_bytes);
         let hash_len = range.gate.assign_region_smart(
-            ctx,
-            vec![Constant(F::from(32))],
-            vec![],
-            vec![],
-            vec![],
+            ctx, vec![Constant(F::from(32))], vec![], vec![], vec![],
         )?;
         let block_hash =
             self.rlp.rlc.compute_rlc(ctx, range, &hash_bytes, hash_len[0].clone(), 32)?;
-
+	
         let block_header_trace = EthBlockHeaderTrace {
             rlp_trace: rlp_array_trace.array_trace.clone(),
             parent_hash: rlp_array_trace.field_traces[0].clone(),
