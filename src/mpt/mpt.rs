@@ -1,4 +1,5 @@
 use std::{cmp::max, marker::PhantomData};
+use hex::FromHex;
 use num_bigint::BigUint;
 use num_traits::cast::ToPrimitive;
 use eth_types::Field;
@@ -6,7 +7,8 @@ use eth_types::Field;
 use ark_std::{end_timer, start_timer};
 use halo2_base::{
     gates::{
-        range::{RangeConfig, RangeStrategy}, GateInstructions, RangeInstructions,
+        range::{RangeConfig, RangeStrategy, RangeStrategy::Vertical},
+	GateInstructions, RangeInstructions,
     },
     utils::fe_to_biguint,
     AssignedValue, Context, ContextParams, QuantumCell,
@@ -491,9 +493,15 @@ impl<F: Field> MPTChip<F> {
 
 	let ext_max_byte_len = Self::ext_max_byte_len(key_byte_len);
 	let branch_max_byte_len = Self::branch_max_byte_len();
-	// TODO: init with valid dummy_ext and branch
-	let dummy_ext: Vec<QuantumCell<F>> = Vec::new();
-	let dummy_branch: Vec<QuantumCell<F>> = Vec::new();
+	
+	let dummy_ext_str = "e21ba00000000000000000000000000000000000000000000000000000000000000000";
+	let dummy_ext_bytes = Vec::from_hex(dummy_ext_str).unwrap();
+	let dummy_branch_str = "f1808080808080808080808080808080a0000000000000000000000000000000000000000000000000000000000000000080";
+	let dummy_branch_bytes = Vec::from_hex(dummy_branch_str).unwrap();
+	let dummy_ext: Vec<QuantumCell<F>> =
+	    dummy_ext_bytes.iter().map(|b| Constant(F::from(*b as u64))).collect();
+	let dummy_branch: Vec<QuantumCell<F>> =
+	    dummy_branch_bytes.iter().map(|b| Constant(F::from(*b as u64))).collect();
 	
 	/* Validate inputs, check that:
 	   * all inputs are bytes	
@@ -769,7 +777,9 @@ impl<F: Field> MPTChip<F> {
 
 #[cfg(test)]
 mod tests {
+    
     use ark_std::{end_timer, start_timer};
+    use super::*;	
     use halo2_proofs::{
         circuit::{AssignedCell, Layouter, SimpleFloorPlanner, Value},
         dev::MockProver,
@@ -786,8 +796,208 @@ mod tests {
         },
     };
 
-    #[test]
-    pub fn test_mock_leaf_check() {
+    #[derive(Clone, Debug, Default)]
+    pub struct MPTCircuit<F> {
+	pub key_bytes: Vec<Option<u8>>,
+	pub value_bytes: Vec<Option<u8>>,
+	pub value_byte_len: Option<usize>,
+	pub root_hash_bytes: Vec<Option<u8>>,
 
+	// proof specification
+	pub leaf_bytes: Vec<Option<u8>>,
+	pub nodes: Vec<Vec<Option<u8>>>,
+	pub node_types: Vec<Option<u8>>,     // index 0 = root; 0 = branch, 1 = extension
+	pub depth: Option<usize>,
+
+	pub key_frag_hexs: Vec<Vec<Option<u8>>>,
+	// hex_len = 2 * byte_len + is_odd - 2
+	// if nibble for branch: byte_len = is_odd = 1
+	pub key_frag_is_odd: Vec<Option<u8>>,
+	pub key_frag_byte_len: Vec<Option<usize>>,
+	
+	pub key_byte_len: usize,
+	pub value_max_byte_len: usize,
+	pub max_depth: usize,
+	_marker: PhantomData<F>,
+    }
+
+    impl<F: Field> Circuit<F> for MPTCircuit<F> {
+	type Config = MPTChip<F>;
+	type FloorPlanner = SimpleFloorPlanner;
+
+	fn without_witnesses(&self) -> Self {
+	    Self::default()
+	}
+
+	fn configure(meta: &mut ConstraintSystem<F>) -> Self::Config {
+	    MPTChip::configure(
+		meta,
+		1,
+		1,
+		"gamma".to_string(),
+		"rlc".to_string(),
+		Vertical,
+		&[10],
+		&mut [1],
+		1,
+		10
+	    )
+	}
+
+	fn synthesize(
+            &self,
+            config: Self::Config,
+            mut layouter: impl Layouter<F>,
+	) -> Result<(), Error> {
+	    let witness_time = start_timer!(|| "witness gen");
+            config.rlp.range.load_lookup_table(&mut layouter)?;
+            config.keccak.load_lookup_table(&mut layouter)?;
+            let gamma = layouter.get_challenge(config.rlp.rlc.gamma);
+            println!("gamma {:?}", gamma);
+
+            let using_simple_floor_planner = true;
+            let mut first_pass = true;
+            let mut phase = 0u8;
+            layouter.assign_region(
+		|| "MPT Fixed Test",
+		|region| {
+                    if using_simple_floor_planner && first_pass {
+			first_pass = false;
+			return Ok(());
+                    }
+                    phase = phase + 1u8;
+
+                    println!("phase {:?}", phase);
+                    let mut aux = Context::new(
+			region,
+			ContextParams {
+                            num_advice: vec![
+				("default".to_string(), config.rlp.range.gate.num_advice),
+				("rlc".to_string(), config.rlp.rlc.basic_chips.len()),
+				("keccak".to_string(), config.keccak.rotation.len()),
+				("keccak_xor".to_string(), config.keccak.xor_values.len() / 3),
+				("keccak_xorandn".to_string(), config.keccak.xorandn_values.len() / 4),
+                            ],
+			},
+                    );
+                    let ctx = &mut aux;
+                    ctx.challenge.insert("gamma".to_string(), gamma);
+
+		    let key_bytes = config.rlp.range.gate.assign_region_smart(
+			ctx,
+			self.key_bytes.iter().map(|x| Witness(x.map(|v| Value::known(F::from(v as u64))).unwrap_or(Value::unknown()))).collect(),
+			vec![], vec![], vec![]
+		    )?;
+		    let value_bytes = config.rlp.range.gate.assign_region_smart(
+			ctx,
+			self.value_bytes.iter().map(|x| Witness(x.map(|v| Value::known(F::from(v as u64))).unwrap_or(Value::unknown()))).collect(),
+			vec![], vec![], vec![]
+		    )?;
+		    let value_byte_len_pre = config.rlp.range.gate.assign_region_smart(
+			ctx, vec![Witness(self.value_byte_len.map(|v| Value::known(F::from(v as u64))).unwrap_or(Value::unknown()))], vec![], vec![], vec![]
+		    )?;
+		    let value_byte_len = value_byte_len_pre[0].clone();
+		    let root_hash_bytes = config.rlp.range.gate.assign_region_smart(
+			ctx,
+			self.root_hash_bytes.iter().map(|x| Witness(x.map(|v| Value::known(F::from(v as u64))).unwrap_or(Value::unknown()))).collect(),
+			vec![], vec![], vec![]
+		    )?;
+		    let leaf_bytes = config.rlp.range.gate.assign_region_smart(
+			ctx,
+			self.leaf_bytes.iter().map(|x| Witness(x.map(|v| Value::known(F::from(v as u64))).unwrap_or(Value::unknown()))).collect(),
+			vec![], vec![], vec![]
+		    )?;
+		    let mut nodes = Vec::new();
+		    for node in self.nodes.iter() {
+			let node_pre = config.rlp.range.gate.assign_region_smart(
+			    ctx,
+			    node.iter().map(|x| Witness(x.map(|v| Value::known(F::from(v as u64))).unwrap_or(Value::unknown()))).collect(),
+			    vec![], vec![], vec![]
+			)?;
+			nodes.push(node_pre);
+		    }
+		    let node_types = config.rlp.range.gate.assign_region_smart(
+			ctx,
+			self.node_types.iter().map(|x| Witness(x.map(|v| Value::known(F::from(v as u64))).unwrap_or(Value::unknown()))).collect(),
+			vec![], vec![], vec![]
+		    )?;
+		    let depth_pre = config.rlp.range.gate.assign_region_smart(
+			ctx, vec![Witness(self.depth.map(|v| Value::known(F::from(v as u64))).unwrap_or(Value::unknown()))], vec![], vec![], vec![]
+		    )?;
+		    let depth = depth_pre[0].clone();
+		    let mut key_frag_hexs = Vec::new();
+		    for key_frag_hex in self.key_frag_hexs.iter() {
+			let key_frag_hex_pre = config.rlp.range.gate.assign_region_smart(
+			    ctx,
+			    key_frag_hex.iter().map(|x| Witness(x.map(|v| Value::known(F::from(v as u64))).unwrap_or(Value::unknown()))).collect(),
+			    vec![], vec![], vec![]
+			)?;
+			key_frag_hexs.push(key_frag_hex_pre);
+		    }
+		    let key_frag_is_odd = config.rlp.range.gate.assign_region_smart(
+			ctx,
+			self.key_frag_is_odd.iter().map(|x| Witness(x.map(|v| Value::known(F::from(v as u64))).unwrap_or(Value::unknown()))).collect(),
+			vec![], vec![], vec![]
+		    )?;
+		    let key_frag_byte_len = config.rlp.range.gate.assign_region_smart(
+			ctx,
+			self.key_frag_byte_len.iter().map(|x| Witness(x.map(|v| Value::known(F::from(v as u64))).unwrap_or(Value::unknown()))).collect(),
+			vec![], vec![], vec![]
+		    )?;
+		    
+		    let mpt_proof = MPTFixedKeyProof {
+			key_bytes,
+			value_bytes,
+			value_byte_len,
+			root_hash_bytes,
+			leaf_bytes,
+			nodes,
+			node_types,
+			depth,			
+			key_frag_hexs,
+			key_frag_is_odd,
+			key_frag_byte_len,			
+			key_byte_len: self.key_byte_len,
+			value_max_byte_len: self.value_max_byte_len,
+			max_depth: self.max_depth
+		    };
+		    let res = config.parse_mpt_inclusion_fixed_key(
+			ctx,
+			&config.rlp.range,
+			&mpt_proof,
+			self.key_byte_len,
+			self.value_max_byte_len,
+			self.max_depth,
+		    )?;
+		    
+                    let stats = config.rlp.range.finalize(ctx)?;
+                    println!("stats {:?}", stats);
+                    println!("ctx.rows rlc {:?}", ctx.advice_rows.get::<String>(&"rlc".to_string()));
+                    println!(
+			"ctx.rows default {:?}",
+			ctx.advice_rows.get::<String>(&"default".to_string())
+                    );
+                    println!("ctx.rows keccak_xor {:?}", ctx.advice_rows["keccak_xor"]);
+                    println!("ctx.rows keccak_xorandn {:?}", ctx.advice_rows["keccak_xorandn"]);
+                    println!(
+			"ctx.cells keccak_xor {:?}",
+			ctx.advice_rows["keccak_xor"].iter().sum::<usize>()
+                    );
+                    println!(
+			"ctx.cells keccak_xorandn {:?}",
+			ctx.advice_rows["keccak_xorandn"].iter().sum::<usize>()
+                    );
+                    Ok(())
+		},
+            )?;
+            end_timer!(witness_time);
+            Ok(())	    
+	}
+    }
+    
+
+    #[test]
+    pub fn test_mock_mpt_inclusion_fixed() {
+	
     }
 }
