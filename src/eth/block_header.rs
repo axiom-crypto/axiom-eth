@@ -37,7 +37,7 @@ use eth_types::Field;
 
 use crate::{
     keccak::{print_bytes, KeccakChip},
-    rlp::rlc::RlcTrace,
+    rlp::rlc::{RlcFixedTrace, RlcTrace},
     rlp::rlp::{RlpArrayChip, RlpArrayTrace},
 };
 
@@ -77,7 +77,7 @@ pub struct EthBlockHeaderTrace<F: Field> {
     nonce: RlcTrace<F>,
     basefee: RlcTrace<F>,
 
-    block_hash: RlcTrace<F>,
+    block_hash: RlcFixedTrace<F>,
 
     prefix: AssignedValue<F>,
     len_trace: RlcTrace<F>,
@@ -159,11 +159,8 @@ impl<F: Field> EthBlockHeaderChip<F> {
             479,
             556,
         )?;
-        let hash_len = range.gate.assign_region_smart(
-            ctx, vec![Constant(F::from(32))], vec![], vec![], vec![],
-        )?;
         let block_hash =
-            self.rlp.rlc.compute_rlc(ctx, range, &hash_bytes, hash_len[0].clone(), 32)?;
+            self.rlp.rlc.compute_rlc_fixed_len(ctx, range, &hash_bytes, 32)?;
 	
         let block_header_trace = EthBlockHeaderTrace {
             rlp_trace: rlp_array_trace.array_trace.clone(),
@@ -216,7 +213,7 @@ impl<F: Field> EthBlockHeaderChip<F> {
 	    )?;
 	    self.rlp.rlc.constrain_equal(
 		ctx,
-		&Existing(&traces[idx].block_hash.rlc_len),
+		&Constant(F::from(32)),
 		&Existing(&traces[idx + 1].parent_hash.rlc_len)
 	    )?;
 	}

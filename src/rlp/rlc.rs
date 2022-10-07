@@ -55,6 +55,12 @@ pub struct RlcTrace<F: Field> {
 }
 
 #[derive(Clone, Debug)]
+pub struct RlcFixedTrace<F: Field> {
+    pub rlc_val: AssignedValue<F>,
+    pub len: usize,
+}
+
+#[derive(Clone, Debug)]
 pub struct BasicRlcChip<F: Field> {
     pub val: Column<Advice>,
     pub rlc: Column<Advice>,
@@ -376,6 +382,43 @@ impl<F: Field> RlcChip<F> {
         Ok(rlc_trace)
     }
 
+    pub fn compute_rlc_fixed_len(
+        &self,
+        ctx: &mut Context<'_, F>,
+        range: &RangeConfig<F>,
+        input: &Vec<AssignedValue<F>>,
+        len: usize,
+    ) -> Result<RlcFixedTrace<F>, Error> {
+        assert!(input.len() == len);
+        let gamma = ctx.challenge_get(&self.challenge_id);
+
+        let mut running_rlc = Value::known(F::from(0));
+        let mut rlc_vals = Vec::new();
+        for (idx, val) in input.iter().enumerate() {
+            running_rlc = running_rlc * gamma + val.value();
+            rlc_vals.push(Witness(running_rlc));
+        }
+
+        let (rlc_cells, val_cells) = self.assign_region_rlc_and_val(
+            ctx,
+            &rlc_vals,
+            &input.iter().map(|x| Existing(&x)).collect(),
+            (1..input.len()).collect(),
+            vec![],
+            None,
+        )?;
+
+        if input.len() > 0 {
+            ctx.region
+                .constrain_equal(rlc_cells[0].cell(), val_cells[0].cell())?;
+        }
+
+        let rlc_trace = RlcFixedTrace {
+	    rlc_val: rlc_cells[rlc_cells.len() - 1].clone(), len
+	};
+        Ok(rlc_trace)
+    }
+    
     pub fn select_from_cells(
         &self,
         ctx: &mut Context<'_, F>,
@@ -416,6 +459,196 @@ impl<F: Field> RlcChip<F> {
 	    None
 	)?;
 	Ok(())
+    }
+
+    // returns a * sel + b * (1 - sel)
+    pub fn select(
+	&self,
+	ctx: &mut Context<'_, F>,
+	a: &QuantumCell<F>,
+	b: &QuantumCell<F>,
+	sel: &QuantumCell<F>,
+    ) -> Result<AssignedValue<F>, Error> {
+        let diff_val = a.value().zip(b.value()).map(|(av, bv)| (*av) - (*bv));
+        let out_val = a
+            .value()
+            .zip(b.value())
+            .zip(sel.value())
+            .map(|((av, bv), sv)| (*av) * (*sv) + (*bv) * (F::from(1) - *sv));
+	let cells = vec![
+            QuantumCell::Witness(diff_val),
+            QuantumCell::Constant(F::from(1)),
+            b.clone(),
+            a.clone(),
+            b.clone(),
+            sel.clone(),
+            QuantumCell::Witness(diff_val),
+            QuantumCell::Witness(out_val),
+        ];
+	// | a - b | 1 | b | a | b | sel | a - b | out |
+	let assigned = self.assign_region_rlc(ctx, &cells, vec![], vec![0, 4], None)?;
+	ctx.region.constrain_equal(assigned[0].cell(), assigned[6].cell())?;
+	Ok(assigned[7].clone())
+    }
+
+    // | out | a | inv | 1 | 0 | a | out | 0
+    fn is_zero(
+        &self,
+        ctx: &mut Context<'_, F>,
+        a: &QuantumCell<F>,
+    ) -> Result<AssignedValue<F>, Error> {
+        let is_zero =
+            a.value().map(|x| if (*x).is_zero_vartime() { F::from(1) } else { F::from(0) });
+        let inv =
+            a.value().map(|x| if *x == F::from(0) { F::from(1) } else { (*x).invert().unwrap() });
+
+        let cells = vec![
+            Witness(is_zero),
+            a.clone(),
+            Witness(inv),
+            Constant(F::from(1)),
+            Constant(F::from(0)),
+            a.clone(),
+            Witness(is_zero),
+            Constant(F::from(0)),
+        ];
+        let assigned = self.assign_region_rlc(ctx, &cells, vec![], vec![0, 4], None)?;
+	ctx.region.constrain_equal(assigned[0].cell(), assigned[6].cell())?;
+        Ok(assigned[0].clone())
+    }
+
+    pub fn is_equal(
+        &self,
+        ctx: &mut Context<'_, F>,
+        a: &QuantumCell<F>,
+        b: &QuantumCell<F>,
+    ) -> Result<AssignedValue<F>, Error> {
+        let cells = vec![
+            Witness(a.value().zip(b.value()).map(|(av, bv)| *av - *bv)),
+            Constant(F::from(1)),
+            b.clone(),
+            a.clone(),
+        ];
+        let assigned = self.assign_region_rlc(ctx, &cells, vec![], vec![0], None)?;
+
+        self.is_zero(ctx, &Existing(&assigned[0]))
+    }
+
+    pub fn select_from_idx(
+        &self,
+        ctx: &mut Context<'_, F>,
+        cells: &Vec<QuantumCell<F>>,
+        idx: &QuantumCell<F>,
+    ) -> Result<AssignedValue<F>, Error> {
+        let ind = self.idx_to_indicator(ctx, idx, cells.len())?;
+        let (_, _, res) = self.inner_product(
+            ctx,
+            cells,
+            &ind.iter().map(|x| QuantumCell::Existing(&x)).collect(),
+        )?;
+        Ok(res)
+    }
+
+    // returns vec with vec.len() == len such that:
+    //     vec[i] == 1{i == idx}
+    fn idx_to_indicator(
+        &self,
+        ctx: &mut Context<'_, F>,
+        idx: &QuantumCell<F>,
+        len: usize,
+    ) -> Result<Vec<AssignedValue<F>>, Error> {
+        let ind = self.assign_region_rlc(
+            ctx,
+            &(0..len)
+                .map(|i| {
+                    Witness(idx.value().map(|x| {
+                        if F::from(i as u64) == *x {
+                            F::from(1)
+                        } else {
+                            F::from(0)
+                        }
+                    }))
+                })
+                .collect(),
+            vec![],
+            vec![],
+	    None
+        )?;
+
+        // check ind[i] * (i - idx) == 0
+        for i in 0..len {
+            self.assign_region_rlc(
+                ctx,
+                &vec![
+                    Constant(F::from(0)),
+                    Existing(&ind[i]),
+                    idx.clone(),
+                    Witness(ind[i].value().zip(idx.value()).map(|(a, b)| (*a) * (*b))),
+                    Constant(-F::from(i as u64)),
+                    Existing(&ind[i]),
+                    Constant(F::from(0)),
+                ],
+		vec![],
+                vec![0, 3],
+		None
+            )?;
+        }
+        Ok(ind)
+    }
+
+    // Takes two vectors of `QuantumCell` and constrains a witness output to the inner product of `<vec_a, vec_b>`
+    // outputs are vec<(a_cell, a_relative_index)>, vec<(b_cell, b_relative_index)>, out_cell
+    fn inner_product(
+        &self,
+        ctx: &mut Context<'_, F>,
+        vec_a: &Vec<QuantumCell<F>>,
+        vec_b: &Vec<QuantumCell<F>>,
+    ) -> Result<
+        (Option<Vec<AssignedValue<F>>>, Option<Vec<AssignedValue<F>>>, AssignedValue<F>),
+        Error,
+    > {
+        assert_eq!(vec_a.len(), vec_b.len());
+        // don't try to call this function with empty inputs!
+        if vec_a.len() == 0 {
+            return Err(Error::Synthesis);
+        }
+
+        let mut cells: Vec<QuantumCell<F>> = Vec::with_capacity(3 * vec_a.len() + 1);
+        let mut start_id = 0;
+        let mut sum = Value::known(F::zero());
+        cells.push(Constant(F::from(0)));
+        if matches!(vec_b[0], Constant(c) if c == F::one()) {
+            cells[0] = vec_a[0].clone();
+            sum = vec_a[0].value().copied();
+            start_id = 1;
+        }
+
+        for (a, b) in vec_a[start_id..].iter().zip(vec_b[start_id..].iter()) {
+            sum = sum.zip(a.value()).zip(b.value()).map(|((sum, &a), &b)| sum + a * b);
+
+            cells.push(a.clone());
+            cells.push(b.clone());
+            cells.push(Witness(sum));
+        }
+        let mut gate_offsets = Vec::with_capacity(vec_a.len());
+        for i in 0..(vec_a.len() - start_id) {
+            gate_offsets.push(3 * i);
+        }
+        let assignments = self.assign_region_rlc(
+            ctx, &cells, vec![], gate_offsets, None,
+        )?;
+        let mut a_assigned = Vec::with_capacity(vec_a.len());
+        let mut b_assigned = Vec::with_capacity(vec_a.len());
+        if start_id == 1 {
+            a_assigned.push(assignments[0].clone());
+        }
+        for i in 0..(vec_a.len() - start_id) {
+            a_assigned.push(assignments[3 * i + 1].clone());
+            b_assigned.push(assignments[3 * i + 2].clone());
+        }
+        let b_assigned = if start_id == 1 { None } else { Some(b_assigned) };
+
+        Ok((Some(a_assigned), b_assigned, assignments.last().unwrap().clone()))
     }
 
     // Define the dynamic RLC: RLC(a, l) = \sum_{i = 0}^{l - 1} a_i r^{l - 1 - i}
@@ -498,6 +731,104 @@ impl<F: Field> RlcChip<F> {
         Ok(())
     }
 
+    // assumes 0 < num_frags <= max_num_frags
+    pub fn constrain_rlc_concat_var(
+        &self,
+        ctx: &mut Context<'_, F>,
+        range: &RangeConfig<F>,
+        rlc_and_len_inputs: &Vec<(AssignedValue<F>, AssignedValue<F>)>,
+        max_lens: &Vec<usize>,
+        concat: (AssignedValue<F>, AssignedValue<F>),
+        max_len: usize,
+	num_frags: AssignedValue<F>,
+	max_num_frags: usize,
+        rlc_cache: &Vec<AssignedValue<F>>,
+    ) -> Result<(), Error> {
+        assert!(rlc_cache.len() >= log2(max_len));
+        assert!(rlc_cache.len() >= log2(*max_lens.iter().max().unwrap()));
+	assert_eq!(rlc_and_len_inputs.len(), max_num_frags);
+
+	let mut cells = Vec::with_capacity(3 * max_num_frags + 1);
+	let mut running_sum = Value::known(F::zero());
+	let mut gate_offsets = Vec::new();
+	for idx in 0..max_num_frags {
+	    if idx == 0 {
+		cells.push(Existing(&rlc_and_len_inputs[0].1));
+		running_sum = running_sum + rlc_and_len_inputs[0].1.value();
+	    } else {
+		cells.push(Existing(&rlc_and_len_inputs[idx].1));
+		cells.push(Constant(F::one()));
+		running_sum = running_sum + rlc_and_len_inputs[idx].1.value();
+		cells.push(Witness(running_sum));		
+	    }
+	    gate_offsets.push(3 * idx);
+	}
+	let assigned = range.gate.assign_region_smart(
+	    ctx, cells, gate_offsets, vec![], vec![]
+	)?;
+	let total_len = range.gate.select_from_idx(
+	    ctx,
+	    &(0..max_num_frags).map(|idx| Existing(&assigned[3 * idx])).collect(),
+	    &Existing(&num_frags)
+	)?;
+        range.gate.assert_equal(ctx, &Existing(&total_len), &Existing(&concat.1))?;
+
+        let mut gamma_pows = Vec::new();
+        for (idx, (rlc, len)) in rlc_and_len_inputs.iter().enumerate() {
+            let gamma_pow =
+                self.rlc_pow(ctx, range, len.clone(), max(1, log2(max_lens[idx])), &rlc_cache)?;
+            gamma_pows.push(gamma_pow);
+        }
+
+        let mut inputs = Vec::new();
+        let mut intermed = Vec::new();
+        let mut gate_offsets = Vec::new();
+        for idx in 0..rlc_and_len_inputs.len() {
+            if idx == 0 {
+                inputs.push(Existing(&rlc_and_len_inputs[idx].0));
+                intermed.push(rlc_and_len_inputs[idx].0.value().copied());
+            } else {
+                inputs.push(Existing(&rlc_and_len_inputs[idx].0));
+                inputs.push(Witness(intermed[intermed.len() - 1]));
+                inputs.push(Existing(&gamma_pows[idx]));
+                inputs.push(Witness(
+                    rlc_and_len_inputs[idx].0.value().copied()
+                        + gamma_pows[idx].value().copied() * intermed[intermed.len() - 1],
+                ));
+                intermed.push(
+                    rlc_and_len_inputs[idx].0.value().copied()
+                        + gamma_pows[idx].value().copied() * intermed[intermed.len() - 1],
+                );
+
+                gate_offsets.push(4 * idx - 3);
+            }
+        }
+        let rlc_concat = self.assign_region_rlc(ctx, &inputs, vec![], gate_offsets, None)?;
+        for idx in 0..(rlc_and_len_inputs.len() - 1) {
+            ctx.region.constrain_equal(
+                rlc_concat[4 * idx].cell(),
+                rlc_concat[4 * idx + 2].cell(),
+            )?;
+        }
+
+	let concat_select = self.select_from_idx(
+	    ctx,
+	    &(0..max_num_frags).map(|idx| Existing(&rlc_concat[4 * idx])).collect(),
+	    &Existing(&num_frags)
+	)?;
+	let concat_check = self.assign_region_rlc(
+	    ctx,
+	    &vec![Existing(&concat_select),
+		  Constant(F::zero()),
+		  Constant(F::zero()),
+		  Existing(&concat.0)],
+	    vec![],
+	    vec![0],
+	    None
+	)?;
+        Ok(())
+    }
+    
     pub fn load_rlc_cache(
         &self,
         ctx: &mut Context<'_, F>,
@@ -530,12 +861,7 @@ impl<F: Field> RlcChip<F> {
         }
 
         let cache = self.assign_region_rlc_and_val_idx(
-            ctx,
-            &rlc_inputs,
-            &val_inputs,
-            rlc_offsets,
-            gate_offsets,
-            None,
+            ctx, &rlc_inputs, &val_inputs, rlc_offsets, gate_offsets, None,
         )?;
         for idx in 0..(cache_bits - 1) {
             ctx.region.constrain_equal(cache.0[4 * idx + 1].cell(), cache.0[4 * idx + 3].cell())?;

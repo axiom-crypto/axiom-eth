@@ -12,6 +12,7 @@ use halo2_proofs::{
     poly::Rotation,
 };
 use hex::encode;
+use num_bigint::BigUint;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
@@ -564,6 +565,27 @@ impl<F: FieldExt> KeccakChip<F> {
         Ok(assignments)
     }
 
+    // maps 16 * x + y to (x, y)
+    pub fn byte_to_hex(
+	&self,
+	ctx: &mut Context<'_, F>,
+	range: &RangeConfig<F>,
+	a: &AssignedValue<F>,
+    ) -> Result<(AssignedValue<F>, AssignedValue<F>), Error> {
+	let assigned = range.gate.assign_region_smart(
+	    ctx,
+	    vec![Witness(a.value().map(|aa| F::from(u64::try_from(fe_to_biguint(aa) % BigUint::from(16u64)).unwrap()))),
+		 Constant(F::from(16)),
+		 Witness(a.value().map(|aa| F::from(u64::try_from(fe_to_biguint(aa) / BigUint::from(16u64)).unwrap()))),
+		 Existing(a)],
+	    vec![0],
+	    vec![],
+	    vec![]
+	)?;
+	let xor = self.xor(ctx, &vec![&assigned[0], &assigned[2]])?;
+	Ok((assigned[0].clone(), assigned[2].clone()))
+    }
+    
     pub fn xor(
         &self,
         ctx: &mut Context<'_, F>,
@@ -976,13 +998,7 @@ impl<F: FieldExt> KeccakChip<F> {
         let padded_bytes = KeccakChip::pad_bytes(ctx, range, &input, len.clone(), 479, 556)?;
         let mut padded_hexs = Vec::with_capacity(8 * padded_bytes.len());
         for byte in padded_bytes.iter() {
-            let mut bits = range.num_to_bits(ctx, byte, 8)?;
-	    let hex1 = self.bits_to_num(
-		ctx, &vec![bits[0].clone(), bits[1].clone(), bits[2].clone(), bits[3].clone()]
-	    )?;
-	    let hex2 = self.bits_to_num(
-		ctx, &vec![bits[4].clone(), bits[5].clone(), bits[6].clone(), bits[7].clone()]
-	    )?;
+	    let (hex1, hex2) = self.byte_to_hex(ctx, range, &byte)?;
 	    padded_hexs.push(hex1);
 	    padded_hexs.push(hex2);
         }
