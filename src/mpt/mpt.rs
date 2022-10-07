@@ -212,7 +212,7 @@ impl<F: Field> MPTChip<F> {
 	let mut mpt_hash_bytes = Vec::with_capacity(32);
 	for idx in 0..32 {
 	    if idx < max_len {
-		// TODO: are the trailing entries of bytes always 0?
+		// trailing entries of bytes are constrained to be 0
 		let byte = range.gate.select(
 		    ctx, &Existing(&bytes[idx]), &Existing(&hash_bytes[idx]), &Existing(&is_short)
 		)?;
@@ -491,7 +491,7 @@ impl<F: Field> MPTChip<F> {
 
 	let ext_max_byte_len = Self::ext_max_byte_len(key_byte_len);
 	let branch_max_byte_len = Self::branch_max_byte_len();
-	// TOOO: init with valid dummy_ext and branch
+	// TODO: init with valid dummy_ext and branch
 	let dummy_ext: Vec<QuantumCell<F>> = Vec::new();
 	let dummy_branch: Vec<QuantumCell<F>> = Vec::new();
 	
@@ -709,7 +709,6 @@ impl<F: Field> MPTChip<F> {
 		let match_hash_rlc = self.rlp.rlc.select(
 		    ctx, &Existing(&branch_ref_rlc), &Existing(&ext_ref_rlc), &Existing(&proof.node_types[idx - 1])
 		)?;
-		// TODO: Verify whether we need to check lens
 		let is_match = self.rlp.rlc.is_equal(
 		    ctx, &Existing(&match_hash_rlc), &Existing(&node_hash_rlc)
 		)?;

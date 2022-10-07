@@ -560,15 +560,13 @@ impl<F: Field> RlpArrayChip<F> {
 	    field_len_cells_vec.push(field_len_cells);
 	    field_len_vec.push(field_len.clone());
 	    field_cells_vec.push(field_cells);			
-	    
-	    if idx < num_fields - 1 {
-		let (_, _, next_prefix_idx) = range.gate.inner_product(
-		    ctx,
-		    &vec![Constant(F::from(1)), Constant(F::from(1)), Constant(F::from(1)), Constant(F::from(1))],
-		    &vec![Existing(&prefix_idxs[idx]), Existing(&len_len), Existing(&field_len), Constant(F::from(1))],
-		)?;
-		prefix_idxs.push(next_prefix_idx);
-	    }
+
+	    let (_, _, next_prefix_idx) = range.gate.inner_product(
+		ctx,
+		&vec![Constant(F::from(1)), Constant(F::from(1)), Constant(F::from(1)), Constant(F::from(1))],
+		&vec![Existing(&prefix_idxs[idx]), Existing(&len_len), Existing(&field_len), Constant(F::from(1))],
+	    )?;
+	    prefix_idxs.push(next_prefix_idx);
 	}
 	
 	let len_rlc = self.rlc.compute_rlc(ctx, range, &len_cells, len_len.clone(), max_len_len)?;
@@ -620,7 +618,31 @@ impl<F: Field> RlpArrayChip<F> {
 	    &max_lens,
 	    (rlp_rlc.rlc_val.clone(), rlp_rlc.rlc_len.clone()),
 	    max_array_len,
-	    &rlc_cache
+	    &rlc_cache,
+	)?;
+	let max_array_assigned = range.gate.assign_region_smart(
+	    ctx,
+	    vec![Witness(Value::known(F::from(max_array_len as u64))
+			 - rlp_rlc.rlc_len.value().copied()),
+		 Existing(&rlp_rlc.rlc_len),
+		 Constant(F::one()),
+		 Constant(F::from(max_array_len as u64))],
+	    vec![0],
+	    vec![],
+	    vec![]
+	)?;
+	let suffix_pow = self.rlc.rlc_pow(
+	    ctx, range, max_array_assigned[0].clone(), log2(max_array_len), &rlc_cache
+	)?;
+	let suffix_check = self.rlc.assign_region_rlc(
+	    ctx,
+	    &vec![Constant(F::zero()),
+		  Existing(&suffix_pow),
+		  Existing(&rlp_rlc.rlc_val),
+		  Existing(&rlp_rlc.rlc_max)],
+	    vec![],
+	    vec![0],
+	    None
 	)?;
 
 	let parsed_rlp_array = RlpArrayTrace {

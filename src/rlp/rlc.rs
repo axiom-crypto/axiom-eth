@@ -51,6 +51,7 @@ pub fn log2(x: usize) -> usize {
 pub struct RlcTrace<F: Field> {
     pub rlc_val: AssignedValue<F>,
     pub rlc_len: AssignedValue<F>,
+    pub rlc_max: AssignedValue<F>,
     pub max_len: usize,
 }
 
@@ -378,7 +379,23 @@ impl<F: Field> RlcChip<F> {
         )?;
         let rlc_val = rlc_val_sel[0].clone();
 
-        let rlc_trace = RlcTrace { rlc_val: rlc_val, rlc_len: len, max_len: max_len };
+	let rlc_trace = {
+	    if input.len() > 0 {
+		RlcTrace {
+		    rlc_val,
+		    rlc_len: len,
+		    rlc_max: rlc_cells[rlc_cells.len() - 1].clone(),
+		    max_len,
+		}
+	    } else {
+		RlcTrace {
+		    rlc_val: rlc_val.clone(),
+		    rlc_len: len,
+		    rlc_max: rlc_val.clone(),
+		    max_len
+		}
+	    }
+	};
         Ok(rlc_trace)
     }
 
