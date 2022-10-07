@@ -44,7 +44,7 @@ pub struct LeafTrace<F: Field> {
     rlp_trace: RlcTrace<F>,
     key_path: RlcTrace<F>,
     value: RlcTrace<F>,
-    leaf_hash: RlcFixedTrace<F>,
+    leaf_hash: RlcTrace<F>,
     prefix: AssignedValue<F>,
     len_trace: RlcTrace<F>,
     field_prefixs: Vec<AssignedValue<F>>,
@@ -56,7 +56,7 @@ pub struct ExtensionTrace<F: Field> {
     rlp_trace: RlcTrace<F>,
     key_path: RlcTrace<F>,
     node_ref: RlcTrace<F>,
-    ext_hash: RlcFixedTrace<F>,
+    ext_hash: RlcTrace<F>,
     prefix: AssignedValue<F>,
     len_trace: RlcTrace<F>,
     field_prefixs: Vec<AssignedValue<F>>,
@@ -67,7 +67,7 @@ pub struct ExtensionTrace<F: Field> {
 pub struct BranchTrace<F: Field> {
     rlp_trace: RlcTrace<F>,
     node_refs: Vec<RlcTrace<F>>,
-    branch_hash: RlcFixedTrace<F>,
+    branch_hash: RlcTrace<F>,
     prefix: AssignedValue<F>,
     len_trace: RlcTrace<F>,
     field_prefixs: Vec<AssignedValue<F>>,
@@ -194,6 +194,42 @@ impl<F: Field> MPTChip<F> {
 	    + max_field_bytes.iter().sum::<usize>();
 	max_branch_bytes
     }
+
+    pub fn mpt_hash(
+	&self,
+	ctx: &mut Context<'_, F>,
+	range: &RangeConfig<F>,
+	bytes: &Vec<AssignedValue<F>>,
+	len: &AssignedValue<F>,
+	max_len: usize,
+    ) -> Result<RlcTrace<F>, Error> {
+	let hash_bytes = self.keccak.keccak_bytes_var_len(
+	    ctx, range, bytes, len.clone(), 0usize, max_len
+	)?;
+	let is_short = range.is_less_than(
+	    ctx, &Existing(&len), &Constant(F::from(32)), log2(max_len)
+	)?;
+	let mut mpt_hash_bytes = Vec::with_capacity(32);
+	for idx in 0..32 {
+	    if idx < max_len {
+		// TODO: are the trailing entries of bytes always 0?
+		let byte = range.gate.select(
+		    ctx, &Existing(&bytes[idx]), &Existing(&hash_bytes[idx]), &Existing(&is_short)
+		)?;
+		mpt_hash_bytes.push(byte);
+	    } else {
+		let byte = range.gate.select(
+		    ctx, &Constant(F::zero()), &Existing(&hash_bytes[idx]), &Existing(&is_short)
+		)?;
+		mpt_hash_bytes.push(byte);		
+	    }
+	}
+	let mpt_hash_len = range.gate.select(
+	    ctx, &Existing(&len), &Constant(F::from(32)), &Existing(&is_short)
+	)?;
+        let hash = self.rlp.rlc.compute_rlc(ctx, range, &mpt_hash_bytes, mpt_hash_len, 32)?;
+	Ok(hash)
+    }
     
     pub fn parse_leaf(
 	&self,
@@ -214,12 +250,10 @@ impl<F: Field> MPTChip<F> {
 		
 	let rlp_trace = self.rlp.decompose_rlp_array(
 	    ctx, range, leaf_bytes, max_field_bytes, max_leaf_bytes, 2
+	)?;	
+	let leaf_hash = self.mpt_hash(
+	    ctx, range, &leaf_bytes, &rlp_trace.array_trace.rlc_len, max_leaf_bytes
 	)?;
-
-	let hash_bytes = self.keccak.keccak_bytes_var_len(
-	    ctx, range, leaf_bytes, rlp_trace.array_trace.rlc_len.clone(), 0usize, max_leaf_bytes,
-	)?;
-        let leaf_hash = self.rlp.rlc.compute_rlc_fixed_len(ctx, range, &hash_bytes, 32)?;
 	
 	let leaf_trace = LeafTrace {
 	    rlp_trace: rlp_trace.array_trace.clone(),
@@ -255,10 +289,9 @@ impl<F: Field> MPTChip<F> {
 	    ctx, range, ext_bytes, max_field_bytes, max_ext_bytes, 2
 	)?;
 
-	let hash_bytes = self.keccak.keccak_bytes_var_len(
-	    ctx, range, ext_bytes, rlp_trace.array_trace.rlc_len.clone(), 0usize, max_ext_bytes,
+        let ext_hash = self.mpt_hash(
+	   ctx, range, &ext_bytes, &rlp_trace.array_trace.rlc_len, max_ext_bytes
 	)?;
-        let ext_hash = self.rlp.rlc.compute_rlc_fixed_len(ctx, range, &hash_bytes, 32)?;
 	
 	let ext_trace = ExtensionTrace {
 	    rlp_trace: rlp_trace.array_trace.clone(),
@@ -292,10 +325,9 @@ impl<F: Field> MPTChip<F> {
 	    ctx, range, branch_bytes, max_field_bytes, max_branch_bytes, 17
 	)?;
 
-	let hash_bytes = self.keccak.keccak_bytes_var_len(
-	    ctx, range, branch_bytes, rlp_trace.array_trace.rlc_len.clone(), 0usize, max_branch_bytes,
+        let branch_hash = self.mpt_hash(
+	    ctx, range, &branch_bytes, &rlp_trace.array_trace.rlc_len, max_branch_bytes
 	)?;
-        let branch_hash = self.rlp.rlc.compute_rlc_fixed_len(ctx, range, &hash_bytes, 32)?;
 	
 	let branch_trace = BranchTrace {
 	    rlp_trace: rlp_trace.array_trace.clone(),
@@ -457,10 +489,9 @@ impl<F: Field> MPTChip<F> {
 	assert_eq!(proof.root_hash_bytes.len(), 32);
 	assert_eq!(proof.key_frag_hexs.len(), max_depth);
 
-	let key_hex_bits = log2(2 * key_byte_len + 2);
 	let ext_max_byte_len = Self::ext_max_byte_len(key_byte_len);
 	let branch_max_byte_len = Self::branch_max_byte_len();
-	// valid dummy_ext and branch
+	// TOOO: init with valid dummy_ext and branch
 	let dummy_ext: Vec<QuantumCell<F>> = Vec::new();
 	let dummy_branch: Vec<QuantumCell<F>> = Vec::new();
 	
@@ -669,7 +700,6 @@ impl<F: Field> MPTChip<F> {
 		    ctx, &Existing(&root_hash_rlc.rlc_val), &Existing(&node_hash_rlc)
 		)?;
 	    } else {
-		// TODO: what if these refs are literal?
 		let ext_ref_rlc = exts_parsed[idx - 1].node_ref.rlc_val.clone();
 		let branch_ref_rlc = self.rlp.rlc.select_from_idx(
 		    ctx,
@@ -679,7 +709,7 @@ impl<F: Field> MPTChip<F> {
 		let match_hash_rlc = self.rlp.rlc.select(
 		    ctx, &Existing(&branch_ref_rlc), &Existing(&ext_ref_rlc), &Existing(&proof.node_types[idx - 1])
 		)?;
-		// TODO: Do we need to check lens?
+		// TODO: Verify whether we need to check lens
 		let is_match = self.rlp.rlc.is_equal(
 		    ctx, &Existing(&match_hash_rlc), &Existing(&node_hash_rlc)
 		)?;
