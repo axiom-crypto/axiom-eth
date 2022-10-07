@@ -440,11 +440,8 @@ impl<F: FieldExt> KeccakChip<F> {
             if (idx + 1) % 136 != 0 {
                 out_vec.push(out_vec_pre[idx].clone());
             } else {
-                let is_in_pad_range = range.is_less_than(
-                    ctx,
-                    &Existing(&len),
-                    &Constant(F::from((idx + 1) as u64)),
-                    log2(out_len),
+                let is_in_pad_range = range.is_less_than_safe(
+                    ctx, &len, idx + 1, log2(out_len),
                 )?;
                 let out_val = range.gate.assign_region_smart(
                     ctx,
@@ -1056,11 +1053,9 @@ impl<F: FieldExt> KeccakChip<F> {
         }
 
         let mut out = squeezes[0].clone();
-        let mut is_valid = range.is_less_than(
-            ctx,
-            &Existing(&len),
-            &Constant(F::from((136 * min_rounds) as u64)),
-            log2(136 * max_rounds),
+	// TODO: Remove extra range checks on len
+        let mut is_valid = range.is_less_than_safe(
+            ctx, &len, 136 * min_rounds, log2(136 * max_rounds),
         )?;
         for round_idx in min_rounds..max_rounds {
             for idx in 0..self.output_limb_len {
@@ -1071,11 +1066,9 @@ impl<F: FieldExt> KeccakChip<F> {
                     &Existing(&is_valid),
                 )?;
             }
-            is_valid = range.is_less_than(
-                ctx,
-                &Existing(&len),
-                &Constant(F::from((136 * (round_idx + 1)) as u64)),
-                log2(136 * max_rounds),
+	    // TODO: Remove extra range checks on len
+            is_valid = range.is_less_than_safe(
+                ctx, &len, 136 * (round_idx + 1), log2(136 * max_rounds),
             )?;
         }
 

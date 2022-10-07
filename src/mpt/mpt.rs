@@ -6,8 +6,7 @@ use eth_types::Field;
 use ark_std::{end_timer, start_timer};
 use halo2_base::{
     gates::{
-        range::{RangeConfig, RangeStrategy, RangeStrategy::Vertical},
-        GateInstructions, RangeInstructions,
+        range::{RangeConfig, RangeStrategy}, GateInstructions, RangeInstructions,
     },
     utils::fe_to_biguint,
     AssignedValue, Context, ContextParams, QuantumCell,
@@ -467,12 +466,68 @@ impl<F: Field> MPTChip<F> {
 	
 	/* Validate inputs, check that:
 	   * all inputs are bytes	
-	   * 0 < depth <= max_depth
 	   * node_types[idx] in {0, 1}
-	   * key_frag_hexes are hexs
-           * 0 < key_frag_hex_len <= 2 * key_byte_len
+           * key_frag_is_odd[idx] in {0, 1}         
+           * key_frag_hexes are hexs   
+	   * 0 < depth <= max_depth
            * 0 < value_byte_len <= value_max_byte_len
+           * 0 < key_frag_byte_len[idx] <= key_byte_len + 1
 	 */
+	for byte in proof.key_bytes.iter() {
+	    self.keccak.byte_to_hex(ctx, range, &byte)?;
+	}
+	for byte in proof.value_bytes.iter() {
+	    self.keccak.byte_to_hex(ctx, range, &byte)?;
+	}
+	for byte in proof.root_hash_bytes.iter() {
+	    self.keccak.byte_to_hex(ctx, range, &byte)?;
+	}
+	for byte in proof.leaf_bytes.iter() {
+	    self.keccak.byte_to_hex(ctx, range, &byte)?;
+	}
+	for node in proof.nodes.iter() {
+	    for byte in node.iter() {
+		self.keccak.byte_to_hex(ctx, range, &byte)?;
+	    }
+	}
+	for bit in proof.node_types.iter() {
+	    range.gate.assign_region_smart(
+		ctx, vec![Constant(F::zero()), Existing(&bit), Existing(&bit), Existing(&bit)],
+		vec![0], vec![], vec![]
+	    )?;
+	}
+	for bit in proof.key_frag_is_odd.iter() {
+	    range.gate.assign_region_smart(
+		ctx, vec![Constant(F::zero()), Existing(&bit), Existing(&bit), Existing(&bit)],
+		vec![0], vec![], vec![]
+	    )?;
+	}
+	for frag in proof.key_frag_hexs.iter() {
+	    for hex in frag.iter() {
+		// use xor to lookup hex and save on lookup args
+		self.keccak.xor(ctx, &vec![hex, hex])?;
+	    }
+	}
+	range.check_less_than_safe(
+	    ctx,
+	    &proof.depth,
+	    proof.max_depth + 1,
+	    log2(proof.max_depth + 1)
+	)?;
+	range.check_less_than_safe(
+	    ctx,
+	    &proof.value_byte_len,
+	    proof.value_max_byte_len + 1,
+	    log2(proof.value_max_byte_len + 1)
+	)?;
+	for frag_len in proof.key_frag_byte_len.iter() {
+	    range.check_less_than_safe(
+		ctx,
+		&frag_len,
+		proof.key_byte_len + 2,
+		log2(proof.key_byte_len + 2)
+	    )?;
+	}
 
 	/* Parse RLP
            * RLP Leaf      for leaf_bytes

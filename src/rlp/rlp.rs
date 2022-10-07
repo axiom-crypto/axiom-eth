@@ -373,11 +373,8 @@ impl<F: Field> RlpArrayChip<F> {
 	let prefix_parsed = self.parse_rlp_field_prefix(ctx, range, &prefix)?;
 		
 	let len_len = prefix_parsed.len_len.clone();
-	range.check_less_than(
-	    ctx,
-	    &Existing(&len_len),
-	    &Constant(F::from((max_len_len + 1usize) as u64)),
-	    log2(max_len_len + 1)
+	range.check_less_than_safe(
+	    ctx, &len_len, max_len_len + 1, log2(max_len_len + 1)
 	)?;
 	let (len_cells, len_byte_val) = self.parse_rlp_len(
 	    ctx,
@@ -393,11 +390,8 @@ impl<F: Field> RlpArrayChip<F> {
 	    &Existing(&prefix_parsed.next_len),
 	    &Existing(&prefix_parsed.is_big)
 	)?;
-	range.check_less_than(
-	    ctx,
-	    &Existing(&field_len),
-	    &Constant(F::from((max_field_len + 1usize) as u64)),
-	    log2(max_field_len + 1)
+	range.check_less_than_safe(
+	    ctx, &field_len, max_field_len + 1, log2(max_field_len + 1)
 	)?;
 	
 	let field_cells = witness_subarray_from_idxs(
@@ -480,11 +474,8 @@ impl<F: Field> RlpArrayChip<F> {
 	let prefix_parsed = self.parse_rlp_array_prefix(ctx, range, &prefix)?;
 	
 	let len_len = prefix_parsed.len_len.clone();
-	range.check_less_than(
-	    ctx,
-	    &Existing(&len_len),
-	    &Constant(F::from((max_len_len + 1usize) as u64)),
-	    log2(max_len_len + 1)
+	range.check_less_than_safe(
+	    ctx, &len_len, max_len_len + 1, log2(max_len_len + 1)
 	)?;
 	
 	let (len_cells, len_byte_val) = self.parse_rlp_len(
@@ -501,11 +492,8 @@ impl<F: Field> RlpArrayChip<F> {
 	    &Existing(&prefix_parsed.next_len),
 	    &Existing(&prefix_parsed.is_big)
 	)?;
-	range.check_less_than(
-	    ctx,
-	    &Existing(&all_fields_len),
-	    &Constant(F::from((max_array_len + 1usize) as u64)),
-	    log2(max_array_len + 1)
+	range.check_less_than_safe(
+	    ctx, &all_fields_len, max_array_len + 1, log2(max_array_len + 1)
 	)?;
 
 	let (_, _, rlp_len) = range.gate.inner_product(
@@ -535,10 +523,8 @@ impl<F: Field> RlpArrayChip<F> {
 	    let prefix_parsed = self.parse_rlp_field_prefix(ctx, range, &prefix)?;
 
 	    let len_len = prefix_parsed.len_len.clone();
-	    range.check_less_than(
-		ctx,
-		&Existing(&len_len),
-		&Constant(F::from((max_rlp_len_len(max_field_lens[idx]) + 1usize) as u64)),
+	    range.check_less_than_safe(
+		ctx, &len_len, max_rlp_len_len(max_field_lens[idx]) + 1,
 		log2(max_rlp_len_len(max_field_lens[idx]) + 1),
 	    )?;
 	    
@@ -557,10 +543,8 @@ impl<F: Field> RlpArrayChip<F> {
 		&Existing(&prefix_parsed.next_len),
 		&Existing(&prefix_parsed.is_big)
 	    )?;
-	    range.check_less_than(
-		ctx,
-		&Existing(&field_len),
-		&Constant(F::from((max_field_lens[idx] + 1usize) as u64)),
+	    range.check_less_than_safe(
+		ctx, &field_len, max_field_lens[idx] + 1,
 		log2(max_field_lens[idx] + 1),
 	    )?;
 	    let field_cells = witness_subarray_from_idxs(
