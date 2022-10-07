@@ -90,13 +90,7 @@ impl<F: FieldExt> Circuit<F> for KeccakCircuit {
                 let input_bits = config
                     .assign_region(
                         ctx,
-                        self.input
-                            .iter()
-                            .map(|&b| {
-                                assert!(b == 0 || b == 1);
-                                Witness(Value::known(F::from(b)))
-                            })
-                            .collect_vec(),
+                        self.input.iter().map(|&b| Witness(Value::known(F::from(b)))).collect_vec(),
                         None,
                         vec![],
                         vec![],
@@ -142,7 +136,10 @@ pub fn test_keccak() {
     let params_str = std::fs::read_to_string("configs/keccak.config").unwrap();
     let params: KeccakCircuitParams = serde_json::from_str(params_str.as_str()).unwrap();
     let k = params.degree;
-    let circuit = KeccakCircuit::default();
+    let mut input = vec![1];
+    input.append(&mut vec![0; 1088 / 4 - 2]);
+    input.push(1 << 3);
+    let circuit = KeccakCircuit { input };
 
     let prover = MockProver::<Fr>::run(k, &circuit, vec![]).unwrap();
     prover.assert_satisfied();
