@@ -4,8 +4,9 @@ version = "0.0.1"
 edition = "2021"
 
 [patch.crates-io]
-#bitvec = { git = "https://github.com/ed255/bitvec.git", rev = "5cfc5fa8496c66872d21905e677120fc3e79693c" }
-halo2_proofs = { git = "https://github.com/privacy-scaling-explorations/halo2.git", tag = "v2022_09_10" }
+# bitvec = { git = "https://github.com/ed255/bitvec.git", rev = "5cfc5fa8496c66872d21905e677120fc3e79693c" }
+# halo2_proofs = { git = "https://github.com/privacy-scaling-explorations/halo2.git", tag = "v2022_09_10" }
+halo2_proofs = { git = "https://github.com/zk-attestor/halo2.git", branch = "serialize", package = "halo2_proofs" }
 
 [patch."https://github.com/privacy-scaling-explorations/halo2"]
 halo2_proofs = { git = "https://github.com/zk-attestor/halo2.git", branch = "serialize", package = "halo2_proofs" }
@@ -25,13 +26,14 @@ itertools = "0.10"
 lazy_static = "1.4.0"
 halo2_base = { git = "ssh://github.com/jonathanpwang/halo2-ecc.git", branch = "refactor/10-01" }
 halo2_proofs = { git = "https://github.com/privacy-scaling-explorations/halo2.git", tag = "v2022_09_10" }
+halo2_curves = { git = "https://github.com/privacy-scaling-explorations/halo2curves", tag = "0.2.1", package = "halo2curves" }
 hex = "0.4.3"
 rand_core = { version = "0.6", default-features = false }
 rand = "0.8"
 rlp = "0.5.1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-sha3 = "0.7.2"
+sha3 = { version = "0.10.1" }
 ark-std = { version = "0.3.0", features = ["print-trace"] }
 
 # zkevm
@@ -43,6 +45,12 @@ maingate =  { git = "https://github.com/privacy-scaling-explorations/halo2wrong"
 integer =   { git = "https://github.com/privacy-scaling-explorations/halo2wrong", tag = "v2022_09_09", optional = true }
 zkevm-circuits = { git = "https://github.com/yi-sun/zkevm-circuits.git", branch = "expose-keccak-new", optional = true }
 
+# aggregation 
+ethereum_types = { package = "ethereum-types", version = "0.13.1", default-features = false, features = ["std"], optional = true }
+foundry_evm = { git = "https://github.com/jonathanpwang/foundry", package = "foundry-evm", branch = "fix/pin-revm-to-rev", optional = true }
+plonk_verifier = { git = "https://github.com/jonathanpwang/plonk-verifier.git", branch = "jpw/10_07", optional = true }
+
+# plot 
 plotters = { version = "0.3.0", optional = true }
 tabbycat = { version = "0.1", features = ["attributes"], optional = true }
 
@@ -53,8 +61,9 @@ jemallocator = { version = "0.3.2", optional = true }
 num-bigint = { version = "0.4.3" }
 
 [features]
-default = ["display", "jemalloc"]
+default = ["display", "aggregation"]
 zkevm = ["dep:ecdsa", "dep:ecc", "dep:keccak256", "dep:maingate", "dep:integer", "dep:zkevm-circuits"]
+aggregation = ["dep:ethereum_types", "dep:foundry_evm", "dep:plonk_verifier"]
 dev-graph = ["halo2_proofs/dev-graph", "plotters"]
 jemalloc = ["dep:jemallocator"]
 display = ["halo2_base/display"]

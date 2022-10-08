@@ -42,6 +42,9 @@ use crate::{
     rlp::rlp::{RlpArrayChip, RlpArrayTrace},
 };
 
+#[cfg(feature = "aggregation")]
+pub mod aggregation;
+
 // parentHash	256 bits	32	33	264
 // ommersHash	256 bits	32	33	264
 // beneficiary	160 bits	20	21	168
@@ -327,7 +330,7 @@ impl<F: Field> Circuit<F> for EthBlockHeaderTestCircuit<F> {
                 );
 
                 let stats = config.rlp.range.finalize(ctx)?;
-                println!("stats {:?}", stats);
+                println!("stats (fixed rows, total fixed, lookups) {:?}", stats);
                 println!("ctx.rows rlc {:?}", ctx.advice_rows.get::<String>(&"rlc".to_string()));
                 println!(
                     "ctx.rows default {:?}",
@@ -336,13 +339,15 @@ impl<F: Field> Circuit<F> for EthBlockHeaderTestCircuit<F> {
                 println!("ctx.rows keccak_xor {:?}", ctx.advice_rows["keccak_xor"]);
                 println!("ctx.rows keccak_xorandn {:?}", ctx.advice_rows["keccak_xorandn"]);
                 println!(
-                    "ctx.cells keccak_xor {:?}",
-                    ctx.advice_rows["keccak_xor"].iter().sum::<usize>()
+                    "ctx.advice_rows sums: {:#?}",
+                    ctx.advice_rows
+                        .iter()
+                        .map(|(key, val)| (key, val.iter().sum::<usize>()))
+                        .collect::<Vec<_>>()
                 );
-                println!(
-                    "ctx.cells keccak_xorandn {:?}",
-                    ctx.advice_rows["keccak_xorandn"].iter().sum::<usize>()
-                );
+                #[cfg(feature = "display")]
+                println!("{:#?}", ctx.op_count);
+
                 Ok(())
             },
         )?;
