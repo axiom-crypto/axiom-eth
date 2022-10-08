@@ -4,13 +4,13 @@ use sha3::{Digest, Keccak256};
 use hex::FromHex;
 use num_bigint::BigUint;
 use num_traits::cast::ToPrimitive;
-use eth_types::Field;
+use std::{cmp::max, marker::PhantomData};
 
 use ark_std::{end_timer, start_timer};
 use halo2_base::{
     gates::{
         range::{RangeConfig, RangeStrategy, RangeStrategy::Vertical},
-	GateInstructions, RangeInstructions,
+        GateInstructions, RangeInstructions,
     },
     utils::fe_to_biguint,
     AssignedValue, Context, ContextParams, QuantumCell,
@@ -40,7 +40,7 @@ use halo2_proofs::{
 use crate::{
     keccak::{print_bytes, KeccakChip},
     rlp::rlc::{log2, RlcFixedTrace, RlcTrace},
-    rlp::rlp::{max_rlp_len_len, RlpArrayChip, RlpArrayTrace}
+    rlp::rlp::{max_rlp_len_len, RlpArrayChip, RlpArrayTrace},
 };
 
 #[derive(Clone, Debug)]
@@ -89,7 +89,7 @@ pub struct MPTFixedKeyProof<F: Field> {
     // proof specification
     leaf_bytes: Vec<AssignedValue<F>>,
     nodes: Vec<Vec<AssignedValue<F>>>,
-    node_types: Vec<AssignedValue<F>>,     // index 0 = root; 0 = branch, 1 = extension
+    node_types: Vec<AssignedValue<F>>, // index 0 = root; 0 = branch, 1 = extension
     depth: AssignedValue<F>,
 
     key_frag_hexs: Vec<Vec<AssignedValue<F>>>,
@@ -115,14 +115,14 @@ pub struct MPTVarKeyProof<F: Field> {
     // proof specification
     leaf_bytes: Vec<AssignedValue<F>>,
     proof_nodes: Vec<Vec<AssignedValue<F>>>,
-    node_types: Vec<AssignedValue<F>>,     // index 0 = root; 0 = branch, 1 = extension
+    node_types: Vec<AssignedValue<F>>, // index 0 = root; 0 = branch, 1 = extension
     depth: AssignedValue<F>,
 
     key_frag_hexs: Vec<Vec<AssignedValue<F>>>,
     // hex_len = 2 * byte_len + is_odd - 2
     key_frag_is_odd: Vec<AssignedValue<F>>,
     key_frag_byte_len: Vec<AssignedValue<F>>,
-    
+
     key_max_byte_len: usize,
     value_max_byte_len: usize,
     max_depth: usize,
@@ -173,18 +173,18 @@ pub struct MPTChip<F: Field> {
 
 impl<F: Field> MPTChip<F> {
     pub fn configure(
-	meta: &mut ConstraintSystem<F>,
-	num_basic_chips: usize,
+        meta: &mut ConstraintSystem<F>,
+        num_basic_chips: usize,
         num_chips_fixed: usize,
         challenge_id: String,
         context_id: String,
         range_strategy: RangeStrategy,
         num_advice: &[usize],
-        mut num_lookup_advice: &[usize],
+        num_lookup_advice: &[usize],
         num_fixed: usize,
         lookup_bits: usize,
     ) -> Self {
-	let rlp = RlpArrayChip::configure(
+        let rlp = RlpArrayChip::configure(
             meta,
             num_basic_chips,
             num_chips_fixed,
@@ -214,71 +214,79 @@ impl<F: Field> MPTChip<F> {
     }
 
     fn ext_max_byte_len(max_key_bytes: usize) -> usize {
-	let max_node_ref_bytes = 32;
-	let max_encoded_path_bytes = max_key_bytes + 1;
-	let max_encoded_path_rlp_bytes =
-	    1 + max_rlp_len_len(max_encoded_path_bytes) + max_encoded_path_bytes;
-	let max_node_ref_rlp_bytes = 1 + max_rlp_len_len(max_node_ref_bytes) + max_node_ref_bytes;
-	let max_field_bytes = vec![max_encoded_path_rlp_bytes, max_node_ref_rlp_bytes];
-	let max_ext_bytes: usize = 1 + max_rlp_len_len(max_field_bytes.iter().sum())
-	    + max_field_bytes.iter().sum::<usize>();
-	max_ext_bytes
+        let max_node_ref_bytes = 32;
+        let max_encoded_path_bytes = max_key_bytes + 1;
+        let max_encoded_path_rlp_bytes =
+            1 + max_rlp_len_len(max_encoded_path_bytes) + max_encoded_path_bytes;
+        let max_node_ref_rlp_bytes = 1 + max_rlp_len_len(max_node_ref_bytes) + max_node_ref_bytes;
+        let max_field_bytes = vec![max_encoded_path_rlp_bytes, max_node_ref_rlp_bytes];
+        let max_ext_bytes: usize = 1
+            + max_rlp_len_len(max_field_bytes.iter().sum())
+            + max_field_bytes.iter().sum::<usize>();
+        max_ext_bytes
     }
 
     fn branch_max_byte_len() -> usize {
-	let max_node_ref_bytes = 32;
-	let max_node_ref_rlp_bytes =
-	    1 + max_rlp_len_len(max_node_ref_bytes) + max_node_ref_bytes;
-	let mut max_field_bytes = vec![max_node_ref_rlp_bytes; 16];
-	max_field_bytes.push(2);
-	let max_branch_bytes: usize = 1 + max_rlp_len_len(max_field_bytes.iter().sum())
-	    + max_field_bytes.iter().sum::<usize>();
-	max_branch_bytes
+        let max_node_ref_bytes = 32;
+        let max_node_ref_rlp_bytes = 1 + max_rlp_len_len(max_node_ref_bytes) + max_node_ref_bytes;
+        let mut max_field_bytes = vec![max_node_ref_rlp_bytes; 16];
+        max_field_bytes.push(2);
+        let max_branch_bytes: usize = 1
+            + max_rlp_len_len(max_field_bytes.iter().sum())
+            + max_field_bytes.iter().sum::<usize>();
+        max_branch_bytes
     }
 
     pub fn mpt_hash(
-	&self,
-	ctx: &mut Context<'_, F>,
-	range: &RangeConfig<F>,
-	bytes: &Vec<AssignedValue<F>>,
-	len: &AssignedValue<F>,
-	max_len: usize,
+        &self,
+        ctx: &mut Context<'_, F>,
+        range: &RangeConfig<F>,
+        bytes: &Vec<AssignedValue<F>>,
+        len: &AssignedValue<F>,
+        max_len: usize,
     ) -> Result<RlcTrace<F>, Error> {
-	let hash_bytes = self.keccak.keccak_bytes_var_len(
-	    ctx, range, bytes, len.clone(), 0usize, max_len
-	)?;
-	let is_short = range.is_less_than(
-	    ctx, &Existing(&len), &Constant(F::from(32)), log2(max_len)
-	)?;
-	let mut mpt_hash_bytes = Vec::with_capacity(32);
-	for idx in 0..32 {
-	    if idx < max_len {
-		// trailing entries of bytes are constrained to be 0
-		let byte = range.gate.select(
-		    ctx, &Existing(&bytes[idx]), &Existing(&hash_bytes[idx]), &Existing(&is_short)
-		)?;
-		mpt_hash_bytes.push(byte);
-	    } else {
-		let byte = range.gate.select(
-		    ctx, &Constant(F::zero()), &Existing(&hash_bytes[idx]), &Existing(&is_short)
-		)?;
-		mpt_hash_bytes.push(byte);		
-	    }
-	}
-	let mpt_hash_len = range.gate.select(
-	    ctx, &Existing(&len), &Constant(F::from(32)), &Existing(&is_short)
-	)?;
+        let hash_bytes =
+            self.keccak.keccak_bytes_var_len(ctx, range, bytes, len.clone(), 0usize, max_len)?;
+        let is_short =
+            range.is_less_than(ctx, &Existing(&len), &Constant(F::from(32)), log2(max_len))?;
+        let mut mpt_hash_bytes = Vec::with_capacity(32);
+        for idx in 0..32 {
+            if idx < max_len {
+                // trailing entries of bytes are constrained to be 0
+                let byte = range.gate.select(
+                    ctx,
+                    &Existing(&bytes[idx]),
+                    &Existing(&hash_bytes[idx]),
+                    &Existing(&is_short),
+                )?;
+                mpt_hash_bytes.push(byte);
+            } else {
+                let byte = range.gate.select(
+                    ctx,
+                    &Constant(F::zero()),
+                    &Existing(&hash_bytes[idx]),
+                    &Existing(&is_short),
+                )?;
+                mpt_hash_bytes.push(byte);
+            }
+        }
+        let mpt_hash_len = range.gate.select(
+            ctx,
+            &Existing(&len),
+            &Constant(F::from(32)),
+            &Existing(&is_short),
+        )?;
         let hash = self.rlp.rlc.compute_rlc(ctx, range, &mpt_hash_bytes, mpt_hash_len, 32)?;
-	Ok(hash)
+        Ok(hash)
     }
-    
+
     pub fn parse_leaf(
-	&self,
-	ctx: &mut Context<'_, F>,
-	range: &RangeConfig<F>,
-	leaf_bytes: &Vec<AssignedValue<F>>,
-	max_key_bytes: usize,
-	max_value_bytes: usize,
+        &self,
+        ctx: &mut Context<'_, F>,
+        range: &RangeConfig<F>,
+        leaf_bytes: &Vec<AssignedValue<F>>,
+        max_key_bytes: usize,
+        max_value_bytes: usize,
     ) -> Result<LeafTrace<F>, Error> {
 	let (max_field_bytes, max_leaf_bytes) = max_leaf_lens(max_key_bytes, max_value_bytes);
 	assert_eq!(leaf_bytes.len(), max_leaf_bytes);
@@ -304,11 +312,11 @@ impl<F: Field> MPTChip<F> {
     }
 
     pub fn parse_ext(
-	&self,
-	ctx: &mut Context<'_, F>,
-	range: &RangeConfig<F>,
-	ext_bytes: &Vec<AssignedValue<F>>,
-	max_key_bytes: usize,
+        &self,
+        ctx: &mut Context<'_, F>,
+        range: &RangeConfig<F>,
+        ext_bytes: &Vec<AssignedValue<F>>,
+        max_key_bytes: usize,
     ) -> Result<ExtensionTrace<F>, Error> {
 	let (max_field_bytes, mut max_ext_bytes) = max_ext_lens(max_key_bytes);
 	let (_, max_branch_bytes) = max_branch_lens();
@@ -319,90 +327,113 @@ impl<F: Field> MPTChip<F> {
 	    ctx, range, ext_bytes, max_field_bytes, max_ext_bytes, 2
 	)?;
 
-        let ext_hash = self.mpt_hash(
-	   ctx, range, &ext_bytes, &rlp_trace.array_trace.rlc_len, max_ext_bytes
-	)?;
-	
-	let ext_trace = ExtensionTrace {
-	    rlp_trace: rlp_trace.array_trace.clone(),
-	    key_path: rlp_trace.field_traces[0].clone(),
-	    node_ref: rlp_trace.field_traces[1].clone(),	    
-	    ext_hash,
-	    prefix: rlp_trace.prefix.clone(),
-	    len_trace: rlp_trace.len_trace.clone(),
-	    field_prefixs: rlp_trace.field_prefixs.clone(),
-	    field_len_traces: rlp_trace.field_len_traces.clone()
-	};
-	Ok(ext_trace)
+        let rlp_trace = self.rlp.decompose_rlp_array(
+            ctx,
+            range,
+            ext_bytes,
+            max_field_bytes,
+            max_ext_bytes,
+            2,
+        )?;
+
+        let ext_hash =
+            self.mpt_hash(ctx, range, &ext_bytes, &rlp_trace.array_trace.rlc_len, max_ext_bytes)?;
+
+        let ext_trace = ExtensionTrace {
+            rlp_trace: rlp_trace.array_trace.clone(),
+            key_path: rlp_trace.field_traces[0].clone(),
+            node_ref: rlp_trace.field_traces[1].clone(),
+            ext_hash,
+            prefix: rlp_trace.prefix.clone(),
+            len_trace: rlp_trace.len_trace.clone(),
+            field_prefixs: rlp_trace.field_prefixs.clone(),
+            field_len_traces: rlp_trace.field_len_traces.clone(),
+        };
+        Ok(ext_trace)
     }
 
     pub fn parse_nonterminal_branch(
-	&self,
-	ctx: &mut Context<'_, F>,
-	range: &RangeConfig<F>,
-	branch_bytes: &Vec<AssignedValue<F>>,
+        &self,
+        ctx: &mut Context<'_, F>,
+        range: &RangeConfig<F>,
+        branch_bytes: &Vec<AssignedValue<F>>,
     ) -> Result<BranchTrace<F>, Error> {
 	let (max_field_bytes, mut max_branch_bytes) = max_branch_lens();
 	let (_, max_ext_bytes) = max_ext_lens(32);
 	let max_branch_bytes = max(max_ext_bytes, max_branch_bytes);
 	assert_eq!(branch_bytes.len(), max_branch_bytes);
 
-	let rlp_trace = self.rlp.decompose_rlp_array(
-	    ctx, range, branch_bytes, max_field_bytes, max_branch_bytes, 17
-	)?;
+        let rlp_trace = self.rlp.decompose_rlp_array(
+            ctx,
+            range,
+            branch_bytes,
+            max_field_bytes,
+            max_branch_bytes,
+            17,
+        )?;
 
         let branch_hash = self.mpt_hash(
-	    ctx, range, &branch_bytes, &rlp_trace.array_trace.rlc_len, max_branch_bytes
-	)?;
-	
-	let branch_trace = BranchTrace {
-	    rlp_trace: rlp_trace.array_trace.clone(),
-	    node_refs: rlp_trace.field_traces.clone(),
-	    branch_hash,
-	    prefix: rlp_trace.prefix.clone(),
-	    len_trace: rlp_trace.len_trace.clone(),
-	    field_prefixs: rlp_trace.field_prefixs.clone(),
-	    field_len_traces: rlp_trace.field_len_traces.clone()	    
-	};
-	Ok(branch_trace)
+            ctx,
+            range,
+            &branch_bytes,
+            &rlp_trace.array_trace.rlc_len,
+            max_branch_bytes,
+        )?;
+
+        let branch_trace = BranchTrace {
+            rlp_trace: rlp_trace.array_trace.clone(),
+            node_refs: rlp_trace.field_traces.clone(),
+            branch_hash,
+            prefix: rlp_trace.prefix.clone(),
+            len_trace: rlp_trace.len_trace.clone(),
+            field_prefixs: rlp_trace.field_prefixs.clone(),
+            field_len_traces: rlp_trace.field_len_traces.clone(),
+        };
+        Ok(branch_trace)
     }
 
     pub fn key_hex_to_hex_rlc(
-	&self,
-	ctx: &mut Context<'_, F>,
-	range: &RangeConfig<F>,
-	key_frag_hexs: &Vec<AssignedValue<F>>,
-	key_frag_byte_len: &AssignedValue<F>,
-	is_odd: &AssignedValue<F>,
-	key_byte_len: usize,
+        &self,
+        ctx: &mut Context<'_, F>,
+        range: &RangeConfig<F>,
+        key_frag_hexs: &Vec<AssignedValue<F>>,
+        key_frag_byte_len: &AssignedValue<F>,
+        is_odd: &AssignedValue<F>,
+        key_byte_len: usize,
     ) -> Result<AssignedValue<F>, Error> {
-	let assigned = range.gate.assign_region_smart(
-	    ctx,
-	    vec![Existing(&is_odd),
-		 Constant(F::from(2)),
-		 Existing(&key_frag_byte_len),
-		 Witness(is_odd.value().copied()
-			 + Value::known(F::from(2)) * key_frag_byte_len.value().copied()),
-		 Constant(-F::from(2)),
-		 Constant(F::one()),
-		 Witness(is_odd.value().copied() - Value::known(F::from(2))
-			 + Value::known(F::from(2)) * key_frag_byte_len.value().copied())],
-	    vec![0, 3],
-	    vec![],
-	    vec![],
-	)?;
-	Ok(assigned[6].clone())	
+        let assigned = range.gate.assign_region_smart(
+            ctx,
+            vec![
+                Existing(&is_odd),
+                Constant(F::from(2)),
+                Existing(&key_frag_byte_len),
+                Witness(
+                    is_odd.value().copied()
+                        + Value::known(F::from(2)) * key_frag_byte_len.value().copied(),
+                ),
+                Constant(-F::from(2)),
+                Constant(F::one()),
+                Witness(
+                    is_odd.value().copied() - Value::known(F::from(2))
+                        + Value::known(F::from(2)) * key_frag_byte_len.value().copied(),
+                ),
+            ],
+            vec![0, 3],
+            vec![],
+            vec![],
+        )?;
+        Ok(assigned[6].clone())
     }
 
     pub fn key_hex_to_path_rlc(
-	&self,
-	ctx: &mut Context<'_, F>,
-	range: &RangeConfig<F>,
-	key_frag_hexs: &Vec<AssignedValue<F>>,
-	key_frag_byte_len: &AssignedValue<F>,
-	is_odd: &AssignedValue<F>,
-	key_byte_len: usize,
-	is_ext: bool,
+        &self,
+        ctx: &mut Context<'_, F>,
+        range: &RangeConfig<F>,
+        key_frag_hexs: &Vec<AssignedValue<F>>,
+        key_frag_byte_len: &AssignedValue<F>,
+        is_odd: &AssignedValue<F>,
+        key_byte_len: usize,
+        is_ext: bool,
     ) -> Result<AssignedValue<F>, Error> {
 	let mut path_bytes = Vec::with_capacity(key_byte_len);
 	for byte_idx in 0..key_byte_len + 1 {
@@ -502,24 +533,24 @@ impl<F: Field> MPTChip<F> {
 	)?;
 	Ok(path_rlc.rlc_val)
     }
-	
+
     pub fn parse_mpt_inclusion_fixed_key(
-	&self,
-	ctx: &mut Context<'_, F>,
-	range: &RangeConfig<F>,
-	proof: &MPTFixedKeyProof<F>,
-	key_byte_len: usize,
-	value_max_byte_len: usize,
-	max_depth: usize,
+        &self,
+        ctx: &mut Context<'_, F>,
+        range: &RangeConfig<F>,
+        proof: &MPTFixedKeyProof<F>,
+        key_byte_len: usize,
+        value_max_byte_len: usize,
+        max_depth: usize,
     ) -> Result<(), Error> {
-	assert_eq!(proof.key_byte_len, key_byte_len);
-	assert_eq!(proof.value_max_byte_len, value_max_byte_len);
-	assert_eq!(proof.max_depth, max_depth);
-	assert_eq!(proof.node_types.len(), max_depth - 1);
-	assert_eq!(proof.key_bytes.len(), key_byte_len);
-	assert_eq!(proof.value_bytes.len(), value_max_byte_len);
-	assert_eq!(proof.root_hash_bytes.len(), 32);
-	assert_eq!(proof.key_frag_hexs.len(), max_depth);
+        assert_eq!(proof.key_byte_len, key_byte_len);
+        assert_eq!(proof.value_max_byte_len, value_max_byte_len);
+        assert_eq!(proof.max_depth, max_depth);
+        assert_eq!(proof.node_types.len(), max_depth - 1);
+        assert_eq!(proof.key_bytes.len(), key_byte_len);
+        assert_eq!(proof.value_bytes.len(), value_max_byte_len);
+        assert_eq!(proof.root_hash_bytes.len(), 32);
+        assert_eq!(proof.key_frag_hexs.len(), max_depth);
 
 	let ext_max_byte_len = Self::ext_max_byte_len(key_byte_len);
 	let branch_max_byte_len = Self::branch_max_byte_len();
@@ -676,47 +707,19 @@ impl<F: Field> MPTChip<F> {
 	}
 	// TODO: Match fragments to node key
 
-	/* Check key fragments concatenate to key using hex RLC
-	 */
-	let mut key_hexs = Vec::with_capacity(2 * key_byte_len);
-	for byte in proof.key_bytes.iter() {
-	    let (hex1, hex2) = self.keccak.byte_to_hex(ctx, range, &byte)?;
-	    key_hexs.push(hex1);
-	    key_hexs.push(hex2);
-	}
-	let key_hex_rlc = self.rlp.rlc.compute_rlc_fixed_len(
-	    ctx, range, &key_hexs, 2 * key_byte_len
-	)?;
-	let mut fragment_rlcs = Vec::new();
-	for idx in 0..max_depth {
-	    let frag_len = self.key_hex_to_hex_rlc(
-		ctx,
-		range,
-		&proof.key_frag_hexs[idx],
-		&proof.key_frag_byte_len[idx],
-		&proof.key_frag_is_odd[idx],
-		key_byte_len,
-	    )?;
-	    let fragment_rlc = self.rlp.rlc.compute_rlc(
-		ctx, range, &proof.key_frag_hexs[idx], frag_len, 2 * key_byte_len
-	    )?;
-	    fragment_rlcs.push(fragment_rlc);
-	}
-	let rlc_cache = self.rlp.rlc.load_rlc_cache(ctx, log2(2 * key_byte_len))?;
-	let assigned_len = range.gate.assign_region_smart(
-	    ctx, vec![Constant(F::from(key_hex_rlc.len as u64))], vec![], vec![], vec![]
-	)?;
-	self.rlp.rlc.constrain_rlc_concat_var(
-	    ctx,
-	    range,
-	    &fragment_rlcs.iter().map(|f| (f.rlc_val.clone(), f.rlc_len.clone())).collect(),
-	    &vec![2 * key_byte_len; max_depth],
-	    (key_hex_rlc.rlc_val.clone(), assigned_len[0].clone()),
-	    2 * key_byte_len,
-	    proof.depth.clone(),
-	    max_depth,
-	    &rlc_cache
-	)?;
+            let mut branch_in = Vec::with_capacity(branch_max_byte_len);
+            for byte_idx in 0..branch_max_byte_len {
+                let branch_byte = range.gate.select(
+                    ctx,
+                    &Existing(&proof.nodes[idx][byte_idx]),
+                    &dummy_branch[byte_idx],
+                    &Existing(&proof.node_types[idx]),
+                )?;
+                branch_in.push(branch_byte);
+            }
+            let branch_parsed = self.parse_nonterminal_branch(ctx, range, &branch_in)?;
+            branches_parsed.push(branch_parsed);
+        }
 
 	// TODO:
 	/* Check value matches
@@ -816,27 +819,27 @@ impl<F: Field> MPTChip<F> {
     }
 
     pub fn parse_mpt_inclusion_var_key(
-	&self,
-	ctx: &mut Context<'_, F>,
-	range: &RangeConfig<F>,
-	proof: &MPTVarKeyProof<F>,
-	key_max_byte_len: usize,
-	value_max_byte_len: usize,
-	max_depth: usize,
+        &self,
+        ctx: &mut Context<'_, F>,
+        range: &RangeConfig<F>,
+        proof: &MPTVarKeyProof<F>,
+        key_max_byte_len: usize,
+        value_max_byte_len: usize,
+        max_depth: usize,
     ) -> Result<(), Error> {
-	assert_eq!(proof.key_max_byte_len, key_max_byte_len);
-	assert_eq!(proof.value_max_byte_len, value_max_byte_len);
-	assert_eq!(proof.max_depth, max_depth);
+        assert_eq!(proof.key_max_byte_len, key_max_byte_len);
+        assert_eq!(proof.value_max_byte_len, value_max_byte_len);
+        assert_eq!(proof.max_depth, max_depth);
 
-	Ok(())
+        Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
-    
+
+    use super::*;
     use ark_std::{end_timer, start_timer};
-    use super::*;	
     use halo2_proofs::{
         circuit::{AssignedCell, Layouter, SimpleFloorPlanner, Value},
         dev::MockProver,
@@ -855,36 +858,36 @@ mod tests {
 
     #[derive(Clone, Debug, Default)]
     pub struct MPTCircuit<F> {
-	pub key_bytes: Vec<Option<u8>>,
-	pub value_bytes: Vec<Option<u8>>,
-	pub value_byte_len: Option<usize>,
-	pub root_hash_bytes: Vec<Option<u8>>,
+        pub key_bytes: Vec<Option<u8>>,
+        pub value_bytes: Vec<Option<u8>>,
+        pub value_byte_len: Option<usize>,
+        pub root_hash_bytes: Vec<Option<u8>>,
 
-	// proof specification
-	pub leaf_bytes: Vec<Option<u8>>,
-	pub nodes: Vec<Vec<Option<u8>>>,
-	pub node_types: Vec<Option<u8>>,     // index 0 = root; 0 = branch, 1 = extension
-	pub depth: Option<usize>,
+        // proof specification
+        pub leaf_bytes: Vec<Option<u8>>,
+        pub nodes: Vec<Vec<Option<u8>>>,
+        pub node_types: Vec<Option<u8>>, // index 0 = root; 0 = branch, 1 = extension
+        pub depth: Option<usize>,
 
-	pub key_frag_hexs: Vec<Vec<Option<u8>>>,
-	// hex_len = 2 * byte_len + is_odd - 2
-	// if nibble for branch: byte_len = is_odd = 1
-	pub key_frag_is_odd: Vec<Option<u8>>,
-	pub key_frag_byte_len: Vec<Option<usize>>,
-	
-	pub key_byte_len: usize,
-	pub value_max_byte_len: usize,
-	pub max_depth: usize,
-	_marker: PhantomData<F>,
+        pub key_frag_hexs: Vec<Vec<Option<u8>>>,
+        // hex_len = 2 * byte_len + is_odd - 2
+        // if nibble for branch: byte_len = is_odd = 1
+        pub key_frag_is_odd: Vec<Option<u8>>,
+        pub key_frag_byte_len: Vec<Option<usize>>,
+
+        pub key_byte_len: usize,
+        pub value_max_byte_len: usize,
+        pub max_depth: usize,
+        _marker: PhantomData<F>,
     }
 
     impl<F: Field> Circuit<F> for MPTCircuit<F> {
-	type Config = MPTChip<F>;
-	type FloorPlanner = SimpleFloorPlanner;
+        type Config = MPTChip<F>;
+        type FloorPlanner = SimpleFloorPlanner;
 
-	fn without_witnesses(&self) -> Self {
-	    Self::default()
-	}
+        fn without_witnesses(&self) -> Self {
+            Self::default()
+        }
 
 	fn configure(meta: &mut ConstraintSystem<F>) -> Self::Config {
 	    MPTChip::configure(
@@ -901,12 +904,12 @@ mod tests {
 	    )
 	}
 
-	fn synthesize(
+        fn synthesize(
             &self,
             config: Self::Config,
             mut layouter: impl Layouter<F>,
-	) -> Result<(), Error> {
-	    let witness_time = start_timer!(|| "witness gen");
+        ) -> Result<(), Error> {
+            let witness_time = start_timer!(|| "witness gen");
             config.rlp.range.load_lookup_table(&mut layouter)?;
             config.keccak.load_lookup_table(&mut layouter)?;
             let gamma = layouter.get_challenge(config.rlp.rlc.gamma);
@@ -916,123 +919,234 @@ mod tests {
             let mut first_pass = true;
             let mut phase = 0u8;
             layouter.assign_region(
-		|| "MPT Fixed Test",
-		|region| {
+                || "MPT Fixed Test",
+                |region| {
                     if using_simple_floor_planner && first_pass {
-			first_pass = false;
-			return Ok(());
+                        first_pass = false;
+                        return Ok(());
                     }
                     phase = phase + 1u8;
 
                     println!("phase {:?}", phase);
                     let mut aux = Context::new(
-			region,
-			ContextParams {
+                        region,
+                        ContextParams {
                             num_advice: vec![
-				("default".to_string(), config.rlp.range.gate.num_advice),
-				("rlc".to_string(), config.rlp.rlc.basic_chips.len()),
-				("keccak".to_string(), config.keccak.rotation.len()),
-				("keccak_xor".to_string(), config.keccak.xor_values.len() / 3),
-				("keccak_xorandn".to_string(), config.keccak.xorandn_values.len() / 4),
+                                ("default".to_string(), config.rlp.range.gate.num_advice),
+                                ("rlc".to_string(), config.rlp.rlc.basic_chips.len()),
+                                ("keccak".to_string(), config.keccak.rotation.len()),
+                                ("keccak_xor".to_string(), config.keccak.xor_values.len() / 3),
+                                (
+                                    "keccak_xorandn".to_string(),
+                                    config.keccak.xorandn_values.len() / 4,
+                                ),
                             ],
-			},
+                        },
                     );
                     let ctx = &mut aux;
                     ctx.challenge.insert("gamma".to_string(), gamma);
 
-		    let key_bytes = config.rlp.range.gate.assign_region_smart(
-			ctx,
-			self.key_bytes.iter().map(|x| Witness(x.map(|v| Value::known(F::from(v as u64))).unwrap_or(Value::unknown()))).collect(),
-			vec![], vec![], vec![]
-		    )?;
-		    let value_bytes = config.rlp.range.gate.assign_region_smart(
-			ctx,
-			self.value_bytes.iter().map(|x| Witness(x.map(|v| Value::known(F::from(v as u64))).unwrap_or(Value::unknown()))).collect(),
-			vec![], vec![], vec![]
-		    )?;
-		    let value_byte_len_pre = config.rlp.range.gate.assign_region_smart(
-			ctx, vec![Witness(self.value_byte_len.map(|v| Value::known(F::from(v as u64))).unwrap_or(Value::unknown()))], vec![], vec![], vec![]
-		    )?;
-		    let value_byte_len = value_byte_len_pre[0].clone();
-		    let root_hash_bytes = config.rlp.range.gate.assign_region_smart(
-			ctx,
-			self.root_hash_bytes.iter().map(|x| Witness(x.map(|v| Value::known(F::from(v as u64))).unwrap_or(Value::unknown()))).collect(),
-			vec![], vec![], vec![]
-		    )?;
-		    let leaf_bytes = config.rlp.range.gate.assign_region_smart(
-			ctx,
-			self.leaf_bytes.iter().map(|x| Witness(x.map(|v| Value::known(F::from(v as u64))).unwrap_or(Value::unknown()))).collect(),
-			vec![], vec![], vec![]
-		    )?;
-		    let mut nodes = Vec::new();
-		    for node in self.nodes.iter() {
-			let node_pre = config.rlp.range.gate.assign_region_smart(
-			    ctx,
-			    node.iter().map(|x| Witness(x.map(|v| Value::known(F::from(v as u64))).unwrap_or(Value::unknown()))).collect(),
-			    vec![], vec![], vec![]
-			)?;
-			nodes.push(node_pre);
-		    }
-		    let node_types = config.rlp.range.gate.assign_region_smart(
-			ctx,
-			self.node_types.iter().map(|x| Witness(x.map(|v| Value::known(F::from(v as u64))).unwrap_or(Value::unknown()))).collect(),
-			vec![], vec![], vec![]
-		    )?;
-		    let depth_pre = config.rlp.range.gate.assign_region_smart(
-			ctx, vec![Witness(self.depth.map(|v| Value::known(F::from(v as u64))).unwrap_or(Value::unknown()))], vec![], vec![], vec![]
-		    )?;
-		    let depth = depth_pre[0].clone();
-		    let mut key_frag_hexs = Vec::new();
-		    for key_frag_hex in self.key_frag_hexs.iter() {
-			let key_frag_hex_pre = config.rlp.range.gate.assign_region_smart(
-			    ctx,
-			    key_frag_hex.iter().map(|x| Witness(x.map(|v| Value::known(F::from(v as u64))).unwrap_or(Value::unknown()))).collect(),
-			    vec![], vec![], vec![]
-			)?;
-			key_frag_hexs.push(key_frag_hex_pre);
-		    }
-		    let key_frag_is_odd = config.rlp.range.gate.assign_region_smart(
-			ctx,
-			self.key_frag_is_odd.iter().map(|x| Witness(x.map(|v| Value::known(F::from(v as u64))).unwrap_or(Value::unknown()))).collect(),
-			vec![], vec![], vec![]
-		    )?;
-		    let key_frag_byte_len = config.rlp.range.gate.assign_region_smart(
-			ctx,
-			self.key_frag_byte_len.iter().map(|x| Witness(x.map(|v| Value::known(F::from(v as u64))).unwrap_or(Value::unknown()))).collect(),
-			vec![], vec![], vec![]
-		    )?;
-		    
-		    let mpt_proof = MPTFixedKeyProof {
-			key_bytes,
-			value_bytes,
-			value_byte_len,
-			root_hash_bytes,
-			leaf_bytes,
-			nodes,
-			node_types,
-			depth,			
-			key_frag_hexs,
-			key_frag_is_odd,
-			key_frag_byte_len,			
-			key_byte_len: self.key_byte_len,
-			value_max_byte_len: self.value_max_byte_len,
-			max_depth: self.max_depth
-		    };
-		    let res = config.parse_mpt_inclusion_fixed_key(
-			ctx,
-			&config.rlp.range,
-			&mpt_proof,
-			self.key_byte_len,
-			self.value_max_byte_len,
-			self.max_depth,
-		    )?;
-		    
+                    let key_bytes = config.rlp.range.gate.assign_region_smart(
+                        ctx,
+                        self.key_bytes
+                            .iter()
+                            .map(|x| {
+                                Witness(
+                                    x.map(|v| Value::known(F::from(v as u64)))
+                                        .unwrap_or(Value::unknown()),
+                                )
+                            })
+                            .collect(),
+                        vec![],
+                        vec![],
+                        vec![],
+                    )?;
+                    let value_bytes = config.rlp.range.gate.assign_region_smart(
+                        ctx,
+                        self.value_bytes
+                            .iter()
+                            .map(|x| {
+                                Witness(
+                                    x.map(|v| Value::known(F::from(v as u64)))
+                                        .unwrap_or(Value::unknown()),
+                                )
+                            })
+                            .collect(),
+                        vec![],
+                        vec![],
+                        vec![],
+                    )?;
+                    let value_byte_len_pre = config.rlp.range.gate.assign_region_smart(
+                        ctx,
+                        vec![Witness(
+                            self.value_byte_len
+                                .map(|v| Value::known(F::from(v as u64)))
+                                .unwrap_or(Value::unknown()),
+                        )],
+                        vec![],
+                        vec![],
+                        vec![],
+                    )?;
+                    let value_byte_len = value_byte_len_pre[0].clone();
+                    let root_hash_bytes = config.rlp.range.gate.assign_region_smart(
+                        ctx,
+                        self.root_hash_bytes
+                            .iter()
+                            .map(|x| {
+                                Witness(
+                                    x.map(|v| Value::known(F::from(v as u64)))
+                                        .unwrap_or(Value::unknown()),
+                                )
+                            })
+                            .collect(),
+                        vec![],
+                        vec![],
+                        vec![],
+                    )?;
+                    let leaf_bytes = config.rlp.range.gate.assign_region_smart(
+                        ctx,
+                        self.leaf_bytes
+                            .iter()
+                            .map(|x| {
+                                Witness(
+                                    x.map(|v| Value::known(F::from(v as u64)))
+                                        .unwrap_or(Value::unknown()),
+                                )
+                            })
+                            .collect(),
+                        vec![],
+                        vec![],
+                        vec![],
+                    )?;
+                    let mut nodes = Vec::new();
+                    for node in self.nodes.iter() {
+                        let node_pre = config.rlp.range.gate.assign_region_smart(
+                            ctx,
+                            node.iter()
+                                .map(|x| {
+                                    Witness(
+                                        x.map(|v| Value::known(F::from(v as u64)))
+                                            .unwrap_or(Value::unknown()),
+                                    )
+                                })
+                                .collect(),
+                            vec![],
+                            vec![],
+                            vec![],
+                        )?;
+                        nodes.push(node_pre);
+                    }
+                    let node_types = config.rlp.range.gate.assign_region_smart(
+                        ctx,
+                        self.node_types
+                            .iter()
+                            .map(|x| {
+                                Witness(
+                                    x.map(|v| Value::known(F::from(v as u64)))
+                                        .unwrap_or(Value::unknown()),
+                                )
+                            })
+                            .collect(),
+                        vec![],
+                        vec![],
+                        vec![],
+                    )?;
+                    let depth_pre = config.rlp.range.gate.assign_region_smart(
+                        ctx,
+                        vec![Witness(
+                            self.depth
+                                .map(|v| Value::known(F::from(v as u64)))
+                                .unwrap_or(Value::unknown()),
+                        )],
+                        vec![],
+                        vec![],
+                        vec![],
+                    )?;
+                    let depth = depth_pre[0].clone();
+                    let mut key_frag_hexs = Vec::new();
+                    for key_frag_hex in self.key_frag_hexs.iter() {
+                        let key_frag_hex_pre = config.rlp.range.gate.assign_region_smart(
+                            ctx,
+                            key_frag_hex
+                                .iter()
+                                .map(|x| {
+                                    Witness(
+                                        x.map(|v| Value::known(F::from(v as u64)))
+                                            .unwrap_or(Value::unknown()),
+                                    )
+                                })
+                                .collect(),
+                            vec![],
+                            vec![],
+                            vec![],
+                        )?;
+                        key_frag_hexs.push(key_frag_hex_pre);
+                    }
+                    let key_frag_is_odd = config.rlp.range.gate.assign_region_smart(
+                        ctx,
+                        self.key_frag_is_odd
+                            .iter()
+                            .map(|x| {
+                                Witness(
+                                    x.map(|v| Value::known(F::from(v as u64)))
+                                        .unwrap_or(Value::unknown()),
+                                )
+                            })
+                            .collect(),
+                        vec![],
+                        vec![],
+                        vec![],
+                    )?;
+                    let key_frag_byte_len = config.rlp.range.gate.assign_region_smart(
+                        ctx,
+                        self.key_frag_byte_len
+                            .iter()
+                            .map(|x| {
+                                Witness(
+                                    x.map(|v| Value::known(F::from(v as u64)))
+                                        .unwrap_or(Value::unknown()),
+                                )
+                            })
+                            .collect(),
+                        vec![],
+                        vec![],
+                        vec![],
+                    )?;
+
+                    let mpt_proof = MPTFixedKeyProof {
+                        key_bytes,
+                        value_bytes,
+                        value_byte_len,
+                        root_hash_bytes,
+                        leaf_bytes,
+                        nodes,
+                        node_types,
+                        depth,
+                        key_frag_hexs,
+                        key_frag_is_odd,
+                        key_frag_byte_len,
+                        key_byte_len: self.key_byte_len,
+                        value_max_byte_len: self.value_max_byte_len,
+                        max_depth: self.max_depth,
+                    };
+                    let res = config.parse_mpt_inclusion_fixed_key(
+                        ctx,
+                        &config.rlp.range,
+                        &mpt_proof,
+                        self.key_byte_len,
+                        self.value_max_byte_len,
+                        self.max_depth,
+                    )?;
+
                     let stats = config.rlp.range.finalize(ctx)?;
                     println!("stats {:?}", stats);
-                    println!("ctx.rows rlc {:?}", ctx.advice_rows.get::<String>(&"rlc".to_string()));
                     println!(
-			"ctx.rows default {:?}",
-			ctx.advice_rows.get::<String>(&"default".to_string())
+                        "ctx.rows rlc {:?}",
+                        ctx.advice_rows.get::<String>(&"rlc".to_string())
+                    );
+                    println!(
+                        "ctx.rows default {:?}",
+                        ctx.advice_rows.get::<String>(&"default".to_string())
                     );
 		    println!("ctx.rows keccak {:?}", ctx.advice_rows["keccak"]);
                     println!("ctx.rows keccak_xor {:?}", ctx.advice_rows["keccak_xor"]);
@@ -1046,15 +1160,15 @@ mod tests {
 			ctx.advice_rows["keccak_xor"].iter().sum::<usize>()
                     );
                     println!(
-			"ctx.cells keccak_xorandn {:?}",
-			ctx.advice_rows["keccak_xorandn"].iter().sum::<usize>()
+                        "ctx.cells keccak_xorandn {:?}",
+                        ctx.advice_rows["keccak_xorandn"].iter().sum::<usize>()
                     );
                     Ok(())
-		},
+                },
             )?;
             end_timer!(witness_time);
-            Ok(())	    
-	}
+            Ok(())
+        }
     }
     
     #[test]

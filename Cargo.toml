@@ -8,7 +8,7 @@ edition = "2021"
 halo2_proofs = { git = "https://github.com/privacy-scaling-explorations/halo2.git", tag = "v2022_09_10" }
 
 [patch."https://github.com/privacy-scaling-explorations/halo2"]
-halo2_proofs = { git = "https:///github.com//privacy-scaling-explorations/halo2", tag =  "v2022_09_10" }
+halo2_proofs = { git = "https://github.com/zk-attestor/halo2.git", branch = "serialize", package = "halo2_proofs" }
 
 [patch."https://github.com/privacy-scaling-explorations/zkevm-circuits"]
 zkevm-circuits = { git = "https://github.com/yi-sun/zkevm-circuits.git", branch = "expose-keccak-new" }

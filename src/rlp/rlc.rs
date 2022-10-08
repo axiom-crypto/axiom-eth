@@ -1,3 +1,5 @@
+use crate::keccak::print_bytes;
+use eth_types::Field;
 use halo2_base::{
     gates::{
         range::{RangeConfig, RangeStrategy, RangeStrategy::Vertical},
@@ -16,8 +18,6 @@ use halo2_proofs::{
     poly::Rotation,
 };
 use std::{cmp::max, marker::PhantomData, rc::Rc};
-use crate::keccak::print_bytes;
-use eth_types::Field;
 
 pub fn compute_rlc<F: Field>(msg: &Vec<Value<F>>, r: Value<F>) -> Value<F> {
     let mut coeff = r;
@@ -72,15 +72,15 @@ pub struct BasicRlcChip<F: Field> {
 
 impl<F: Field> BasicRlcChip<F> {
     pub fn configure(meta: &mut ConstraintSystem<F>) -> Self {
-	let q_rlc = meta.selector();
-	let q_mul = meta.selector();
-	let val = meta.advice_column();
-	let rlc = meta.advice_column_in(SecondPhase);
+        let q_rlc = meta.selector();
+        let q_mul = meta.selector();
+        let val = meta.advice_column();
+        let rlc = meta.advice_column_in(SecondPhase);
 
-	meta.enable_equality(val);
-	meta.enable_equality(rlc);
-	
-	let config = Self { val, rlc, q_rlc, q_mul, _marker: PhantomData };
+        meta.enable_equality(val);
+        meta.enable_equality(rlc);
+
+        let config = Self { val, rlc, q_rlc, q_mul, _marker: PhantomData };
         config
     }
 
@@ -131,7 +131,7 @@ impl<F: Field> RlcChip<F> {
             basic_chips.push(basic_chip);
         }
 
-	let gamma = meta.challenge_usable_after(FirstPhase);
+        let gamma = meta.challenge_usable_after(FirstPhase);
         for idx in 0..num_basic_chips {
             basic_chips[idx].create_gates(meta, gamma);
         }
@@ -181,15 +181,14 @@ impl<F: Field> RlcChip<F> {
         let mut val_vec = Vec::with_capacity(val_inputs.len());
         for (idx, (rlc, val)) in rlc_inputs.iter().zip(val_inputs).enumerate() {
             let rlc_assigned_val = if let Some(rlc) = rlc {
-                let rlc_assigned =
-                    ctx.assign_cell(
-			rlc.clone(),
-			self.basic_chips[chip_idx].rlc,
-			&self.context_id.clone(),
-			chip_idx,
-			row_offset + idx,
-			1u8
-		    )?;
+                let rlc_assigned = ctx.assign_cell(
+                    rlc.clone(),
+                    self.basic_chips[chip_idx].rlc,
+                    &self.context_id.clone(),
+                    chip_idx,
+                    row_offset + idx,
+                    1u8,
+                )?;
                 Some(rlc_assigned)
             } else {
                 None
@@ -197,15 +196,14 @@ impl<F: Field> RlcChip<F> {
             rlc_vec.push(rlc_assigned_val);
 
             let val_assigned_val = if let Some(val) = val {
-                let val_assigned =
-                    ctx.assign_cell(
-			val.clone(),
-			self.basic_chips[chip_idx].val,
-			&self.context_id.clone(),
-			chip_idx,
-			row_offset + idx,
-			1u8
-		    )?;
+                let val_assigned = ctx.assign_cell(
+                    val.clone(),
+                    self.basic_chips[chip_idx].val,
+                    &self.context_id.clone(),
+                    chip_idx,
+                    row_offset + idx,
+                    1u8,
+                )?;
                 Some(val_assigned)
             } else {
                 None
@@ -339,8 +337,7 @@ impl<F: Field> RlcChip<F> {
         )?;
 
         if input.len() > 0 {
-            ctx.region
-                .constrain_equal(rlc_cells[0].cell(), val_cells[0].cell())?;
+            ctx.region.constrain_equal(rlc_cells[0].cell(), val_cells[0].cell())?;
         }
 
         let is_zero = range.is_zero(ctx, &len)?;
@@ -379,29 +376,34 @@ impl<F: Field> RlcChip<F> {
         )?;
         let rlc_val = rlc_val_sel[0].clone();
 
-	if input.len() > 1 {
-	    println!("[compute_rlc] len {:?} max_len {:?} input[1] {:?} rlc_val {:?}",
-		     len.value(), max_len, input[1].value(), rlc_val.value());
-	}
-	print_bytes("[compute_rlc]".to_string(), input);
-	
-	let rlc_trace = {
-	    if input.len() > 0 {
-		RlcTrace {
-		    rlc_val,
-		    rlc_len: len,
-		    rlc_max: rlc_cells[rlc_cells.len() - 1].clone(),
-		    max_len,
-		}
-	    } else {
-		RlcTrace {
-		    rlc_val: rlc_val.clone(),
-		    rlc_len: len,
-		    rlc_max: rlc_val.clone(),
-		    max_len
-		}
-	    }
-	};
+        if input.len() > 1 {
+            println!(
+                "[compute_rlc] len {:?} max_len {:?} input[1] {:?} rlc_val {:?}",
+                len.value(),
+                max_len,
+                input[1].value(),
+                rlc_val.value()
+            );
+        }
+        print_bytes("[compute_rlc]".to_string(), input);
+
+        let rlc_trace = {
+            if input.len() > 0 {
+                RlcTrace {
+                    rlc_val,
+                    rlc_len: len,
+                    rlc_max: rlc_cells[rlc_cells.len() - 1].clone(),
+                    max_len,
+                }
+            } else {
+                RlcTrace {
+                    rlc_val: rlc_val.clone(),
+                    rlc_len: len,
+                    rlc_max: rlc_val.clone(),
+                    max_len,
+                }
+            }
+        };
         Ok(rlc_trace)
     }
 
@@ -432,16 +434,13 @@ impl<F: Field> RlcChip<F> {
         )?;
 
         if input.len() > 0 {
-            ctx.region
-                .constrain_equal(rlc_cells[0].cell(), val_cells[0].cell())?;
+            ctx.region.constrain_equal(rlc_cells[0].cell(), val_cells[0].cell())?;
         }
 
-        let rlc_trace = RlcFixedTrace {
-	    rlc_val: rlc_cells[rlc_cells.len() - 1].clone(), len
-	};
+        let rlc_trace = RlcFixedTrace { rlc_val: rlc_cells[rlc_cells.len() - 1].clone(), len };
         Ok(rlc_trace)
     }
-    
+
     pub fn select_from_cells(
         &self,
         ctx: &mut Context<'_, F>,
@@ -460,7 +459,7 @@ impl<F: Field> RlcChip<F> {
             inputs.push(Existing(&cell));
             inputs.push(Existing(&ind));
             running_sum = running_sum + cell.value().copied() * ind.value().copied();
-            inputs.push(Witness(running_sum));	    
+            inputs.push(Witness(running_sum));
             gate_offsets.push(3 * idx);
         }
 
@@ -469,28 +468,28 @@ impl<F: Field> RlcChip<F> {
     }
 
     pub fn constrain_equal(
-	&self,
-	ctx: &mut Context<'_, F>,
-	a: &QuantumCell<F>,
-	b: &QuantumCell<F>,
+        &self,
+        ctx: &mut Context<'_, F>,
+        a: &QuantumCell<F>,
+        b: &QuantumCell<F>,
     ) -> Result<(), Error> {
-	self.assign_region_rlc(
-	    ctx,
-	    &vec![a.clone(), Constant(F::zero()), Constant(F::zero()), b.clone()],
-	    vec![],
-	    vec![0],
-	    None
-	)?;
-	Ok(())
+        self.assign_region_rlc(
+            ctx,
+            &vec![a.clone(), Constant(F::zero()), Constant(F::zero()), b.clone()],
+            vec![],
+            vec![0],
+            None,
+        )?;
+        Ok(())
     }
 
     // returns a * sel + b * (1 - sel)
     pub fn select(
-	&self,
-	ctx: &mut Context<'_, F>,
-	a: &QuantumCell<F>,
-	b: &QuantumCell<F>,
-	sel: &QuantumCell<F>,
+        &self,
+        ctx: &mut Context<'_, F>,
+        a: &QuantumCell<F>,
+        b: &QuantumCell<F>,
+        sel: &QuantumCell<F>,
     ) -> Result<AssignedValue<F>, Error> {
         let diff_val = a.value().zip(b.value()).map(|(av, bv)| (*av) - (*bv));
         let out_val = a
@@ -498,7 +497,7 @@ impl<F: Field> RlcChip<F> {
             .zip(b.value())
             .zip(sel.value())
             .map(|((av, bv), sv)| (*av) * (*sv) + (*bv) * (F::from(1) - *sv));
-	let cells = vec![
+        let cells = vec![
             QuantumCell::Witness(diff_val),
             QuantumCell::Constant(F::from(1)),
             b.clone(),
@@ -508,10 +507,10 @@ impl<F: Field> RlcChip<F> {
             QuantumCell::Witness(diff_val),
             QuantumCell::Witness(out_val),
         ];
-	// | a - b | 1 | b | a | b | sel | a - b | out |
-	let assigned = self.assign_region_rlc(ctx, &cells, vec![], vec![0, 4], None)?;
-	ctx.region.constrain_equal(assigned[0].cell(), assigned[6].cell())?;
-	Ok(assigned[7].clone())
+        // | a - b | 1 | b | a | b | sel | a - b | out |
+        let assigned = self.assign_region_rlc(ctx, &cells, vec![], vec![0, 4], None)?;
+        ctx.region.constrain_equal(assigned[0].cell(), assigned[6].cell())?;
+        Ok(assigned[7].clone())
     }
 
     // | out | a | inv | 1 | 0 | a | out | 0
@@ -536,7 +535,7 @@ impl<F: Field> RlcChip<F> {
             Constant(F::from(0)),
         ];
         let assigned = self.assign_region_rlc(ctx, &cells, vec![], vec![0, 4], None)?;
-	ctx.region.constrain_equal(assigned[0].cell(), assigned[6].cell())?;
+        ctx.region.constrain_equal(assigned[0].cell(), assigned[6].cell())?;
         Ok(assigned[0].clone())
     }
 
@@ -595,7 +594,7 @@ impl<F: Field> RlcChip<F> {
                 .collect(),
             vec![],
             vec![],
-	    None
+            None,
         )?;
 
         // check ind[i] * (i - idx) == 0
@@ -611,9 +610,9 @@ impl<F: Field> RlcChip<F> {
                     Existing(&ind[i]),
                     Constant(F::from(0)),
                 ],
-		vec![],
+                vec![],
                 vec![0, 3],
-		None
+                None,
             )?;
         }
         Ok(ind)
@@ -657,9 +656,7 @@ impl<F: Field> RlcChip<F> {
         for i in 0..(vec_a.len() - start_id) {
             gate_offsets.push(3 * i);
         }
-        let assignments = self.assign_region_rlc(
-            ctx, &cells, vec![], gate_offsets, None,
-        )?;
+        let assignments = self.assign_region_rlc(ctx, &cells, vec![], gate_offsets, None)?;
         let mut a_assigned = Vec::with_capacity(vec_a.len());
         let mut b_assigned = Vec::with_capacity(vec_a.len());
         if start_id == 1 {
@@ -706,7 +703,7 @@ impl<F: Field> RlcChip<F> {
             &rlc_and_len_inputs.iter().map(|(a, b)| Constant(F::from(1))).collect(),
             &rlc_and_len_inputs.iter().map(|(a, b)| Existing(&b)).collect(),
         )?;
-	println!("TEST {:?} {:?}", len_sum.value(), concat.1.value());
+        println!("TEST {:?} {:?}", len_sum.value(), concat.1.value());
         range.gate.assert_equal(ctx, &Existing(&len_sum), &Existing(&concat.1))?;
 
         let mut gamma_pows = Vec::new();
@@ -747,10 +744,8 @@ impl<F: Field> RlcChip<F> {
         let rlc_concat = self.assign_region_rlc(ctx, &inputs, vec![], gate_offsets, None)?;
 
         for idx in 0..(rlc_and_len_inputs.len() - 1) {
-            ctx.region.constrain_equal(
-                rlc_concat[4 * idx].cell(),
-                rlc_concat[4 * idx + 2].cell(),
-            )?;
+            ctx.region
+                .constrain_equal(rlc_concat[4 * idx].cell(), rlc_concat[4 * idx + 2].cell())?;
         }
         Ok(())
     }
@@ -764,44 +759,45 @@ impl<F: Field> RlcChip<F> {
         max_lens: &Vec<usize>,
         concat: (AssignedValue<F>, AssignedValue<F>),
         max_len: usize,
-	num_frags: AssignedValue<F>,
-	max_num_frags: usize,
+        num_frags: AssignedValue<F>,
+        max_num_frags: usize,
         rlc_cache: &Vec<AssignedValue<F>>,
     ) -> Result<(), Error> {
         assert!(rlc_cache.len() >= log2(max_len));
         assert!(rlc_cache.len() >= log2(*max_lens.iter().max().unwrap()));
-	assert_eq!(rlc_and_len_inputs.len(), max_num_frags);
+        assert_eq!(rlc_and_len_inputs.len(), max_num_frags);
 
-	let mut cells = Vec::with_capacity(3 * max_num_frags + 1);
-	let mut running_sum = Value::known(F::zero());
-	let mut gate_offsets = Vec::new();
-	for idx in 0..max_num_frags {
-	    if idx == 0 {
-		cells.push(Existing(&rlc_and_len_inputs[0].1));
-		running_sum = running_sum + rlc_and_len_inputs[0].1.value();
-	    } else {
-		cells.push(Existing(&rlc_and_len_inputs[idx].1));
-		cells.push(Constant(F::one()));
-		running_sum = running_sum + rlc_and_len_inputs[idx].1.value();
-		cells.push(Witness(running_sum));		
-	    }
-	    gate_offsets.push(3 * idx);
-	}
-	let assigned = range.gate.assign_region_smart(
-	    ctx, cells, gate_offsets, vec![], vec![]
-	)?;
-	let total_len = range.gate.select_from_idx(
-	    ctx,
-	    &(0..max_num_frags + 1).map(|idx| {
-		if idx == 0 {
-		    Constant(F::zero())
-		} else {
-		    Existing(&assigned[3 * idx - 3])
-		}
-	    }).collect(),
-	    &Existing(&num_frags)
-	)?;
-	println!("TEST2 {:?} {:?}", total_len.value(), concat.1.value());
+        let mut cells = Vec::with_capacity(3 * max_num_frags + 1);
+        let mut running_sum = Value::known(F::zero());
+        let mut gate_offsets = Vec::new();
+        for idx in 0..max_num_frags {
+            if idx == 0 {
+                cells.push(Existing(&rlc_and_len_inputs[0].1));
+                running_sum = running_sum + rlc_and_len_inputs[0].1.value();
+            } else {
+                cells.push(Existing(&rlc_and_len_inputs[idx].1));
+                cells.push(Constant(F::one()));
+                running_sum = running_sum + rlc_and_len_inputs[idx].1.value();
+                cells.push(Witness(running_sum));
+            }
+            gate_offsets.push(3 * idx);
+        }
+        let assigned = range.gate.assign_region_smart(ctx, cells, gate_offsets, vec![], vec![])?;
+        let total_len =
+            range.gate.select_from_idx(
+                ctx,
+                &(0..max_num_frags + 1)
+                    .map(|idx| {
+                        if idx == 0 {
+                            Constant(F::zero())
+                        } else {
+                            Existing(&assigned[3 * idx - 3])
+                        }
+                    })
+                    .collect(),
+                &Existing(&num_frags),
+            )?;
+        println!("TEST2 {:?} {:?}", total_len.value(), concat.1.value());
         range.gate.assert_equal(ctx, &Existing(&total_len), &Existing(&concat.1))?;
 
         let mut gamma_pows = Vec::new();
@@ -836,36 +832,38 @@ impl<F: Field> RlcChip<F> {
         }
         let rlc_concat = self.assign_region_rlc(ctx, &inputs, vec![], gate_offsets, None)?;
         for idx in 0..(rlc_and_len_inputs.len() - 1) {
-            ctx.region.constrain_equal(
-                rlc_concat[4 * idx].cell(),
-                rlc_concat[4 * idx + 2].cell(),
-            )?;
+            ctx.region
+                .constrain_equal(rlc_concat[4 * idx].cell(), rlc_concat[4 * idx + 2].cell())?;
         }
 
-	let concat_select = self.select_from_idx(
-	    ctx,
-	    &(0..max_num_frags + 1).map(|idx| {
-		if idx == 0 {
-		    Constant(F::zero())
-		} else {
-		    Existing(&rlc_concat[4 * idx - 4])
-		}
-	    }).collect(),
-	    &Existing(&num_frags)
-	)?;
-	let concat_check = self.assign_region_rlc(
-	    ctx,
-	    &vec![Existing(&concat_select),
-		  Constant(F::zero()),
-		  Constant(F::zero()),
-		  Existing(&concat.0)],
-	    vec![],
-	    vec![0],
-	    None
-	)?;
+        let concat_select = self.select_from_idx(
+            ctx,
+            &(0..max_num_frags + 1)
+                .map(|idx| {
+                    if idx == 0 {
+                        Constant(F::zero())
+                    } else {
+                        Existing(&rlc_concat[4 * idx - 4])
+                    }
+                })
+                .collect(),
+            &Existing(&num_frags),
+        )?;
+        let concat_check = self.assign_region_rlc(
+            ctx,
+            &vec![
+                Existing(&concat_select),
+                Constant(F::zero()),
+                Constant(F::zero()),
+                Existing(&concat.0),
+            ],
+            vec![],
+            vec![0],
+            None,
+        )?;
         Ok(())
     }
-    
+
     pub fn load_rlc_cache(
         &self,
         ctx: &mut Context<'_, F>,
@@ -874,8 +872,8 @@ impl<F: Field> RlcChip<F> {
         let gamma = ctx.challenge_get(&self.challenge_id);
 
         let mut rlc_inputs = Vec::new();
-        let mut val_inputs = vec![(1, Constant(F::from(0)))];
-        let mut rlc_offsets = vec![1];
+        let val_inputs = vec![(1, Constant(F::from(0)))];
+        let rlc_offsets = vec![1];
         let mut gate_offsets = Vec::new();
         let mut vals = Vec::new();
         for idx in 0..cache_bits {
@@ -898,7 +896,12 @@ impl<F: Field> RlcChip<F> {
         }
 
         let cache = self.assign_region_rlc_and_val_idx(
-            ctx, &rlc_inputs, &val_inputs, rlc_offsets, gate_offsets, None,
+            ctx,
+            &rlc_inputs,
+            &val_inputs,
+            rlc_offsets,
+            gate_offsets,
+            None,
         )?;
         for idx in 0..(cache_bits - 1) {
             ctx.region.constrain_equal(cache.0[4 * idx + 1].cell(), cache.0[4 * idx + 3].cell())?;
@@ -1006,11 +1009,11 @@ impl<F: Field> TestConfig<F> {
         num_chip_fixed: usize,
         range_strategy: RangeStrategy,
         num_advice: &[usize],
-        mut num_lookup_advice: &[usize],
+        num_lookup_advice: &[usize],
         num_fixed: usize,
         lookup_bits: usize,
     ) -> Self {
-	let col = meta.advice_column();
+        let col = meta.advice_column();
         let rlc = RlcChip::configure(
             meta,
             num_basic_chips,
@@ -1063,7 +1066,7 @@ impl<F: Field> Circuit<F> for TestCircuit<F> {
         let mut first_pass = true;
         let rlc_trace = layouter.assign_region(
             || "load_inputs",
-            |mut region| {
+            |region| {
                 if first_pass && using_simple_floor_planner {
                     first_pass = false;
                 }
@@ -1081,7 +1084,15 @@ impl<F: Field> Circuit<F> for TestCircuit<F> {
 
                 let inputs_assigned = config.range.gate.assign_region_smart(
                     ctx,
-                    self.inputs.iter().map(|x| Witness(x.map(|v| Value::known(F::from(v as u64))).unwrap_or(Value::unknown()))).collect(),
+                    self.inputs
+                        .iter()
+                        .map(|x| {
+                            Witness(
+                                x.map(|v| Value::known(F::from(v as u64)))
+                                    .unwrap_or(Value::unknown()),
+                            )
+                        })
+                        .collect(),
                     vec![],
                     vec![],
                     vec![],
@@ -1094,7 +1105,7 @@ impl<F: Field> Circuit<F> for TestCircuit<F> {
                     vec![],
                 )?;
 
-		println!("len_assigned {:?}", len_assigned[0]);
+                println!("len_assigned {:?}", len_assigned[0]);
                 let rlc_trace = config.rlc.compute_rlc(
                     ctx,
                     &config.range,
@@ -1102,20 +1113,22 @@ impl<F: Field> Circuit<F> for TestCircuit<F> {
                     len_assigned[0].clone(),
                     self.max_len,
                 )?;
-		println!("rlc_trace {:?}", rlc_trace);
+                println!("rlc_trace {:?}", rlc_trace);
 
                 let stats = config.range.finalize(ctx)?;
                 Ok(rlc_trace)
             },
         )?;
 
-	if !self.inputs[0].is_none() {
-            let real_rlc = gamma.map(|g| compute_rlc_acc(&self.inputs[..self.len].iter().map(|x| x.unwrap()).collect(), g));
-	    println!("rlc_trace.rlc_val {:?}", rlc_trace.rlc_val.value());
-	    println!("real_rlc {:?}", real_rlc);
+        if !self.inputs[0].is_none() {
+            let real_rlc = gamma.map(|g| {
+                compute_rlc_acc(&self.inputs[..self.len].iter().map(|x| x.unwrap()).collect(), g)
+            });
+            println!("rlc_trace.rlc_val {:?}", rlc_trace.rlc_val.value());
+            println!("real_rlc {:?}", real_rlc);
             rlc_trace.rlc_val.value().zip(real_rlc).assert_if_known(|(a, b)| *a == b);
-	    println!("test passed");
-	}
+            println!("test passed");
+        }
         Ok(())
     }
 }
@@ -1124,17 +1137,19 @@ impl<F: Field> Circuit<F> for TestCircuit<F> {
 mod tests {
     use crate::rlp::rlc::{log2, TestCircuit};
     use halo2_proofs::{
-	circuit::{AssignedCell, Layouter, SimpleFloorPlanner, Value},
-	dev::MockProver,
-	halo2curves::bn256::{Bn256, Fr, G1Affine, G2Affine},
-	plonk::*,
-	poly::commitment::ParamsProver,
-	poly::kzg::{
+        circuit::{AssignedCell, Layouter, SimpleFloorPlanner, Value},
+        dev::MockProver,
+        halo2curves::bn256::{Bn256, Fr, G1Affine, G2Affine},
+        plonk::*,
+        poly::commitment::ParamsProver,
+        poly::kzg::{
             commitment::{KZGCommitmentScheme, ParamsKZG},
             multiopen::{ProverGWC, ProverSHPLONK, VerifierGWC, VerifierSHPLONK},
             strategy::SingleStrategy,
-	},
-	transcript::{Blake2bRead, Blake2bWrite, Challenge255, TranscriptReadBuffer, TranscriptWriterBuffer},
+        },
+        transcript::{
+            Blake2bRead, Blake2bWrite, Challenge255, TranscriptReadBuffer, TranscriptWriterBuffer,
+        },
     };
     use std::marker::PhantomData;
 
@@ -1149,54 +1164,46 @@ mod tests {
         let len = 32;
 
         let circuit = TestCircuit::<Fr> {
-	    inputs: input_bytes.iter().map(|x| Some(*x)).collect(),
-	    len,
-	    max_len,
-	    _marker: PhantomData
-	};
-	
+            inputs: input_bytes.iter().map(|x| Some(*x)).collect(),
+            len,
+            max_len,
+            _marker: PhantomData,
+        };
+
         let prover = MockProver::run(k, &circuit, vec![]).unwrap();
         assert_eq!(prover.verify(), Ok(()));
     }
 
     #[test]
     pub fn test_rlc() -> Result<(), Error> {
-	let k = 16;
+        let k = 16;
         let input_bytes_pre = vec![
             1, 2, 3, 4, 5, 6, 7, 8, 1, 2, 3, 4, 5, 6, 7, 8, 1, 2, 3, 4, 5, 6, 7, 8, 1, 2, 3, 4, 5,
             6, 7, 8, 0, 0, 0, 0, 0, 0, 0, 0,
         ];
-	let input_bytes: Vec<Option<u8>> = input_bytes_pre.iter().map(|x| Some(*x)).collect();
-	let input_bytes_none: Vec<Option<u8>> = input_bytes_pre.iter().map(|x| None).collect();
-	let max_len = input_bytes.len();
+        let input_bytes: Vec<Option<u8>> = input_bytes_pre.iter().map(|x| Some(*x)).collect();
+        let input_bytes_none: Vec<Option<u8>> = input_bytes_pre.iter().map(|x| None).collect();
+        let max_len = input_bytes.len();
         let len = 32;
 
-	let mut rng = rand::thread_rng();
-	let params = ParamsKZG::<Bn256>::setup(k, &mut rng);
-	let circuit = TestCircuit::<Fr> {
-	    inputs: input_bytes_none,
-	    len,
-	    max_len,
-	    _marker: PhantomData
-	};
+        let mut rng = rand::thread_rng();
+        let params = ParamsKZG::<Bn256>::setup(k, &mut rng);
+        let circuit =
+            TestCircuit::<Fr> { inputs: input_bytes_none, len, max_len, _marker: PhantomData };
 
-	println!("vk gen started");
-	let vk = keygen_vk(&params, &circuit)?;
-	println!("vk gen done");
+        println!("vk gen started");
+        let vk = keygen_vk(&params, &circuit)?;
+        println!("vk gen done");
         let pk = keygen_pk(&params, vk, &circuit)?;
-	println!("pk gen done");
-	println!("");
-	println!("==============STARTING PROOF GEN===================");
+        println!("pk gen done");
+        println!("");
+        println!("==============STARTING PROOF GEN===================");
 
-	let proof_circuit = TestCircuit::<Fr> {
-	    inputs: input_bytes,
-	    len,
-	    max_len,
-	    _marker: PhantomData
-	};
+        let proof_circuit =
+            TestCircuit::<Fr> { inputs: input_bytes, len, max_len, _marker: PhantomData };
 
-	let mut transcript = Blake2bWrite::<_, _, Challenge255<_>>::init(vec![]);
-	create_proof::<
+        let mut transcript = Blake2bWrite::<_, _, Challenge255<_>>::init(vec![]);
+        create_proof::<
             KZGCommitmentScheme<Bn256>,
             ProverGWC<'_, Bn256>,
             Challenge255<G1Affine>,
@@ -1205,8 +1212,8 @@ mod tests {
             TestCircuit<Fr>,
         >(&params, &pk, &[proof_circuit], &[&[]], rng, &mut transcript)?;
         let proof = transcript.finalize();
-	println!("proof gen done");
-	let verifier_params = params.verifier_params();
+        println!("proof gen done");
+        let verifier_params = params.verifier_params();
         let strategy = SingleStrategy::new(&params);
         let mut transcript = Blake2bRead::<_, _, Challenge255<_>>::init(&proof[..]);
         assert!(verify_proof::<
@@ -1216,8 +1223,8 @@ mod tests {
             Blake2bRead<&[u8], G1Affine, Challenge255<G1Affine>>,
             SingleStrategy<'_, Bn256>,
         >(verifier_params, pk.get_vk(), strategy, &[&[]], &mut transcript)
-		.is_ok());
-	println!("verify done");
-	Ok(())
+        .is_ok());
+        println!("verify done");
+        Ok(())
     }
 }

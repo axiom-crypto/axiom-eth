@@ -313,7 +313,7 @@ impl<F: FieldExt> KeccakChip<F> {
             }
         }));
         append.push(next);
-        for idx in in_max_len + 1..out_len {
+        for _ in in_max_len + 1..out_len {
             append.push(Constant(F::zero()));
         }
         let mut new_out_vec_pre =
@@ -365,7 +365,7 @@ impl<F: FieldExt> KeccakChip<F> {
             &(0..in_max_len - in_min_len).map(|idx| Existing(&vals[3 * idx])).collect(),
             &Existing(&len_minus_min_assigned),
         )?;
-	println!("TEST3 {:?} {:?}", is_equal_sum.value(), len_minus_min_assigned.value());
+        println!("TEST3 {:?} {:?}", is_equal_sum.value(), len_minus_min_assigned.value());
         range.gate.assert_equal(
             ctx,
             &Existing(&is_equal_sum),
@@ -424,7 +424,7 @@ impl<F: FieldExt> KeccakChip<F> {
             &Existing(&max_minus_len_assigned),
         )?;
 
-	println!("TEST5 {:?} {:?}", is_zero_sum.value(), max_minus_len_assigned.value());
+        println!("TEST5 {:?} {:?}", is_zero_sum.value(), max_minus_len_assigned.value());
         range.gate.assert_equal(
             ctx,
             &Existing(&is_zero_sum),
@@ -443,9 +443,7 @@ impl<F: FieldExt> KeccakChip<F> {
             if (idx + 1) % 136 != 0 {
                 out_vec.push(out_vec_pre[idx].clone());
             } else {
-                let is_in_pad_range = range.is_less_than_safe(
-                    ctx, &len, idx + 1, log2(out_len),
-                )?;
+                let is_in_pad_range = range.is_less_than_safe(ctx, &len, idx + 1, log2(out_len))?;
                 let out_val = range.gate.assign_region_smart(
                     ctx,
                     vec![
@@ -588,7 +586,7 @@ impl<F: FieldExt> KeccakChip<F> {
             vec![],
             vec![],
         )?;
-        let xor = self.xor(ctx, &[&assigned[0], &assigned[2]])?;
+        self.xor(ctx, &[&assigned[0], &assigned[2]])?;
         Ok((assigned[2].clone(), assigned[0].clone()))
     }
 
@@ -751,7 +749,7 @@ impl<F: FieldExt> KeccakChip<F> {
         output.pop();
         Ok(output)
     }
-    
+
     pub fn bits_to_num(
         &self,
         ctx: &mut Context<'_, F>,
@@ -1005,8 +1003,9 @@ impl<F: FieldExt> KeccakChip<F> {
         min_len: usize,
         max_len: usize,
     ) -> Result<Vec<AssignedValue<F>>, Error> {
-	assert_eq!(input.len(), max_len);
-        let padded_bytes = KeccakChip::pad_bytes(ctx, range, &input, len.clone(), min_len, max_len)?;
+        assert_eq!(input.len(), max_len);
+        let padded_bytes =
+            KeccakChip::pad_bytes(ctx, range, &input, len.clone(), min_len, max_len)?;
         let mut padded_hexs = Vec::with_capacity(8 * padded_bytes.len());
         for byte in padded_bytes.iter() {
             let (hex1, hex2) = self.byte_to_hex(ctx, range, &byte)?;
@@ -1060,19 +1059,20 @@ impl<F: FieldExt> KeccakChip<F> {
             }
 
             if idx >= min_rounds - 1 && idx < max_rounds {
-                let mut state_bits_out = state_bits.clone().unwrap();
-                let mut output: Vec<AssignedValue<F>> =
-                    state_bits_out[..self.output_limb_len].iter().map(|a| a.clone()).collect();
+                let output: Vec<AssignedValue<F>> = state_bits.as_ref().unwrap()
+                    [..self.output_limb_len]
+                    .iter()
+                    .map(|a| a.clone())
+                    .collect();
                 squeezes.push(output);
             }
             idx = idx + 1;
         }
 
         let mut out = squeezes[0].clone();
-	// TODO: Remove extra range checks on len
-        let mut is_valid = range.is_less_than_safe(
-            ctx, &len, 136 * min_rounds, log2(136 * max_rounds),
-        )?;
+        // TODO: Remove extra range checks on len
+        let mut is_valid =
+            range.is_less_than_safe(ctx, &len, 136 * min_rounds, log2(136 * max_rounds))?;
         for round_idx in min_rounds..max_rounds {
             for idx in 0..self.output_limb_len {
                 out[idx] = range.gate.select(
@@ -1082,9 +1082,12 @@ impl<F: FieldExt> KeccakChip<F> {
                     &Existing(&is_valid),
                 )?;
             }
-	    // TODO: Remove extra range checks on len
+            // TODO: Remove extra range checks on len
             is_valid = range.is_less_than_safe(
-                ctx, &len, 136 * (round_idx + 1), log2(136 * max_rounds),
+                ctx,
+                &len,
+                136 * (round_idx + 1),
+                log2(136 * max_rounds),
             )?;
         }
 
@@ -1095,10 +1098,10 @@ impl<F: FieldExt> KeccakChip<F> {
                 &out[2 * idx..(2 * (idx + 1))].iter().map(|a| Existing(a)).collect(),
                 &vec![1, 16].iter().map(|a| Constant(F::from(*a))).collect(),
             )?;
-	    println!("CONCAT byte: {:?}", byte);
+            println!("CONCAT byte: {:?}", byte);
             hash_bytes.push(byte);
         }
-	print_bytes("hash".to_string(), &hash_bytes);
+        print_bytes("hash".to_string(), &hash_bytes);
 
         Ok(hash_bytes)
     }
