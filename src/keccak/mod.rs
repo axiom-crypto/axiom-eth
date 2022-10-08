@@ -158,7 +158,7 @@ impl<F: FieldExt> KeccakChip<F> {
         num_xorandn: usize,
         num_fixed: usize,
     ) -> Self {
-        assert!(rate % LOOKUP_BITS == 0);
+        assert_eq!(rate % LOOKUP_BITS, 0);
         let rotation = (0..num_advice).map(|_| RotationChip::configure(meta)).collect_vec();
         let xor_values = (0..3 * num_xor)
             .map(|_| {
@@ -365,6 +365,7 @@ impl<F: FieldExt> KeccakChip<F> {
             &(0..in_max_len - in_min_len).map(|idx| Existing(&vals[3 * idx])).collect(),
             &Existing(&len_minus_min_assigned),
         )?;
+	println!("TEST3 {:?} {:?}", is_equal_sum.value(), len_minus_min_assigned.value());
         range.gate.assert_equal(
             ctx,
             &Existing(&is_equal_sum),
@@ -422,6 +423,8 @@ impl<F: FieldExt> KeccakChip<F> {
             &(0..in_max_len + 1 - in_min_len).map(|idx| Existing(&vals2[3 * idx])).collect(),
             &Existing(&max_minus_len_assigned),
         )?;
+
+	println!("TEST5 {:?} {:?}", is_zero_sum.value(), max_minus_len_assigned.value());
         range.gate.assert_equal(
             ctx,
             &Existing(&is_zero_sum),
@@ -585,8 +588,8 @@ impl<F: FieldExt> KeccakChip<F> {
             vec![],
             vec![],
         )?;
-        let xor = self.xor(ctx, &vec![&assigned[0], &assigned[2]])?;
-        Ok((assigned[0].clone(), assigned[2].clone()))
+        let xor = self.xor(ctx, &[&assigned[0], &assigned[2]])?;
+        Ok((assigned[2].clone(), assigned[0].clone()))
     }
 
     pub fn xor(
@@ -748,6 +751,7 @@ impl<F: FieldExt> KeccakChip<F> {
         output.pop();
         Ok(output)
     }
+    
     pub fn bits_to_num(
         &self,
         ctx: &mut Context<'_, F>,
@@ -934,7 +938,7 @@ impl<F: FieldExt> KeccakChip<F> {
         ctx: &mut Context<'_, F>,
         input_limbs: &[AssignedValue<F>],
     ) -> Result<Vec<AssignedValue<F>>, Error> {
-        assert!(input_limbs.len() % self.rate_in_limbs == 0);
+        assert_eq!(input_limbs.len() % self.rate_in_limbs, 0);
         // === Absorb all the inputs blocks ===
         let mut state_bits: Option<Vec<AssignedValue<F>>> = None;
         let mut input_offset = 0;
@@ -1001,16 +1005,17 @@ impl<F: FieldExt> KeccakChip<F> {
         min_len: usize,
         max_len: usize,
     ) -> Result<Vec<AssignedValue<F>>, Error> {
-        let padded_bytes = KeccakChip::pad_bytes(ctx, range, &input, len.clone(), 479, 556)?;
+	assert_eq!(input.len(), max_len);
+        let padded_bytes = KeccakChip::pad_bytes(ctx, range, &input, len.clone(), min_len, max_len)?;
         let mut padded_hexs = Vec::with_capacity(8 * padded_bytes.len());
         for byte in padded_bytes.iter() {
             let (hex1, hex2) = self.byte_to_hex(ctx, range, &byte)?;
-            padded_hexs.push(hex1);
             padded_hexs.push(hex2);
+            padded_hexs.push(hex1);
         }
-        let hash_hexs =
+        let hash_bytes =
             self.keccak_fully_padded_var_len(ctx, range, &padded_hexs[..], len, min_len, max_len)?;
-        Ok(hash_hexs)
+        Ok(hash_bytes)
     }
 
     pub fn keccak_fully_padded_var_len(
@@ -1090,8 +1095,10 @@ impl<F: FieldExt> KeccakChip<F> {
                 &out[2 * idx..(2 * (idx + 1))].iter().map(|a| Existing(a)).collect(),
                 &vec![1, 16].iter().map(|a| Constant(F::from(*a))).collect(),
             )?;
+	    println!("CONCAT byte: {:?}", byte);
             hash_bytes.push(byte);
         }
+	print_bytes("hash".to_string(), &hash_bytes);
 
         Ok(hash_bytes)
     }

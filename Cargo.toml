@@ -28,8 +28,10 @@ halo2_proofs = { git = "https://github.com/privacy-scaling-explorations/halo2.gi
 hex = "0.4.3"
 rand_core = { version = "0.6", default-features = false }
 rand = "0.8"
+rlp = "0.5.1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+sha3 = "0.7.2"
 ark-std = { version = "0.3.0", features = ["print-trace"] }
 
 # zkevm

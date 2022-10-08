@@ -16,7 +16,7 @@ use halo2_proofs::{
     poly::Rotation,
 };
 use std::{cmp::max, marker::PhantomData, rc::Rc};
-
+use crate::keccak::print_bytes;
 use eth_types::Field;
 
 pub fn compute_rlc<F: Field>(msg: &Vec<Value<F>>, r: Value<F>) -> Value<F> {
@@ -319,7 +319,7 @@ impl<F: Field> RlcChip<F> {
         len: AssignedValue<F>,
         max_len: usize,
     ) -> Result<RlcTrace<F>, Error> {
-        assert!(input.len() == max_len);
+        assert_eq!(input.len(), max_len);
         let gamma = ctx.challenge_get(&self.challenge_id);
 
         let mut running_rlc = Value::known(F::from(0));
@@ -379,6 +379,12 @@ impl<F: Field> RlcChip<F> {
         )?;
         let rlc_val = rlc_val_sel[0].clone();
 
+	if input.len() > 1 {
+	    println!("[compute_rlc] len {:?} max_len {:?} input[1] {:?} rlc_val {:?}",
+		     len.value(), max_len, input[1].value(), rlc_val.value());
+	}
+	print_bytes("[compute_rlc]".to_string(), input);
+	
 	let rlc_trace = {
 	    if input.len() > 0 {
 		RlcTrace {
@@ -406,7 +412,7 @@ impl<F: Field> RlcChip<F> {
         input: &Vec<AssignedValue<F>>,
         len: usize,
     ) -> Result<RlcFixedTrace<F>, Error> {
-        assert!(input.len() == len);
+        assert_eq!(input.len(), len);
         let gamma = ctx.challenge_get(&self.challenge_id);
 
         let mut running_rlc = Value::known(F::from(0));
@@ -454,7 +460,7 @@ impl<F: Field> RlcChip<F> {
             inputs.push(Existing(&cell));
             inputs.push(Existing(&ind));
             running_sum = running_sum + cell.value().copied() * ind.value().copied();
-            inputs.push(Witness(running_sum));
+            inputs.push(Witness(running_sum));	    
             gate_offsets.push(3 * idx);
         }
 
@@ -700,6 +706,7 @@ impl<F: Field> RlcChip<F> {
             &rlc_and_len_inputs.iter().map(|(a, b)| Constant(F::from(1))).collect(),
             &rlc_and_len_inputs.iter().map(|(a, b)| Existing(&b)).collect(),
         )?;
+	println!("TEST {:?} {:?}", len_sum.value(), concat.1.value());
         range.gate.assert_equal(ctx, &Existing(&len_sum), &Existing(&concat.1))?;
 
         let mut gamma_pows = Vec::new();
@@ -785,9 +792,16 @@ impl<F: Field> RlcChip<F> {
 	)?;
 	let total_len = range.gate.select_from_idx(
 	    ctx,
-	    &(0..max_num_frags).map(|idx| Existing(&assigned[3 * idx])).collect(),
+	    &(0..max_num_frags + 1).map(|idx| {
+		if idx == 0 {
+		    Constant(F::zero())
+		} else {
+		    Existing(&assigned[3 * idx - 3])
+		}
+	    }).collect(),
 	    &Existing(&num_frags)
 	)?;
+	println!("TEST2 {:?} {:?}", total_len.value(), concat.1.value());
         range.gate.assert_equal(ctx, &Existing(&total_len), &Existing(&concat.1))?;
 
         let mut gamma_pows = Vec::new();
@@ -830,7 +844,13 @@ impl<F: Field> RlcChip<F> {
 
 	let concat_select = self.select_from_idx(
 	    ctx,
-	    &(0..max_num_frags).map(|idx| Existing(&rlc_concat[4 * idx])).collect(),
+	    &(0..max_num_frags + 1).map(|idx| {
+		if idx == 0 {
+		    Constant(F::zero())
+		} else {
+		    Existing(&rlc_concat[4 * idx - 4])
+		}
+	    }).collect(),
 	    &Existing(&num_frags)
 	)?;
 	let concat_check = self.assign_region_rlc(

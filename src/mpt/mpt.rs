@@ -1,4 +1,6 @@
 use std::{cmp::max, marker::PhantomData};
+use rlp::{decode, decode_list, encode, Rlp};
+use sha3::{Digest, Keccak256};
 use hex::FromHex;
 use num_bigint::BigUint;
 use num_traits::cast::ToPrimitive;
@@ -36,7 +38,7 @@ use halo2_proofs::{
 };
 
 use crate::{
-    keccak::KeccakChip,
+    keccak::{print_bytes, KeccakChip},
     rlp::rlc::{log2, RlcFixedTrace, RlcTrace},
     rlp::rlp::{max_rlp_len_len, RlpArrayChip, RlpArrayTrace}
 };
@@ -124,6 +126,43 @@ pub struct MPTVarKeyProof<F: Field> {
     key_max_byte_len: usize,
     value_max_byte_len: usize,
     max_depth: usize,
+}
+
+pub fn max_leaf_lens(
+    max_key_bytes: usize,
+    max_value_bytes: usize,
+) -> (Vec<usize>, usize) {
+    let max_encoded_path_bytes = max_key_bytes + 1;
+    let max_encoded_path_rlp_bytes =
+	1 + max_rlp_len_len(max_encoded_path_bytes) + max_encoded_path_bytes;
+    let max_value_rlp_bytes = 1 + max_rlp_len_len(max_value_bytes) + max_value_bytes;
+    let max_field_bytes = vec![max_encoded_path_rlp_bytes, max_value_rlp_bytes];
+    let max_leaf_bytes: usize = 1 + max_rlp_len_len(max_field_bytes.iter().sum())
+	+ max_field_bytes.iter().sum::<usize>();
+    (max_field_bytes, max_leaf_bytes)
+}
+
+pub fn max_ext_lens(max_key_bytes: usize) -> (Vec<usize>, usize) {
+    let max_node_ref_bytes = 32;
+    let max_encoded_path_bytes = max_key_bytes + 1;
+    let max_encoded_path_rlp_bytes =
+	1 + max_rlp_len_len(max_encoded_path_bytes) + max_encoded_path_bytes;
+    let max_node_ref_rlp_bytes = 1 + max_rlp_len_len(max_node_ref_bytes) + max_node_ref_bytes;
+    let max_field_bytes = vec![max_encoded_path_rlp_bytes, max_node_ref_rlp_bytes];
+    let max_ext_bytes: usize = 1 + max_rlp_len_len(max_field_bytes.iter().sum())
+	+ max_field_bytes.iter().sum::<usize>();
+    (max_field_bytes, max_ext_bytes)
+}
+
+pub fn max_branch_lens() -> (Vec<usize>, usize) {
+    let max_node_ref_bytes = 32;
+    let max_node_ref_rlp_bytes =
+	1 + max_rlp_len_len(max_node_ref_bytes) + max_node_ref_bytes;
+    let mut max_field_bytes = vec![max_node_ref_rlp_bytes; 16];
+    max_field_bytes.push(2);
+    let max_branch_bytes: usize = 1 + max_rlp_len_len(max_field_bytes.iter().sum())
+	+ max_field_bytes.iter().sum::<usize>();
+    (max_field_bytes, max_branch_bytes)
 }
 
 #[derive(Clone, Debug)]
@@ -241,18 +280,12 @@ impl<F: Field> MPTChip<F> {
 	max_key_bytes: usize,
 	max_value_bytes: usize,
     ) -> Result<LeafTrace<F>, Error> {
-	let max_encoded_path_bytes = max_key_bytes + 1;
-	let max_encoded_path_rlp_bytes =
-	    1 + max_rlp_len_len(max_encoded_path_bytes) + max_encoded_path_bytes;
-	let max_value_rlp_bytes = 1 + max_rlp_len_len(max_value_bytes) + max_value_bytes;
-	let max_field_bytes = vec![max_encoded_path_rlp_bytes, max_value_rlp_bytes];
-	let max_leaf_bytes: usize = 1 + max_rlp_len_len(max_field_bytes.iter().sum())
-	    + max_field_bytes.iter().sum::<usize>();
-	assert!(leaf_bytes.len() == max_leaf_bytes);
-		
+	let (max_field_bytes, max_leaf_bytes) = max_leaf_lens(max_key_bytes, max_value_bytes);
+	assert_eq!(leaf_bytes.len(), max_leaf_bytes);
+
 	let rlp_trace = self.rlp.decompose_rlp_array(
 	    ctx, range, leaf_bytes, max_field_bytes, max_leaf_bytes, 2
-	)?;	
+	)?;
 	let leaf_hash = self.mpt_hash(
 	    ctx, range, &leaf_bytes, &rlp_trace.array_trace.rlc_len, max_leaf_bytes
 	)?;
@@ -277,15 +310,10 @@ impl<F: Field> MPTChip<F> {
 	ext_bytes: &Vec<AssignedValue<F>>,
 	max_key_bytes: usize,
     ) -> Result<ExtensionTrace<F>, Error> {
-	let max_node_ref_bytes = 32;
-	let max_encoded_path_bytes = max_key_bytes + 1;
-	let max_encoded_path_rlp_bytes =
-	    1 + max_rlp_len_len(max_encoded_path_bytes) + max_encoded_path_bytes;
-	let max_node_ref_rlp_bytes = 1 + max_rlp_len_len(max_node_ref_bytes) + max_node_ref_bytes;
-	let max_field_bytes = vec![max_encoded_path_rlp_bytes, max_node_ref_rlp_bytes];
-	let max_ext_bytes: usize = 1 + max_rlp_len_len(max_field_bytes.iter().sum())
-	    + max_field_bytes.iter().sum::<usize>();
-	assert!(ext_bytes.len() == max_ext_bytes);
+	let (max_field_bytes, mut max_ext_bytes) = max_ext_lens(max_key_bytes);
+	let (_, max_branch_bytes) = max_branch_lens();
+	let max_ext_bytes = max(max_ext_bytes, max_branch_bytes);
+	assert_eq!(ext_bytes.len(), max_ext_bytes);
 		
 	let rlp_trace = self.rlp.decompose_rlp_array(
 	    ctx, range, ext_bytes, max_field_bytes, max_ext_bytes, 2
@@ -314,14 +342,10 @@ impl<F: Field> MPTChip<F> {
 	range: &RangeConfig<F>,
 	branch_bytes: &Vec<AssignedValue<F>>,
     ) -> Result<BranchTrace<F>, Error> {
-	let max_node_ref_bytes = 32;
-	let max_node_ref_rlp_bytes =
-	    1 + max_rlp_len_len(max_node_ref_bytes) + max_node_ref_bytes;
-	let mut max_field_bytes = vec![max_node_ref_rlp_bytes; 16];
-	max_field_bytes.push(2);
-	let max_branch_bytes: usize = 1 + max_rlp_len_len(max_field_bytes.iter().sum())
-	    + max_field_bytes.iter().sum::<usize>();
-	assert!(branch_bytes.len() == max_branch_bytes);
+	let (max_field_bytes, mut max_branch_bytes) = max_branch_lens();
+	let (_, max_ext_bytes) = max_ext_lens(32);
+	let max_branch_bytes = max(max_ext_bytes, max_branch_bytes);
+	assert_eq!(branch_bytes.len(), max_branch_bytes);
 
 	let rlp_trace = self.rlp.decompose_rlp_array(
 	    ctx, range, branch_bytes, max_field_bytes, max_branch_bytes, 17
@@ -391,24 +415,25 @@ impl<F: Field> MPTChip<F> {
 		    )?;
 		    path_bytes.push(byte);
 		} else {
-		    // (1 - is_odd) * 2 + is_odd * (48 + x_0)
-		    // | 2 | 46 | is_odd | 2 + 46 * is_odd | is_odd | x_0 | out |
+		    // (1 - is_odd) * 32 + is_odd * (48 + x_0)
+		    // | 32 | 16 | is_odd | 32 + 16 * is_odd | is_odd | x_0 | out |
 		    let assigned = range.gate.assign_region_smart(
 			ctx,
-			vec![Constant(F::from(2)),
-			      Constant(F::from(46)),
-			      Existing(&is_odd),
-			      Witness(Value::known(F::from(2))
-				      + Value::known(F::from(46)) * is_odd.value()),
-			      Existing(&is_odd),
-			      Existing(&key_frag_hexs[0]),
-			      Witness(Value::known(F::from(2))
-				      + Value::known(F::from(46)) * is_odd.value().copied()
-				      + is_odd.value().copied() * key_frag_hexs[0].value().copied())],
+			vec![Constant(F::from(32)),
+			     Constant(F::from(16)),
+			     Existing(&is_odd),
+			     Witness(Value::known(F::from(32))
+				     + Value::known(F::from(16)) * is_odd.value()),
+			     Existing(&is_odd),
+			     Existing(&key_frag_hexs[0]),
+			     Witness(Value::known(F::from(32))
+				     + Value::known(F::from(16)) * is_odd.value().copied()
+				     + is_odd.value().copied() * key_frag_hexs[0].value().copied())],
 			vec![0, 3],
 			vec![],
 			vec![],
 		    )?;
+		    println!("ASSIGN {:?}", assigned);
 		    let byte = assigned[6].clone();
 		    path_bytes.push(byte);		    
 		}
@@ -466,9 +491,14 @@ impl<F: Field> MPTChip<F> {
 		)?;
 		path_bytes.push(byte);
 	    }
+	    if byte_idx == 1 {
+		println!("BYTE path_bytes {:?} key_frag_hexs {:?}", path_bytes, key_frag_hexs);
+	    }
 	}
+	let path_byte_len = 1 + max_rlp_len_len(key_byte_len) + key_byte_len;
+	print_bytes("[path_bytes]".to_string(), &path_bytes);
 	let path_rlc = self.rlp.rlc.compute_rlc(
-	    ctx, range, &path_bytes, key_frag_byte_len.clone(), key_byte_len
+	    ctx, range, &path_bytes, key_frag_byte_len.clone(), path_byte_len
 	)?;
 	Ok(path_rlc.rlc_val)
     }
@@ -493,11 +523,14 @@ impl<F: Field> MPTChip<F> {
 
 	let ext_max_byte_len = Self::ext_max_byte_len(key_byte_len);
 	let branch_max_byte_len = Self::branch_max_byte_len();
+	let node_max_byte_len = max(ext_max_byte_len, branch_max_byte_len);
 	
 	let dummy_ext_str = "e21ba00000000000000000000000000000000000000000000000000000000000000000";
-	let dummy_ext_bytes = Vec::from_hex(dummy_ext_str).unwrap();
+	let mut dummy_ext_bytes = Vec::from_hex(dummy_ext_str).unwrap();
+	dummy_ext_bytes.append(&mut vec![0u8; node_max_byte_len - dummy_ext_bytes.len()]);
 	let dummy_branch_str = "f1808080808080808080808080808080a0000000000000000000000000000000000000000000000000000000000000000080";
-	let dummy_branch_bytes = Vec::from_hex(dummy_branch_str).unwrap();
+	let mut dummy_branch_bytes = Vec::from_hex(dummy_branch_str).unwrap();
+	dummy_branch_bytes.append(&mut vec![0u8; node_max_byte_len - dummy_branch_bytes.len()]);
 	let dummy_ext: Vec<QuantumCell<F>> =
 	    dummy_ext_bytes.iter().map(|b| Constant(F::from(*b as u64))).collect();
 	let dummy_branch: Vec<QuantumCell<F>> =
@@ -573,35 +606,39 @@ impl<F: Field> MPTChip<F> {
 	   * RLP Extension for select(dummy_extension[idx], nodes[idx], node_types[idx])
            * RLP Branch    for select(nodes[idx], dummy_branch[idx], node_types[idx])
 	 */
+	println!("parsing leaf");
 	let leaf_parsed = self.parse_leaf(
 	    ctx, range, &proof.leaf_bytes, key_byte_len, value_max_byte_len
 	)?;
 	let mut exts_parsed = Vec::with_capacity(max_depth - 1);
 	let mut branches_parsed = Vec::with_capacity(max_depth - 1);
 	for idx in 0..max_depth - 1 {
+	    println!("idx {:?}", idx);
 	    let mut ext_in = Vec::with_capacity(ext_max_byte_len);
-	    for byte_idx in 0..ext_max_byte_len {
+	    for byte_idx in 0..node_max_byte_len {
 		let ext_byte = range.gate.select(
 		    ctx,
-		    &dummy_ext[byte_idx],
 		    &Existing(&proof.nodes[idx][byte_idx]),
+		    &dummy_ext[byte_idx],
 		    &Existing(&proof.node_types[idx])
 		)?;
 		ext_in.push(ext_byte);
 	    }
+	    println!("parsing ext");
 	    let ext_parsed = self.parse_ext(ctx, range, &ext_in, key_byte_len)?;
 	    exts_parsed.push(ext_parsed);
 
 	    let mut branch_in = Vec::with_capacity(branch_max_byte_len);
-	    for byte_idx in 0..branch_max_byte_len {
+	    for byte_idx in 0..node_max_byte_len {
 		let branch_byte = range.gate.select(
 		    ctx,
-		    &Existing(&proof.nodes[idx][byte_idx]),
 		    &dummy_branch[byte_idx],
+		    &Existing(&proof.nodes[idx][byte_idx]),
 		    &Existing(&proof.node_types[idx])
 		)?;
 		branch_in.push(branch_byte);
 	    }
+	    println!("parsing branch");
 	    let branch_parsed = self.parse_nonterminal_branch(ctx, range, &branch_in)?;
 	    branches_parsed.push(branch_parsed);
 	}
@@ -611,6 +648,8 @@ impl<F: Field> MPTChip<F> {
 	let mut key_frag_ext_byte_rlcs = Vec::with_capacity(max_depth - 1);
 	let mut key_frag_leaf_byte_rlcs = Vec::with_capacity(max_depth);
 	for idx in 0..max_depth {
+	    println!("frag_check idx {:?} len {:?}", idx, proof.key_frag_byte_len[idx].value());
+	    print_bytes("frag hexes".to_string(), &proof.key_frag_hexs[idx]);
 	    assert_eq!(proof.key_frag_hexs[idx].len(), 2 * key_byte_len);
 	    if idx < max_depth - 1 {
 		let ext_path_rlc = self.key_hex_to_path_rlc(
@@ -634,7 +673,8 @@ impl<F: Field> MPTChip<F> {
 		false
 	    )?;
 	    key_frag_leaf_byte_rlcs.push(leaf_path_rlc);		
-	}	
+	}
+	// TODO: Match fragments to node key
 
 	/* Check key fragments concatenate to key using hex RLC
 	 */
@@ -678,6 +718,10 @@ impl<F: Field> MPTChip<F> {
 	    &rlc_cache
 	)?;
 
+	// TODO:
+	/* Check value matches
+	 */
+	
 	/* Check hash chains
 	   * hash(node_types[0]) = root_hash
            * hash(node_types[idx + 1]) is in node_types[idx]
@@ -689,24 +733,31 @@ impl<F: Field> MPTChip<F> {
 	    if idx < max_depth - 1 {
 		let node_inter_hash_rlc = self.rlp.rlc.select(
 		    ctx,
-		    &Existing(&branches_parsed[idx].branch_hash.rlc_val),
 		    &Existing(&exts_parsed[idx].ext_hash.rlc_val),
+		    &Existing(&branches_parsed[idx].branch_hash.rlc_val),
 		    &Existing(&proof.node_types[idx])
 		)?;
-		let is_leaf = range.is_equal(ctx, &Existing(&proof.depth), &Constant(F::one()))?;
+		let is_leaf = range.is_equal(ctx, &Existing(&proof.depth), &Constant(F::from((idx + 1) as u64)))?;
 		node_hash_rlc = self.rlp.rlc.select(
 		    ctx,
 		    &Existing(&leaf_parsed.leaf_hash.rlc_val),
 		    &Existing(&node_inter_hash_rlc),
 		    &Existing(&is_leaf)
 		)?;
+		println!("exts_rlc {:?} branches_rlc {:?}",
+			 exts_parsed[idx].ext_hash.rlc_val.value(), branches_parsed[idx].branch_hash.rlc_val.value());
+		println!("is_leaf {:?} leaf_rlc {:?} node_rlc {:?}",
+			 is_leaf.value(), leaf_parsed.leaf_hash.rlc_val.value(), node_inter_hash_rlc.value());
 	    }
 	    
 	    if idx == 0 {
 		let root_hash_rlc = self.rlp.rlc.compute_rlc_fixed_len(ctx, range, &proof.root_hash_bytes, 32)?;
+		print_bytes("root hash".to_string(), &proof.root_hash_bytes);
+		println!("a {:?} b {:?} node_type {:?}",
+			 root_hash_rlc.rlc_val.value(), node_hash_rlc.value(), proof.node_types[0].value());
 		self.rlp.rlc.constrain_equal(
 		    ctx, &Existing(&root_hash_rlc.rlc_val), &Existing(&node_hash_rlc)
-		)?;
+		)?;		
 	    } else {
 		let ext_ref_rlc = exts_parsed[idx - 1].node_ref.rlc_val.clone();
 		let branch_ref_rlc = self.rlp.rlc.select_from_idx(
@@ -715,8 +766,10 @@ impl<F: Field> MPTChip<F> {
 		    &Existing(&proof.key_frag_hexs[idx - 1][0])
 		)?;
 		let match_hash_rlc = self.rlp.rlc.select(
-		    ctx, &Existing(&branch_ref_rlc), &Existing(&ext_ref_rlc), &Existing(&proof.node_types[idx - 1])
+		    ctx, &Existing(&ext_ref_rlc), &Existing(&branch_ref_rlc), &Existing(&proof.node_types[idx - 1])
 		)?;
+		println!("idx {:?} match_hash_rlc {:?} node_hash_rlc {:?}",
+			 idx, match_hash_rlc.value(), node_hash_rlc.value());
 		let is_match = self.rlp.rlc.is_equal(
 		    ctx, &Existing(&match_hash_rlc), &Existing(&node_hash_rlc)
 		)?;
@@ -737,16 +790,20 @@ impl<F: Field> MPTChip<F> {
 		running_sum = running_sum + matches[idx].value();
 		match_sums.push(Witness(running_sum));
 	    }
-	    gate_offsets.push(3 * idx);
+	    if idx < max_depth - 2 {
+		gate_offsets.push(3 * idx);
+	    }
 	}
 	let assigned = self.rlp.rlc.assign_region_rlc(
 	    ctx, &match_sums, vec![], gate_offsets, None
 	)?;
+	println!("assigned sums {:?}", assigned);
 	let match_cnt = self.rlp.rlc.select_from_idx(
 	    ctx,
 	    &(0..max_depth - 1).map(|idx| Existing(&assigned[3 * idx])).collect(),
 	    &Existing(&proof.depth),
 	)?;
+	println!("match_cnt {:?} depth {:?}", match_cnt, proof.depth);
 	let check_equal = self.rlp.rlc.assign_region_rlc(
 	    ctx,
 	    &vec![Constant(F::one()),
@@ -832,14 +889,14 @@ mod tests {
 	fn configure(meta: &mut ConstraintSystem<F>) -> Self::Config {
 	    MPTChip::configure(
 		meta,
-		1,
-		1,
+		10,
+		5,
 		"gamma".to_string(),
 		"rlc".to_string(),
 		Vertical,
 		&[10],
-		&mut [1],
-		1,
+		&mut [5],
+		5,
 		10
 	    )
 	}
@@ -977,8 +1034,13 @@ mod tests {
 			"ctx.rows default {:?}",
 			ctx.advice_rows.get::<String>(&"default".to_string())
                     );
+		    println!("ctx.rows keccak {:?}", ctx.advice_rows["keccak"]);
                     println!("ctx.rows keccak_xor {:?}", ctx.advice_rows["keccak_xor"]);
                     println!("ctx.rows keccak_xorandn {:?}", ctx.advice_rows["keccak_xorandn"]);
+                    println!(
+			"ctx.cells keccak {:?}",
+			ctx.advice_rows["keccak"].iter().sum::<usize>()
+                    );
                     println!(
 			"ctx.cells keccak_xor {:?}",
 			ctx.advice_rows["keccak_xor"].iter().sum::<usize>()
@@ -995,9 +1057,154 @@ mod tests {
 	}
     }
     
-
     #[test]
-    pub fn test_mock_mpt_inclusion_fixed() {
+    pub fn test_mock_mpt_inclusion_fixed() -> Result<(), Error> {
+	let params_str = std::fs::read_to_string("configs/keccak.config").unwrap();	
+        let params: crate::keccak::KeccakCircuitParams =
+            serde_json::from_str(params_str.as_str()).unwrap();
+        let k = params.degree;
+
+	let block_str = std::fs::read_to_string("configs/block.json").unwrap();
+	let block: serde_json::Value = serde_json::from_str(block_str.as_str()).unwrap();
+	println!("stateRoot {:?}", block["result"]["stateRoot"]);
 	
+	let pf_str = std::fs::read_to_string("configs/acct_storage_pf.json").unwrap();
+	let pf: serde_json::Value = serde_json::from_str(pf_str.as_str()).unwrap();
+	let acct_pf = pf["result"]["accountProof"].clone();
+	let storage_pf = pf["result"]["storageProof"][0].clone();
+//	println!("acct_pf {:?}", acct_pf);
+	println!("storage_root {:?}", pf["result"]["storageHash"]);
+//	println!("storage_pf {:?}", storage_pf);
+
+	let key_bytes_str_pre: String = serde_json::from_value(storage_pf["key"].clone()).unwrap();
+	let mut hasher = Keccak256::default();
+	println!("MPTC {:?}", Vec::from_hex(&key_bytes_str_pre).unwrap());
+	hasher.input(&Vec::from_hex(&key_bytes_str_pre).unwrap());
+	let key_bytes_str = hasher.result();
+	let mut key_byte_hexs = Vec::new();
+	for idx in 0..32 {
+	    key_byte_hexs.push(key_bytes_str[idx] / 16);
+	    key_byte_hexs.push(key_bytes_str[idx] % 16);
+	}
+	println!("key_bytes_str {:?}", key_bytes_str);
+	let value_bytes_str: String = serde_json::from_value(storage_pf["value"].clone()).unwrap();
+	let root_hash_str: String = serde_json::from_value(pf["result"]["storageHash"].clone()).unwrap();
+	let pf_strs: Vec<String> = serde_json::from_value(storage_pf["proof"].clone()).unwrap();
+	let leaf_str: String = pf_strs[pf_strs.len() - 1].clone();
+
+	let key_byte_len = 32;
+	let value_max_byte_len = 33;
+	let (_, max_leaf_bytes) = max_leaf_lens(key_byte_len, value_max_byte_len);
+	let mut leaf_bytes: Vec<Option<u8>> = Vec::from_hex(&leaf_str[2..]).unwrap().iter().map(|x| Some(*x)).collect();
+	leaf_bytes.append(&mut vec![Some(0u8); max_leaf_bytes - leaf_bytes.len()]);
+
+	let (_, max_ext_bytes) = max_ext_lens(32);
+	let (_, max_branch_bytes) = max_branch_lens();
+	let max_node_bytes = max(max_ext_bytes, max_branch_bytes);
+	println!("max_node_bytes {:?} max_leaf_bytes {:?}", max_node_bytes, max_leaf_bytes);
+	
+	let max_depth = 9;
+	let mut node_types = Vec::new();
+	let mut nodes = Vec::new();
+	let mut key_frag_hexs: Vec<Vec<Option<u8>>> = Vec::new();
+	let mut key_frag_is_odd = Vec::new();
+	let mut key_frag_byte_len = Vec::new();
+	let mut key_idx = 0;
+	for idx in 0..max_depth {
+	    if idx < pf_strs.len() - 1 {
+		let mut node: Vec<Option<u8>> = Vec::from_hex(&pf_strs[idx][2..]).unwrap().iter().map(|x| Some(*x)).collect();
+		node.append(&mut vec![Some(0u8); max_node_bytes - node.len()]);
+		nodes.push(node);
+
+		let hex = Vec::from_hex(&pf_strs[idx][2..]).unwrap();
+		let decode = Rlp::new(&hex);
+		if decode.item_count().unwrap() == 2 {
+		    node_types.push(Some(1));
+		} else {
+		    node_types.push(Some(0));
+		}
+	    } else if idx < max_depth - 1 {
+		node_types.push(Some(0));
+		let dummy_branch_str = "f1808080808080808080808080808080a0000000000000000000000000000000000000000000000000000000000000000080";
+		let mut node: Vec<Option<u8>> = Vec::from_hex(dummy_branch_str).unwrap().iter().map(|x| Some(*x)).collect();
+		node.append(&mut vec![Some(0u8); max_node_bytes - node.len()]);
+		nodes.push(node);
+	    }
+
+	    if idx < pf_strs.len() {
+		let hex = Vec::from_hex(&pf_strs[idx][2..]).unwrap();
+		let decode = Rlp::new(&hex);
+		if decode.item_count().unwrap() == 2 {
+		    let field = decode.at(0).unwrap().data().unwrap();
+		    key_frag_byte_len.push(Some(field.len()));
+		    let field_vec = field.to_vec();
+		    let mut field_hexs = Vec::new();
+		    for b in field_vec.iter() {
+			field_hexs.push(b / 16);
+			field_hexs.push(b % 16);
+		    }
+		    let start_idx = {
+			if field_hexs[0] == 1u8 || field_hexs[0] == 3u8 {
+			    key_frag_is_odd.push(Some(1u8));
+			    1
+			} else {
+			    key_frag_is_odd.push(Some(0u8));
+			    2
+			}
+		    };
+
+		    let mut frag: Vec<Option<u8>> = field_hexs[start_idx..].iter().map(|x| Some(*x)).collect();
+		    frag.append(&mut vec![Some(0u8); 64 - frag.len()]);
+		    println!("frag {:?} field_vec {:?} field_hexs {:?}", frag, field_vec, field_hexs);
+		    key_frag_hexs.push(frag);
+		} else {
+		    let mut frag: Vec<Option<u8>> = vec![Some(key_byte_hexs[key_idx])];
+		    println!("frag {:?} key_idx {:?}", frag, key_idx);
+		    frag.append(&mut vec![Some(0u8); 64 - frag.len()]);
+		    key_frag_hexs.push(frag);
+		    key_frag_byte_len.push(Some(1usize));
+		    key_frag_is_odd.push(Some(1u8));
+		}
+		key_idx = key_idx + 2 * key_frag_byte_len[key_frag_byte_len.len() - 1].unwrap()
+		    - 2 + key_frag_is_odd[key_frag_is_odd.len() - 1].unwrap() as usize;
+	    } else {
+		let mut frag: Vec<Option<u8>> = vec![Some(0u8); 64];
+		key_frag_hexs.push(frag);
+		key_frag_byte_len.push(Some(0usize));
+		key_frag_is_odd.push(Some(0u8));
+	    }
+	}
+
+	println!("key_frag_hexs {:?}", key_frag_hexs);
+	
+//	let mut value_bytes: Vec<Option<u8>> = Vec::from_hex(&value_bytes_str[2..]).unwrap().iter().map(|x| Some(*x)).collect();
+	let mut value_bytes: Vec<Option<u8>> = rlp::encode(&Vec::from_hex(&value_bytes_str[2..]).unwrap()).iter().map(|x| Some(*x)).collect();
+	println!("value_bytes {:?}", value_bytes);
+	value_bytes.append(&mut vec![Some(0u8); 33 - value_bytes.len()]);
+	let circuit: MPTCircuit<Fr> = MPTCircuit {
+	    key_bytes: key_bytes_str.iter().map(|x| Some(*x)).collect(),
+	    value_bytes: value_bytes,
+	    value_byte_len: Some((value_bytes_str.len() - 2) / 2),
+	    root_hash_bytes: Vec::from_hex(&root_hash_str[2..]).unwrap().iter().map(|x| Some(*x)).collect(),
+	    leaf_bytes,
+	    nodes,
+	    node_types,
+	    depth: Some(pf_strs.len()),
+	    key_frag_hexs,
+	    key_frag_is_odd,
+	    key_frag_byte_len,
+	    key_byte_len,
+	    value_max_byte_len,
+	    max_depth,
+	    _marker: PhantomData,
+	};
+
+	println!("MPTCircuit {:?}", circuit);
+	let prover_try = MockProver::run(k, &circuit, vec![]);
+        let prover = prover_try.unwrap();
+        prover.assert_satisfied();
+        assert_eq!(prover.verify(), Ok(()));
+
+	Ok(())
     }
 }

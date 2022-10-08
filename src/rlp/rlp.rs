@@ -46,6 +46,7 @@ pub fn witness_subarray_from_idxs<'a, F: Field>(
     end_idx: Value<F>,
     max_len: usize,
 ) -> Result<Vec<AssignedValue<F>>, Error> {
+    println!("[witness_subarray] start_idx {:?} end_idx {:?} max_len {:?}", start_idx, end_idx, max_len);
     let val_vec = array.iter().map(|x| x.value().copied()).collect::<Vec<Value<F>>>();
     let vec_val: Value<Vec<F>> = Value::from_iter(val_vec);    
     let ret_vals = start_idx.zip(end_idx).zip(vec_val)
@@ -80,6 +81,7 @@ pub fn array_to_byte_val<'a, F: Field>(
     array: &Vec<AssignedValue<F>>,
     len: &AssignedValue<F>,
 ) -> Result<AssignedValue<F>, Error> {
+    println!("[array_to_byte_val] array.len {:?} len {:?}", array.len(), len.value());
     let byte_val = {
 	if array.len() > 0 {
 	    let mut byte_val_vec = range.gate.accumulated_product(
@@ -200,59 +202,66 @@ impl<F: Field> RlpArrayChip<F> {
 	prefix: &AssignedValue<F>,
     ) -> Result<RlpFieldPrefixParsed<F>, Error> {
 	let is_literal = range.is_less_than(
-	    ctx,
-	    &Existing(prefix),
-	    &Constant(F::from(128u64)),
-	    8,
+	    ctx, &Existing(prefix), &Constant(F::from(128u64)), 8,
 	)?;
 	let is_len_or_literal = range.is_less_than(
-	    ctx,
-	    &Existing(prefix),
-	    &Constant(F::from(184u64)),
-	    8,
+	    ctx, &Existing(prefix), &Constant(F::from(184u64)), 8,
 	)?;
 	let is_valid = range.check_less_than(
-	    ctx,
-	    &Existing(prefix),
-	    &Constant(F::from(192u64)),
-	    8,
+	    ctx, &Existing(prefix), &Constant(F::from(192u64)), 8,
 	)?;
 
 	let field_len = range.gate.sub(
-	    ctx,
-	    &Existing(prefix),
-	    &Constant(F::from(128u64))
+	    ctx, &Existing(prefix), &Constant(F::from(128u64))
 	)?;
 	let len_len = range.gate.sub(
-	    ctx,
-	    &Existing(prefix),
-	    &Constant(F::from(183u64)),
+	    ctx, &Existing(prefix), &Constant(F::from(183u64)),
 	)?;
 
-	let is_big = range.gate.not(
-	    ctx,
-	    &Existing(&is_len_or_literal)
-	)?;
+	let is_big = range.gate.not(ctx, &Existing(&is_len_or_literal))?;
 
 	// length of the next RLP field
-	let next_len = range.gate.select(
- 	    ctx,
-	    &Existing(&len_len),
-	    &Existing(&field_len),
-	    &Existing(&is_big)
+	let next_len_mid = range.gate.select(
+ 	    ctx, &Existing(&len_len), &Existing(&field_len), &Existing(&is_big)
 	)?;
 
-	let len_len_final = range.gate.mul(
+	let next_len_assigned = range.gate.assign_region_smart(
 	    ctx,
-	    &Existing(&len_len),
-	    &Existing(&is_big)
+	    vec![Witness(next_len_mid.value().copied()
+			 - is_literal.value().copied() * next_len_mid.value().copied()),
+		 Existing(&is_literal),
+		 Existing(&next_len_mid),
+		 Existing(&next_len_mid)],
+	    vec![0],
+	    vec![],
+	    vec![]
 	)?;
+	let next_len = next_len_assigned[0].clone();
 	
+	let len_len_mid = range.gate.mul(
+	    ctx, &Existing(&len_len), &Existing(&is_big)
+	)?;
+
+	let len_assigned = range.gate.assign_region_smart(
+	    ctx,
+	    vec![Witness(len_len_mid.value().copied()
+			 - is_literal.value().copied() * len_len_mid.value().copied()),
+		 Existing(&is_literal),
+		 Existing(&len_len_mid),
+		 Existing(&len_len_mid)],
+	    vec![0],
+	    vec![],
+	    vec![]
+	)?;
+	let len_len = len_assigned[0].clone();
+
+	println!("[parse_rlp_field_prefix] prefix {:?} is_literal {:?} is_big {:?} next_len {:?} len_len {:?}",
+		 prefix.value(), is_literal.value(), is_big.value(), next_len.value(), len_len.value());
 	Ok(RlpFieldPrefixParsed {
 	    is_literal,
 	    is_big,
 	    next_len,
-	    len_len: len_len_final,
+	    len_len,
 	    prefix: prefix.clone(),
 	})
     }
@@ -264,45 +273,28 @@ impl<F: Field> RlpArrayChip<F> {
 	prefix: &AssignedValue<F>,
     ) -> Result<RlpArrayPrefixParsed<F>, Error> {	
 	let is_valid = range.check_less_than(
-	    ctx,
-	    &Constant(F::from(191u64)),
-	    &Existing(prefix),
-	    8,
+	    ctx, &Constant(F::from(191u64)), &Existing(prefix), 8,
 	)?;
 	
 	let is_empty = range.is_equal(
-	    ctx,
-	    &Existing(prefix),
-	    &Constant(F::from(192u64))
+	    ctx, &Existing(prefix), &Constant(F::from(192u64))
 	)?;
 	let is_big = range.is_less_than(
-	    ctx,
-	    &Constant(F::from(247u64)),
-	    &Existing(prefix),
-	    8
+	    ctx, &Constant(F::from(247u64)), &Existing(prefix), 8
 	)?;
 
 	let array_len = range.gate.sub(
-	    ctx,
-	    &Existing(prefix),
-	    &Constant(F::from(192u64))
+	    ctx, &Existing(prefix), &Constant(F::from(192u64))
 	)?;
 	let len_len = range.gate.sub(
-	    ctx,
-	    &Existing(prefix),
-	    &Constant(F::from(247u64)),
+	    ctx, &Existing(prefix), &Constant(F::from(247u64)),
 	)?;
 	let next_len = range.gate.select(
- 	    ctx,
-	    &Existing(&len_len),
-	    &Existing(&array_len),
-	    &Existing(&is_big)
+ 	    ctx, &Existing(&len_len), &Existing(&array_len), &Existing(&is_big)
 	)?;			
 
 	let len_len_final = range.gate.mul(
-	    ctx,
-	    &Existing(&len_len),
-	    &Existing(&is_big)
+	    ctx, &Existing(&len_len), &Existing(&is_big)
 	)?;
 	
 	Ok(RlpArrayPrefixParsed {
@@ -322,6 +314,7 @@ impl<F: Field> RlpArrayChip<F> {
 	len_len: &AssignedValue<F>,
 	max_len_len: usize,
     ) -> Result<(Vec<AssignedValue<F>>, AssignedValue<F>), Error> {
+	println!("[parse_rlp_len] len_len {:?} max_len_len {:?}", len_len, max_len_len);
 	let len_cells = witness_subarray_from_idxs(
 	    ctx,
 	    range,
@@ -448,6 +441,7 @@ impl<F: Field> RlpArrayChip<F> {
     ) -> Result<RlpArrayTrace<F>, Error> {
 	let max_len_len = max_rlp_len_len(max_array_len);
 	assert_eq!(rlp_array.len(), max_array_len);
+	println!("[decompose_rlp_array] max_array_len {:?} num_fields {:?}", max_array_len, num_fields);
 
 	// Witness consists of
 	// * prefix_parsed
@@ -479,11 +473,7 @@ impl<F: Field> RlpArrayChip<F> {
 	)?;
 	
 	let (len_cells, len_byte_val) = self.parse_rlp_len(
-	    ctx,
-	    range,
-	    &rlp_array,
-	    &len_len,
-	    max_len_len
+	    ctx, range, &rlp_array, &len_len, max_len_len
 	)?;
 	
 	let all_fields_len = range.gate.select(
@@ -527,7 +517,8 @@ impl<F: Field> RlpArrayChip<F> {
 		ctx, &len_len, max_rlp_len_len(max_field_lens[idx]) + 1,
 		log2(max_rlp_len_len(max_field_lens[idx]) + 1),
 	    )?;
-	    
+
+	    println!("[field_len_cells] prefix_idxs[idx] {:?} len_len {:?}", prefix_idxs[idx].value(), len_len.value());
 	    let field_len_cells = witness_subarray_from_idxs(
 		ctx,
 		range,
@@ -537,6 +528,8 @@ impl<F: Field> RlpArrayChip<F> {
 		max_rlp_len_len(max_field_lens[idx]),			
 	    )?;
 	    let field_byte_val = array_to_byte_val(ctx, range, &field_len_cells, &len_len)?;
+	    println!("[field_len_select] field_byte_val {:?} prefix_parsed.next_len {:?} prefix_parsed.is_big {:?}",
+		     field_byte_val.value(), prefix_parsed.next_len.value(), prefix_parsed.is_big.value());
 	    let field_len = range.gate.select(
 		ctx,
 		&Existing(&field_byte_val),
@@ -547,6 +540,7 @@ impl<F: Field> RlpArrayChip<F> {
 		ctx, &field_len, max_field_lens[idx] + 1,
 		log2(max_field_lens[idx] + 1),
 	    )?;
+	    println!("[field_cells] prefix_idxs[idx] {:?} len_len {:?} field_len {:?}", prefix_idxs[idx].value(), len_len.value(), field_len.value());
 	    let field_cells = witness_subarray_from_idxs(
 		ctx,
 		range,
