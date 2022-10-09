@@ -144,7 +144,7 @@ struct EthMultiBlockHeaderCircuit;
 impl aggregation::TargetCircuit for EthMultiBlockHeaderCircuit {
     const TARGET_CIRCUIT_K: u32 = 20;
     const PUBLIC_INPUT_SIZE: usize = 0; //(Self::TARGET_CIRCUIT_K * 2) as usize;
-    const N_PROOFS: usize = 1;
+    const N_PROOFS: usize = 2;
     const NAME: &'static str = "eth_multi_block_header";
 
     type Circuit = EthBlockHeaderTestCircuit<Fr>;
