@@ -365,7 +365,7 @@ impl<F: FieldExt> KeccakChip<F> {
             &(0..in_max_len - in_min_len).map(|idx| Existing(&vals[3 * idx])).collect(),
             &Existing(&len_minus_min_assigned),
         )?;
-        println!("TEST3 {:?} {:?}", is_equal_sum.value(), len_minus_min_assigned.value());
+        // println!("TEST3 {:?} {:?}", is_equal_sum.value(), len_minus_min_assigned.value());
         range.gate.assert_equal(
             ctx,
             &Existing(&is_equal_sum),
@@ -424,7 +424,7 @@ impl<F: FieldExt> KeccakChip<F> {
             &Existing(&max_minus_len_assigned),
         )?;
 
-        println!("TEST5 {:?} {:?}", is_zero_sum.value(), max_minus_len_assigned.value());
+        // println!("TEST5 {:?} {:?}", is_zero_sum.value(), max_minus_len_assigned.value());
         range.gate.assert_equal(
             ctx,
             &Existing(&is_zero_sum),
@@ -1098,10 +1098,10 @@ impl<F: FieldExt> KeccakChip<F> {
                 &out[2 * idx..(2 * (idx + 1))].iter().map(|a| Existing(a)).collect(),
                 &vec![1, 16].iter().map(|a| Constant(F::from(*a))).collect(),
             )?;
-            println!("CONCAT byte: {:?}", byte);
+            // println!("CONCAT byte: {:?}", byte);
             hash_bytes.push(byte);
         }
-        print_bytes("hash".to_string(), &hash_bytes);
+        // print_bytes("hash".to_string(), &hash_bytes);
 
         Ok(hash_bytes)
     }

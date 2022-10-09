@@ -142,7 +142,7 @@ pub fn load_aggregation_circuit_degree() -> u32 {
 struct EthMultiBlockHeaderCircuit;
 
 impl aggregation::TargetCircuit for EthMultiBlockHeaderCircuit {
-    const TARGET_CIRCUIT_K: u32 = 20;
+    const TARGET_CIRCUIT_K: u32 = 17;
     const PUBLIC_INPUT_SIZE: usize = 0; //(Self::TARGET_CIRCUIT_K * 2) as usize;
     const N_PROOFS: usize = 2;
     const NAME: &'static str = "eth_multi_block_header";
@@ -193,6 +193,25 @@ fn default_instances<T: TargetCircuit>() -> Vec<Vec<Vec<Fr>>> {
 #[cfg(test)]
 #[test]
 pub fn test_aggregation_multi_eth_header() {
+    use halo2_proofs::poly::commitment::Params;
+
+    let (params_app, snark) = create_snark_shplonk::<EthMultiBlockHeaderCircuit>(
+        rand_circuits(),
+        default_instances::<EthMultiBlockHeaderCircuit>(),
+        None,
+    );
+    let snarks = vec![snark];
+    let agg_circuit = aggregation::AggregationCircuit::new(&params_app, snarks, true);
+    println!("finished creating agg_circuit");
+
+    let k = load_aggregation_circuit_degree();
+    let prover = MockProver::run(k, &agg_circuit, agg_circuit.instances()).unwrap();
+    prover.assert_satisfied();
+}
+
+#[cfg(test)]
+#[test]
+pub fn bench_aggregation_multi_eth_header() {
     use halo2_proofs::poly::commitment::Params;
 
     let (params_app, snark) = create_snark_shplonk::<EthMultiBlockHeaderCircuit>(

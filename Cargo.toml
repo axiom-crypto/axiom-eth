@@ -6,10 +6,10 @@ edition = "2021"
 [patch.crates-io]
 # bitvec = { git = "https://github.com/ed255/bitvec.git", rev = "5cfc5fa8496c66872d21905e677120fc3e79693c" }
 # halo2_proofs = { git = "https://github.com/privacy-scaling-explorations/halo2.git", tag = "v2022_09_10" }
-halo2_proofs = { git = "https://github.com/zk-attestor/halo2.git", branch = "serialize", package = "halo2_proofs" }
+halo2_proofs = { git = "https://github.com/axiom-crypto/halo2.git", branch = "serialize", package = "halo2_proofs" }
 
 [patch."https://github.com/privacy-scaling-explorations/halo2"]
-halo2_proofs = { git = "https://github.com/zk-attestor/halo2.git", branch = "serialize", package = "halo2_proofs" }
+halo2_proofs = { git = "https://github.com/axiom-crypto/halo2.git", branch = "serialize", package = "halo2_proofs" }
 
 [patch."https://github.com/privacy-scaling-explorations/zkevm-circuits"]
 zkevm-circuits = { git = "https://github.com/yi-sun/zkevm-circuits.git", branch = "expose-keccak-new" }

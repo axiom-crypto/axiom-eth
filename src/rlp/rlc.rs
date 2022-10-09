@@ -376,6 +376,7 @@ impl<F: Field> RlcChip<F> {
         )?;
         let rlc_val = rlc_val_sel[0].clone();
 
+        /*
         if input.len() > 1 {
             println!(
                 "[compute_rlc] len {:?} max_len {:?} input[1] {:?} rlc_val {:?}",
@@ -386,7 +387,7 @@ impl<F: Field> RlcChip<F> {
             );
         }
         print_bytes("[compute_rlc]".to_string(), input);
-
+        */
         let rlc_trace = {
             if input.len() > 0 {
                 RlcTrace {
@@ -703,7 +704,7 @@ impl<F: Field> RlcChip<F> {
             &rlc_and_len_inputs.iter().map(|(a, b)| Constant(F::from(1))).collect(),
             &rlc_and_len_inputs.iter().map(|(a, b)| Existing(&b)).collect(),
         )?;
-        println!("TEST {:?} {:?}", len_sum.value(), concat.1.value());
+        // println!("TEST {:?} {:?}", len_sum.value(), concat.1.value());
         range.gate.assert_equal(ctx, &Existing(&len_sum), &Existing(&concat.1))?;
 
         let mut gamma_pows = Vec::new();
@@ -797,7 +798,7 @@ impl<F: Field> RlcChip<F> {
                     .collect(),
                 &Existing(&num_frags),
             )?;
-        println!("TEST2 {:?} {:?}", total_len.value(), concat.1.value());
+        // println!("TEST2 {:?} {:?}", total_len.value(), concat.1.value());
         range.gate.assert_equal(ctx, &Existing(&total_len), &Existing(&concat.1))?;
 
         let mut gamma_pows = Vec::new();
