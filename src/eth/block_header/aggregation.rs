@@ -1,4 +1,4 @@
-use super::EthBlockHeaderTestCircuit;
+use super::EthBlockHeaderHashCircuit;
 use ark_std::{end_timer, start_timer};
 use ethereum_types::Address;
 use foundry_evm::executor::{fork::MultiFork, Backend, ExecutorBuilder};
@@ -142,52 +142,19 @@ pub fn load_aggregation_circuit_degree() -> u32 {
 struct EthMultiBlockHeaderCircuit;
 
 impl aggregation::TargetCircuit for EthMultiBlockHeaderCircuit {
-    const TARGET_CIRCUIT_K: u32 = 17;
-    const PUBLIC_INPUT_SIZE: usize = 0; //(Self::TARGET_CIRCUIT_K * 2) as usize;
-    const N_PROOFS: usize = 2;
+    const TARGET_CIRCUIT_K: u32 = 21;
+    const PUBLIC_INPUT_SIZE: usize = 6;
+    const N_PROOFS: usize = 1;
     const NAME: &'static str = "eth_multi_block_header";
 
-    type Circuit = EthBlockHeaderTestCircuit<Fr>;
+    type Circuit = EthBlockHeaderHashCircuit<Fr>;
     fn default_circuit() -> Self::Circuit {
-        let blocks_str = std::fs::read_to_string("configs/block_chain.config").unwrap();
-        let blocks: Vec<String> = serde_json::from_str(blocks_str.as_str()).unwrap();
-        let mut input_bytes = Vec::new();
-        for block_str in blocks.iter() {
-            let mut block_vec: Vec<Option<u8>> =
-                Vec::from_hex(block_str).unwrap().iter().map(|y| Some(*y)).collect();
-            block_vec.append(&mut vec![Some(0u8); 556 - block_vec.len()]);
-            input_bytes.push(block_vec);
-        }
-        let input_nones: Vec<Vec<Option<u8>>> =
-            input_bytes.iter().map(|x| x.iter().map(|_| None).collect()).collect();
-
-        EthBlockHeaderTestCircuit::<Fr> { inputs: input_nones, _marker: PhantomData }
+        EthBlockHeaderHashCircuit::<Fr>::default()
     }
 
     fn instances() -> Vec<Vec<Fr>> {
-        vec![]
+        unimplemented!()
     }
-}
-
-fn rand_circuits() -> Vec<EthBlockHeaderTestCircuit<Fr>> {
-    let blocks_str = std::fs::read_to_string("configs/block_chain.config").unwrap();
-    let blocks: Vec<String> = serde_json::from_str(blocks_str.as_str()).unwrap();
-    let mut input_bytes = Vec::new();
-    for block_str in blocks.iter() {
-        let mut block_vec: Vec<Option<u8>> =
-            Vec::from_hex(block_str).unwrap().iter().map(|y| Some(*y)).collect();
-        block_vec.append(&mut vec![Some(0u8); 556 - block_vec.len()]);
-        input_bytes.push(block_vec);
-    }
-    (0..EthMultiBlockHeaderCircuit::N_PROOFS)
-        .map(|_| EthBlockHeaderTestCircuit::<Fr> {
-            inputs: input_bytes.clone(),
-            _marker: PhantomData,
-        })
-        .collect_vec()
-}
-fn default_instances<T: TargetCircuit>() -> Vec<Vec<Vec<Fr>>> {
-    (0..T::N_PROOFS).map(|_| T::instances()).collect_vec()
 }
 
 #[cfg(test)]
@@ -195,9 +162,11 @@ fn default_instances<T: TargetCircuit>() -> Vec<Vec<Vec<Fr>>> {
 pub fn test_aggregation_multi_eth_header() {
     use halo2_proofs::poly::commitment::Params;
 
+    let block_circuit = EthBlockHeaderHashCircuit::<Fr>::default();
+    let block_instances = block_circuit.instances();
     let (params_app, snark) = create_snark_shplonk::<EthMultiBlockHeaderCircuit>(
-        rand_circuits(),
-        default_instances::<EthMultiBlockHeaderCircuit>(),
+        vec![block_circuit],
+        vec![block_instances],
         None,
     );
     let snarks = vec![snark];
@@ -214,9 +183,11 @@ pub fn test_aggregation_multi_eth_header() {
 pub fn bench_aggregation_multi_eth_header() {
     use halo2_proofs::poly::commitment::Params;
 
+    let block_circuit = EthBlockHeaderHashCircuit::<Fr>::default();
+    let block_instances = block_circuit.instances();
     let (params_app, snark) = create_snark_shplonk::<EthMultiBlockHeaderCircuit>(
-        rand_circuits(),
-        default_instances::<EthMultiBlockHeaderCircuit>(),
+        vec![block_circuit],
+        vec![block_instances],
         None,
     );
     let snarks = vec![snark];

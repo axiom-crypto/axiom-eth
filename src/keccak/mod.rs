@@ -88,7 +88,7 @@ pub fn print_bits_val<F: FieldExt>(tag: String, x: &[Value<F>]) {
     println!("{:?} {:?}", tag, asdf5);
 }
 
-const LOOKUP_BITS: usize = 4;
+pub const LOOKUP_BITS: usize = 4;
 const LIMBS_PER_LANE: usize = 16; // 64 / LOOKUP_BITS
 
 #[derive(Clone, Debug)]
@@ -994,6 +994,7 @@ impl<F: FieldExt> KeccakChip<F> {
         self.keccak_fully_padded(ctx, &input_limbs)
     }
 
+    /// Return (output in bytes, output in hexes)
     pub fn keccak_bytes_var_len(
         &self,
         ctx: &mut Context<'_, F>,
@@ -1002,21 +1003,22 @@ impl<F: FieldExt> KeccakChip<F> {
         len: AssignedValue<F>,
         min_len: usize,
         max_len: usize,
-    ) -> Result<Vec<AssignedValue<F>>, Error> {
+    ) -> Result<(Vec<AssignedValue<F>>, Vec<AssignedValue<F>>), Error> {
         assert_eq!(input.len(), max_len);
         let padded_bytes =
             KeccakChip::pad_bytes(ctx, range, &input, len.clone(), min_len, max_len)?;
         let mut padded_hexs = Vec::with_capacity(8 * padded_bytes.len());
+        // byte string is big endian, but keccak internals are in little endian
         for byte in padded_bytes.iter() {
             let (hex1, hex2) = self.byte_to_hex(ctx, range, &byte)?;
+            // byte to hex is little endian
             padded_hexs.push(hex2);
             padded_hexs.push(hex1);
         }
-        let hash_bytes =
-            self.keccak_fully_padded_var_len(ctx, range, &padded_hexs[..], len, min_len, max_len)?;
-        Ok(hash_bytes)
+        self.keccak_fully_padded_var_len(ctx, range, &padded_hexs[..], len, min_len, max_len)
     }
 
+    /// Return (output in bytes, output in hexes)
     pub fn keccak_fully_padded_var_len(
         &self,
         ctx: &mut Context<'_, F>,
@@ -1025,7 +1027,7 @@ impl<F: FieldExt> KeccakChip<F> {
         len: AssignedValue<F>,
         min_len: usize,
         max_len: usize,
-    ) -> Result<Vec<AssignedValue<F>>, Error> {
+    ) -> Result<(Vec<AssignedValue<F>>, Vec<AssignedValue<F>>), Error> {
         assert_eq!(input_hexs.len() % self.rate_in_limbs, 0);
         let min_rounds = (min_len + 1 + 135) / 136;
         let max_rounds = (max_len + 1 + 135) / 136;
@@ -1092,18 +1094,18 @@ impl<F: FieldExt> KeccakChip<F> {
         }
 
         let mut hash_bytes = Vec::with_capacity(32);
-        for idx in 0..32 {
+        for idx in (0..64).step_by(2) {
             let (_, _, byte) = range.gate.inner_product(
                 ctx,
-                &out[2 * idx..(2 * (idx + 1))].iter().map(|a| Existing(a)).collect(),
-                &vec![1, 16].iter().map(|a| Constant(F::from(*a))).collect(),
+                &out[idx..idx + 2].iter().map(|a| Existing(a)).collect(),
+                &[1, 16].map(|a| Constant(F::from(a))).into_iter().collect(),
             )?;
             // println!("CONCAT byte: {:?}", byte);
             hash_bytes.push(byte);
         }
         // print_bytes("hash".to_string(), &hash_bytes);
 
-        Ok(hash_bytes)
+        Ok((hash_bytes, out))
     }
 }
 
