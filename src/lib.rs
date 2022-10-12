@@ -13,3 +13,6 @@ pub mod eth;
 pub mod keccak;
 pub mod mpt;
 pub mod rlp;
+
+#[cfg(feature = "input_gen")]
+pub mod input_gen;

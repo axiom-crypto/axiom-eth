@@ -18,6 +18,8 @@ use num_bigint::BigUint;
 use serde::{Deserialize, Serialize};
 use std::{marker::PhantomData, rc::Rc};
 
+pub mod merkle_root;
+
 lazy_static! {
     pub static ref RC: [u64; 24] = {
         let mut rc = [0; 24];
@@ -1106,6 +1108,35 @@ impl<F: FieldExt> KeccakChip<F> {
         // print_bytes("hash".to_string(), &hash_bytes);
 
         Ok((hash_bytes, out))
+    }
+
+    /// `leaves` is slice of hex arrays
+    // format is hex because that is what our keccak format is
+    /// returns merkle tree root as a hex array in little endian
+    pub fn merkle_tree_root(
+        &self,
+        ctx: &mut Context<'_, F>,
+        leaves: &[&[AssignedValue<F>]],
+    ) -> Result<Vec<AssignedValue<F>>, Error> {
+        let depth = leaves.len().ilog2() as usize;
+        if depth == 0 {
+            return Ok(leaves[0].iter().cloned().collect());
+        }
+        assert_eq!(1 << depth, leaves.len());
+        let mut hashes = Vec::with_capacity(1 << (depth - 1));
+        for i in 0..(1 << (depth - 1)) {
+            let hash = self.keccak(ctx, [leaves[2 * i], leaves[2 * i + 1]].concat())?;
+            hashes.push(hash);
+        }
+        for d in (0..depth - 1).rev() {
+            for i in 0..(1 << d) {
+                hashes[i] = self.keccak(
+                    ctx,
+                    [hashes[2 * i].as_slice(), hashes[2 * i + 1].as_slice()].concat(),
+                )?;
+            }
+        }
+        Ok(hashes[0].clone())
     }
 }
 

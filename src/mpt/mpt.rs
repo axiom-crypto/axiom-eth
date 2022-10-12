@@ -1,12 +1,4 @@
 use eth_types::Field;
-use hex::FromHex;
-use num_bigint::BigUint;
-use num_traits::cast::ToPrimitive;
-use rlp::{decode, decode_list, encode, Rlp};
-use sha3::{Digest, Keccak256};
-use std::{cmp::max, marker::PhantomData};
-
-use ark_std::{end_timer, start_timer};
 use halo2_base::{
     gates::{
         range::{RangeConfig, RangeStrategy, RangeStrategy::Vertical},
@@ -36,6 +28,12 @@ use halo2_proofs::{
         Blake2bRead, Blake2bWrite, Challenge255, TranscriptReadBuffer, TranscriptWriterBuffer,
     },
 };
+use hex::FromHex;
+use num_bigint::BigUint;
+use num_traits::cast::ToPrimitive;
+use rlp::{decode, decode_list, encode, Rlp};
+use sha3::{Digest, Keccak256};
+use std::{cmp::max, marker::PhantomData};
 
 use crate::{
     keccak::{print_bytes, KeccakChip},
@@ -1300,8 +1298,8 @@ mod tests {
         let key_bytes_str_pre: String = serde_json::from_value(storage_pf["key"].clone()).unwrap();
         let mut hasher = Keccak256::default();
         println!("MPTC {:?}", Vec::from_hex(&key_bytes_str_pre).unwrap());
-        hasher.input(&Vec::from_hex(&key_bytes_str_pre).unwrap());
-        let key_bytes_str = hasher.result();
+        hasher.update(&Vec::from_hex(&key_bytes_str_pre).unwrap());
+        let key_bytes_str = hasher.finalize();
         let mut key_byte_hexs = Vec::new();
         for idx in 0..32 {
             key_byte_hexs.push(key_bytes_str[idx] / 16);

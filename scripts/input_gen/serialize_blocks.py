@@ -69,8 +69,8 @@ def hash_tree_root(leaves):
     return hashes[0]
 
 def main():
-    start_block_number = 0xef0000
-    num_blocks = 32
+    start_block_number = 0xef0018
+    num_blocks = 8
     (blocks, block_hashes) = get_block_rlp_list([x for x in range(start_block_number, start_block_number + num_blocks)])
 
     merkle_root = hash_tree_root(block_hashes[1:])
