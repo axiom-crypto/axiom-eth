@@ -80,7 +80,7 @@ jemallocator = { version = "0.3.2", optional = true }
 [dev-dependencies]
 
 [features]
-default = ["display", "aggregation"]
+default = ["display", "aggregation", "clap"]
 zkevm = ["dep:ecdsa", "dep:ecc", "dep:keccak256", "dep:maingate", "dep:integer", "dep:zkevm-circuits"]
 aggregation = ["dep:plonk_verifier", "input_gen"]
 evm = ["dep:ethereum_types", "dep:foundry_evm"]

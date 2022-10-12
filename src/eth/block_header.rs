@@ -50,6 +50,11 @@ use crate::{
 #[cfg(feature = "aggregation")]
 pub mod aggregation;
 
+const MAINNET_EXTRA_DATA_RLP_MAX_BYTES: usize = 33;
+const MAINNET_BLOCK_HEADER_RLP_MAX_BYTES: usize = 1 + 2 + 520 + MAINNET_EXTRA_DATA_RLP_MAX_BYTES;
+const GOERLI_EXTRA_DATA_RLP_MAX_BYTES: usize = 98;
+const GOERLI_BLOCK_HEADER_RLP_MAX_BYTES: usize = 1 + 2 + 520 + GOERLI_EXTRA_DATA_RLP_MAX_BYTES;
+
 // parentHash	256 bits	32	33	264
 // ommersHash	256 bits	32	33	264
 // beneficiary	160 bits	20	21	168
@@ -173,9 +178,25 @@ impl<F: Field> EthBlockHeaderChip<F> {
         range: &RangeConfig<F>,
         block_header: &Vec<AssignedValue<F>>,
     ) -> Result<EthBlockHeaderTrace<F>, Error> {
-        let max_len = 1 + 2 + 553;
-        // TODO: Change extra_data for Goerli
-        let max_field_lens = vec![33, 33, 21, 33, 33, 33, 259, 8, 4, 5, 5, 5, 33, 33, 9, 6];
+        let max_len = 1 + 2 + 520 + GOERLI_EXTRA_DATA_RLP_MAX_BYTES;
+        let max_field_lens = vec![
+            33,
+            33,
+            21,
+            33,
+            33,
+            33,
+            259,
+            8,
+            4,
+            5,
+            5,
+            5,
+            GOERLI_EXTRA_DATA_RLP_MAX_BYTES,
+            33,
+            9,
+            6,
+        ];
         let num_fields = 16;
         let rlp_array_trace = self.rlp.decompose_rlp_array(
             ctx,
@@ -191,7 +212,7 @@ impl<F: Field> EthBlockHeaderChip<F> {
             &block_header,
             rlp_array_trace.array_trace.rlc_len.clone(),
             479,
-            556,
+            max_len,
         )?;
         let block_hash = self.rlp.rlc.compute_rlc_fixed_len(ctx, range, &hash_bytes, 32)?;
 
@@ -336,7 +357,8 @@ impl<F> Default for EthBlockHeaderHashCircuit<F> {
         for block_str in blocks.iter() {
             let mut block_vec: Vec<Option<u8>> =
                 Vec::from_hex(block_str).unwrap().iter().map(|y| Some(*y)).collect();
-            block_vec.append(&mut vec![Some(0u8); 556 - block_vec.len()]);
+            block_vec
+                .append(&mut vec![Some(0u8); MAINNET_BLOCK_HEADER_RLP_MAX_BYTES - block_vec.len()]);
             input_bytes.push(block_vec);
         }
 
@@ -373,7 +395,8 @@ impl<F: Field> EthBlockHeaderHashCircuit<F> {
         for block_str in blocks.iter() {
             let mut block_vec: Vec<Option<u8>> =
                 Vec::from_hex(block_str).unwrap().iter().map(|y| Some(*y)).collect();
-            block_vec.append(&mut vec![Some(0u8); 556 - block_vec.len()]);
+            block_vec
+                .append(&mut vec![Some(0u8); MAINNET_BLOCK_HEADER_RLP_MAX_BYTES - block_vec.len()]);
             input_bytes.push(block_vec);
         }
 
@@ -408,7 +431,11 @@ impl<F: Field> EthBlockHeaderHashCircuit<F> {
                     .into_iter()
                     .map(|y| Some(y))
                     .into_iter()
-                    .chain((0..556 - block_len).map(|_| Some(0u8)).into_iter())
+                    .chain(
+                        (0..GOERLI_BLOCK_HEADER_RLP_MAX_BYTES - block_len)
+                            .map(|_| Some(0u8))
+                            .into_iter(),
+                    )
                     .collect_vec()
             })
             .collect_vec();

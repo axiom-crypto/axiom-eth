@@ -57,7 +57,10 @@ use std::{
 pub mod evm;
 
 const INITIAL_DEPTH: usize = 7;
-pub const FULL_DEPTH: usize = 13;
+pub const FULL_DEPTH: usize = 10; // 13;
+
+const MAINNET_PROVIDER_URL: &'static str = "https://mainnet.infura.io/v3/";
+const GOERLI_PROVIDER_URL: &'static str = "https://goerli.infura.io/v3/";
 
 #[derive(Clone)]
 pub struct BlockAggregationCircuit {
@@ -262,7 +265,7 @@ pub fn create_initial_block_header_snarks(
 
     let infura_id = fs::read_to_string("scripts/input_gen/INFURA_ID").expect("Infura ID not found");
     let provider =
-        Provider::<Http>::try_from(format!("https://mainnet.infura.io/v3/{}", infura_id).as_str())
+        Provider::<Http>::try_from(format!("{}{}", GOERLI_PROVIDER_URL, infura_id).as_str())
             .expect("could not instantiate HTTP Provider");
 
     while block_number <= last_block_number {
@@ -514,7 +517,7 @@ mod tests {
     #[test]
     pub fn bench_block_aggregation() {
         let timer = start_timer!(|| format!("bench aggregation of {} blocks", 1 << FULL_DEPTH));
-        run(0xeff123);
+        run(0x765fb3);
         end_timer!(timer);
     }
 }
