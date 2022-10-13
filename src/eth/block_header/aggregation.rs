@@ -19,7 +19,7 @@ use halo2_proofs::{
         },
         VerificationStrategy,
     },
-    transcript::{EncodedChallenge, TranscriptReadBuffer, TranscriptWriterBuffer},
+    transcript::{Blake2bRead, EncodedChallenge, TranscriptReadBuffer, TranscriptWriterBuffer},
 };
 use hex::FromHex;
 use itertools::Itertools;
@@ -76,6 +76,8 @@ pub struct BlockAggregationCircuit {
 impl BlockAggregationCircuit {
     pub fn new(params: &ParamsKZG<Bn256>, snarks: Vec<Snark>, layer: usize) -> Self {
         assert_eq!(snarks.len(), 2);
+        println!("{:?}", params.get_g()[0]);
+        println!("{:?}\n", params.get_g()[1]);
 
         let snarks_instance = snarks.iter().map(|snark| snark.instances()[0].clone()).collect_vec();
         let mut circuit = aggregation::AggregationCircuit::new(params, snarks, true);
@@ -415,13 +417,7 @@ pub fn final_evm_verify(
     let pk = gen_pk(params, &merkle_verify_circuit, format!("verify_{}", FULL_DEPTH).as_str());
 
     let circuit_instances = merkle_verify_circuit.0.instances().clone();
-
-    /*
-    MockProver::run(params.k(), &merkle_verify_circuit, circuit_instances.clone())
-        .unwrap()
-        .assert_satisfied();
-    */
-
+    // MockProver::run(params.k(), &merkle_verify_circuit, circuit_instances.clone()).unwrap().assert_satisfied();
     let proof = evm::gen_proof::<
         _,
         ChallengeEvm<G1Affine>,
@@ -434,13 +430,6 @@ pub fn final_evm_verify(
         File::create(format!("./data/calldata_{}.dat", name.as_str()).as_str()).unwrap(),
     );
     write!(writer, "{}", hex::encode(&calldata)).unwrap();
-
-    /*
-    aggregation::write_instances(
-        &vec![circuit_instances.clone()],
-        format!("./data/evm_instances_{}.dat", name).as_str(),
-    );
-    */
 
     if deploy {
         let deployment_code = evm::gen_aggregation_evm_verifier(
@@ -464,24 +453,32 @@ pub fn run(last_block_number: u64, deploy: bool) {
     let config_str = std::fs::read_to_string("configs/block_header.config").unwrap();
     let config: EthBlockHeaderConfigParams = serde_json::from_str(config_str.as_str()).unwrap();
     let mut params = gen_srs(config.degree);
+    println!("{:?}", params.get_g()[0]);
+    println!("{:?}\n", params.get_g()[1]);
     let mut snarks = create_initial_block_header_snarks(&params, last_block_number);
     println!("== finished initial block header snarks ==");
 
-    std::env::set_var("VERIFY_CONFIG", "./configs/block_agg_0.config");
-    // assuming all block_agg circuits have the same degree
+    for layer in 0..FULL_DEPTH - INITIAL_DEPTH {
+        std::env::set_var("VERIFY_CONFIG", format!("./configs/block_agg_{}.config", layer));
+        let k = load_aggregation_circuit_degree();
+        params = if k <= params.k() {
+            params.downsize(k);
+            params
+        } else {
+            gen_srs(k)
+        };
+        snarks = create_block_agg_snarks(&params, snarks, layer, last_block_number);
+        println!("== finished layer {} block aggregation snarks ==", layer);
+    }
+
+    std::env::set_var("VERIFY_CONFIG", "./configs/verify_for_evm.config");
     let k = load_aggregation_circuit_degree();
-    let params = if k <= config.degree {
+    params = if k <= params.k() {
         params.downsize(k);
         params
     } else {
         gen_srs(k)
     };
-
-    for layer in 0..FULL_DEPTH - INITIAL_DEPTH {
-        snarks = create_block_agg_snarks(&params, snarks, layer, last_block_number);
-        println!("== finished layer {} block aggregation snarks ==", layer);
-    }
-
     final_evm_verify(&params, snarks.into_iter().nth(0).unwrap(), last_block_number, deploy);
 }
 
