@@ -53,7 +53,7 @@ pub fn gen_proof<
     circuit: C,
     instances: Vec<Vec<Fr>>,
 ) -> Vec<u8> {
-    MockProver::run(params.k(), &circuit, instances.clone()).unwrap().assert_satisfied();
+    // MockProver::run(params.k(), &circuit, instances.clone()).unwrap().assert_satisfied();
 
     let instances = instances.iter().map(|instances| instances.as_slice()).collect_vec();
     let proof = {
@@ -117,7 +117,6 @@ pub fn gen_aggregation_evm_verifier(
 #[cfg(feature = "evm")]
 pub fn evm_verify(deployment_code: Vec<u8>, instances: Vec<Vec<Fr>>, proof: Vec<u8>) {
     let calldata = encode_calldata(&instances, &proof);
-    fs::write("./data/verifier_calldata.dat", hex::encode(&calldata)).unwrap();
     let success = {
         let mut evm = ExecutorBuilder::default()
             .with_gas_limit(u64::MAX.into())

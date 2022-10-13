@@ -24,7 +24,7 @@ fn main() {
             block_number - ((1 << FULL_DEPTH) - 1)
         ));
 
-        aggregation::run(block_number);
+        aggregation::run(block_number, false);
 
         end_timer!(batch_timer);
         block_number -= 1 << FULL_DEPTH;

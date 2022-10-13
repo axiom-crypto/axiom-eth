@@ -5,6 +5,7 @@ use halo2_base::utils::biguint_to_fe;
 use halo2_curves::bn256::{Bn256, Fq, Fr, G1Affine};
 use halo2_proofs::{
     circuit::{Layouter, SimpleFloorPlanner, Value},
+    dev::MockProver,
     plonk::{
         create_proof, keygen_pk, keygen_vk, verify_proof, Circuit, ConstraintSystem, Error,
         ProvingKey, VerifyingKey,
@@ -24,7 +25,7 @@ use hex::FromHex;
 use itertools::Itertools;
 use num_bigint::BigUint;
 use plonk_verifier::{
-    loader::native::NativeLoader,
+    loader::{evm::encode_calldata, native::NativeLoader},
     pcs::{
         kzg::{
             Bdfg21, Gwc19, Kzg, KzgAccumulator, KzgAs, KzgAsProvingKey, KzgAsVerifyingKey,
@@ -38,7 +39,10 @@ use plonk_verifier::{
             PoseidonTranscript, Snark, SnarkWitness, TargetCircuit, RATE, R_F, R_P, T,
         },
         compile,
-        transcript::{evm::EvmTranscript, halo2::ChallengeScalar},
+        transcript::{
+            evm::{ChallengeEvm, EvmTranscript},
+            halo2::ChallengeScalar,
+        },
         Config, Halo2VerifierCircuitConfig, Halo2VerifierCircuitConfigParams, BITS, LIMBS,
     },
     util::arithmetic::fe_to_limbs,
@@ -49,15 +53,15 @@ use rand_chacha::ChaCha20Rng;
 use sha3::{Digest, Keccak256};
 use std::{
     fs::{self, File},
-    io::{Cursor, Read, Write},
+    io::{BufWriter, Cursor, Read, Write},
     marker::PhantomData,
     rc::Rc,
 };
 
 pub mod evm;
 
-const INITIAL_DEPTH: usize = 7;
-pub const FULL_DEPTH: usize = 10; // 13;
+const INITIAL_DEPTH: usize = 3;
+pub const FULL_DEPTH: usize = 4; // 13;
 
 const MAINNET_PROVIDER_URL: &'static str = "https://mainnet.infura.io/v3/";
 const GOERLI_PROVIDER_URL: &'static str = "https://goerli.infura.io/v3/";
@@ -403,23 +407,12 @@ pub fn final_evm_verify(
     params: &ParamsKZG<Bn256>,
     final_block_agg_snark: Snark,
     last_block_number: u64,
+    deploy: bool,
 ) {
     let name = format!("{:06x}_{}", last_block_number, 1 << FULL_DEPTH);
     let merkle_verify_circuit =
         MerkleVerifyCircuit::new(params, final_block_agg_snark, name.as_str());
     let pk = gen_pk(params, &merkle_verify_circuit, format!("verify_{}", FULL_DEPTH).as_str());
-
-    let deployment_code = evm::gen_aggregation_evm_verifier(
-        params,
-        pk.get_vk(),
-        merkle_verify_circuit.0.num_instance(),
-        aggregation::AggregationCircuit::accumulator_indices(),
-    );
-    fs::write(
-        format!("./data/evm_verify_{}_bytecode.dat", FULL_DEPTH).as_str(),
-        hex::encode(&deployment_code),
-    )
-    .unwrap();
 
     let circuit_instances = merkle_verify_circuit.0.instances().clone();
 
@@ -431,24 +424,43 @@ pub fn final_evm_verify(
 
     let proof = evm::gen_proof::<
         _,
-        _,
+        ChallengeEvm<G1Affine>,
         EvmTranscript<G1Affine, _, _, _>,
         EvmTranscript<G1Affine, _, _, _>,
     >(params, &pk, merkle_verify_circuit, circuit_instances.clone());
-    let mut file =
-        File::create(format!("./data/evm_proof_{}.dat", name.as_str()).as_str()).unwrap();
-    file.write_all(&proof).unwrap();
 
+    let calldata = encode_calldata(&circuit_instances, &proof);
+    let mut writer = BufWriter::new(
+        File::create(format!("./data/calldata_{}.dat", name.as_str()).as_str()).unwrap(),
+    );
+    write!(writer, "{}", hex::encode(&calldata)).unwrap();
+
+    /*
     aggregation::write_instances(
         &vec![circuit_instances.clone()],
         format!("./data/evm_instances_{}.dat", name).as_str(),
     );
+    */
 
-    #[cfg(feature = "evm")]
-    evm::evm_verify(deployment_code, circuit_instances, proof);
+    if deploy {
+        let deployment_code = evm::gen_aggregation_evm_verifier(
+            params,
+            pk.get_vk(),
+            vec![circuit_instances[0].len()],
+            aggregation::AggregationCircuit::accumulator_indices(),
+        );
+        fs::write(
+            format!("./data/evm_verify_{}_bytecode.dat", FULL_DEPTH).as_str(),
+            hex::encode(&deployment_code),
+        )
+        .unwrap();
+
+        #[cfg(feature = "evm")]
+        evm::evm_verify(deployment_code, circuit_instances, proof);
+    }
 }
 
-pub fn run(last_block_number: u64) {
+pub fn run(last_block_number: u64, deploy: bool) {
     let config_str = std::fs::read_to_string("configs/block_header.config").unwrap();
     let config: EthBlockHeaderConfigParams = serde_json::from_str(config_str.as_str()).unwrap();
     let mut params = gen_srs(config.degree);
@@ -470,7 +482,7 @@ pub fn run(last_block_number: u64) {
         println!("== finished layer {} block aggregation snarks ==", layer);
     }
 
-    final_evm_verify(&params, snarks.into_iter().nth(0).unwrap(), last_block_number);
+    final_evm_verify(&params, snarks.into_iter().nth(0).unwrap(), last_block_number, deploy);
 }
 
 #[cfg(test)]
@@ -517,7 +529,7 @@ mod tests {
     #[test]
     pub fn bench_block_aggregation() {
         let timer = start_timer!(|| format!("bench aggregation of {} blocks", 1 << FULL_DEPTH));
-        run(0x765fb3);
+        run(0x765fb3, true);
         end_timer!(timer);
     }
 }
