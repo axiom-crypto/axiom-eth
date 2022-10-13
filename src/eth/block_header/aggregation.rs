@@ -60,8 +60,8 @@ use std::{
 
 pub mod evm;
 
-const INITIAL_DEPTH: usize = 3;
-pub const FULL_DEPTH: usize = 4; // 13;
+const INITIAL_DEPTH: usize = 7;
+pub const FULL_DEPTH: usize = 10; // 13;
 
 const MAINNET_PROVIDER_URL: &'static str = "https://mainnet.infura.io/v3/";
 const GOERLI_PROVIDER_URL: &'static str = "https://goerli.infura.io/v3/";
