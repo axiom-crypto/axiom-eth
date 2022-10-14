@@ -1,13 +1,12 @@
 import argparse
 import json
 import pprint
+import copy
 
 import mpt
 import rlp
 import sha3
-
 from web3 import Web3, HTTPProvider
-
 from mpt import MerklePatriciaTrie
 
 def keccak256(x):
@@ -67,6 +66,44 @@ def hash_tree_root(leaves):
         for x in range(1 << d):
             hashes[x] = keccak256(concat(hashes[2*x], hashes[2*x+1]))
     return hashes[0]
+
+def create_merkle_proof(leaves, idx):
+    depth = len(leaves).bit_length() - 1
+    hashes = copy.deepcopy(leaves)
+    proof = []
+    for i in range(depth):
+        side = idx >> i
+        proof.append(hashes[side ^ 1])
+        for x in range(0, 1 << (depth-i), 2):
+            hashes[x//2] = keccak256(concat(hashes[x], hashes[x+1]))
+    return proof, hashes[0]
+
+def check_merkle_proof(hash, root, proof, side):
+    curr = copy.deepcopy(hash)
+    for i in range(len(proof)):
+        if side & 1 == 0:
+            curr = keccak256(concat(curr, proof[i]))
+        else:
+            curr = keccak256(concat(proof[i], curr))
+        side = side >> 1
+    assert(curr == root)
+
+def create_block_proof(lastBlockNumber, side):
+    with open('INFURA_ID', 'r') as f:
+        infura_id = f.read()
+    infura = Web3(HTTPProvider("https://goerli.infura.io/v3/{}".format(infura_id)))
+    block_hashes = []
+    for block_number in range(lastBlockNumber - 1024 + 1, lastBlockNumber + 1):
+        block = infura.eth.get_block(block_number)
+        block_hashes.append(block['hash'].hex()[2:])
+    proof, root = create_merkle_proof(block_hashes, side)
+    check_merkle_proof(block_hashes[side], root, proof, side)
+    print("publicHash: ", '0x' + block_hashes[1023])
+    print("blockHash: ", '0x' + block_hashes[side])
+    proof = ['0x' + x for x in proof]
+    print("merkleProof:")
+    print(proof)
+    print("side: ", side)
 
 def main():
     start_block_number = 0xef0018
