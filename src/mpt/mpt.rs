@@ -197,7 +197,7 @@ impl<F: Field> MPTChip<F> {
         let params_str = std::fs::read_to_string("configs/keccak.config").unwrap();
         let params: crate::keccak::KeccakCircuitParams =
             serde_json::from_str(params_str.as_str()).unwrap();
-        println!("params adv {:?} fix {:?}", params.num_advice, params.num_fixed);
+        // println!("params adv {:?} fix {:?}", params.num_advice, params.num_fixed);
         let keccak = KeccakChip::configure(
             meta,
             "keccak".to_string(),
@@ -683,13 +683,13 @@ impl<F: Field> MPTChip<F> {
          * RLP Extension for select(dummy_extension[idx], nodes[idx], node_types[idx])
          * RLP Branch    for select(nodes[idx], dummy_branch[idx], node_types[idx])
          */
-        println!("parsing leaf");
+        // println!("parsing leaf");
         let leaf_parsed =
             self.parse_leaf(ctx, range, &proof.leaf_bytes, key_byte_len, value_max_byte_len)?;
         let mut exts_parsed = Vec::with_capacity(max_depth - 1);
         let mut branches_parsed = Vec::with_capacity(max_depth - 1);
         for idx in 0..max_depth - 1 {
-            println!("idx {:?}", idx);
+            // println!("idx {:?}", idx);
             let mut ext_in = Vec::with_capacity(ext_max_byte_len);
             for byte_idx in 0..node_max_byte_len {
                 let ext_byte = range.gate.select(
@@ -700,7 +700,7 @@ impl<F: Field> MPTChip<F> {
                 )?;
                 ext_in.push(ext_byte);
             }
-            println!("parsing ext");
+            // println!("parsing ext");
             let ext_parsed = self.parse_ext(ctx, range, &ext_in, key_byte_len)?;
             exts_parsed.push(ext_parsed);
 
@@ -762,7 +762,6 @@ impl<F: Field> MPTChip<F> {
         }
         let key_hex_rlc =
             self.rlp.rlc.compute_rlc_fixed_len(ctx, range, &key_hexs, 2 * key_byte_len)?;
-        dbg!(key_hex_rlc.len);
         let mut fragment_rlcs = Vec::new();
         for idx in 0..max_depth {
             let frag_len = self.hex_prefix_len(
@@ -772,7 +771,6 @@ impl<F: Field> MPTChip<F> {
                 &proof.key_frag_is_odd[idx],
             )?;
             let len = value_to_option(frag_len.value()).unwrap().get_lower_32();
-            dbg!(len);
             let fragment_rlc = self.rlp.rlc.compute_rlc(
                 ctx,
                 range,
@@ -833,7 +831,7 @@ impl<F: Field> MPTChip<F> {
                     &Existing(&node_inter_hash_rlc),
                     &Existing(&is_leaf),
                 )?;
-                println!(
+                /*println!(
                     "exts_rlc {:?} branches_rlc {:?}",
                     exts_parsed[idx].ext_hash.rlc_val.value(),
                     branches_parsed[idx].branch_hash.rlc_val.value()
@@ -843,19 +841,19 @@ impl<F: Field> MPTChip<F> {
                     is_leaf.value(),
                     leaf_parsed.leaf_hash.rlc_val.value(),
                     node_inter_hash_rlc.value()
-                );
+                );*/
             }
 
             if idx == 0 {
                 let root_hash_rlc =
                     self.rlp.rlc.compute_rlc_fixed_len(ctx, range, &proof.root_hash_bytes, 32)?;
-                print_bytes("root hash".to_string(), &proof.root_hash_bytes);
-                println!(
+                // print_bytes("root hash".to_string(), &proof.root_hash_bytes);
+                /*println!(
                     "a {:?} b {:?} node_type {:?}",
                     root_hash_rlc.rlc_val.value(),
                     node_hash_rlc.value(),
                     proof.node_types[0].value()
-                );
+                );*/
                 self.rlp.rlc.constrain_equal(
                     ctx,
                     &Existing(&root_hash_rlc.rlc_val),
@@ -878,12 +876,12 @@ impl<F: Field> MPTChip<F> {
                     &Existing(&branch_ref_rlc),
                     &Existing(&proof.node_types[idx - 1]),
                 )?;
-                println!(
+                /*println!(
                     "idx {:?} match_hash_rlc {:?} node_hash_rlc {:?}",
                     idx,
                     match_hash_rlc.value(),
                     node_hash_rlc.value()
-                );
+                );*/
                 let is_match = self.rlp.rlc.is_equal(
                     ctx,
                     &Existing(&match_hash_rlc),
@@ -912,13 +910,13 @@ impl<F: Field> MPTChip<F> {
         }
         let assigned =
             self.rlp.rlc.assign_region_rlc(ctx, &match_sums, vec![], gate_offsets, None)?;
-        println!("assigned sums {:?}", assigned);
+        // println!("assigned sums {:?}", assigned);
         let match_cnt = self.rlp.rlc.select_from_idx(
             ctx,
             &(0..max_depth - 1).map(|idx| Existing(&assigned[3 * idx])).collect(),
             &Existing(&proof.depth),
         )?;
-        println!("match_cnt {:?} depth {:?}", match_cnt, proof.depth);
+        // println!("match_cnt {:?} depth {:?}", match_cnt, proof.depth);
         let check_equal = self.rlp.rlc.assign_region_rlc(
             ctx,
             &vec![
@@ -1029,7 +1027,7 @@ mod tests {
             config.rlp.range.load_lookup_table(&mut layouter)?;
             config.keccak.load_lookup_table(&mut layouter)?;
             let gamma = layouter.get_challenge(config.rlp.rlc.gamma);
-            println!("gamma {:?}", gamma);
+            dbg!(&gamma);
 
             let using_simple_floor_planner = true;
             let mut first_pass = true;
@@ -1043,7 +1041,7 @@ mod tests {
                     }
                     phase = phase + 1u8;
 
-                    println!("phase {:?}", phase);
+                    dbg!(phase);
                     let mut aux = Context::new(
                         region,
                         ContextParams {
@@ -1255,30 +1253,28 @@ mod tests {
                     )?;
 
                     let stats = config.rlp.range.finalize(ctx)?;
-                    println!("stats {:?}", stats);
-                    println!(
-                        "ctx.rows rlc {:?}",
-                        ctx.advice_rows.get::<String>(&"rlc".to_string())
-                    );
-                    println!(
-                        "ctx.rows default {:?}",
-                        ctx.advice_rows.get::<String>(&"default".to_string())
-                    );
-                    println!("ctx.rows keccak {:?}", ctx.advice_rows["keccak"]);
-                    println!("ctx.rows keccak_xor {:?}", ctx.advice_rows["keccak_xor"]);
-                    println!("ctx.rows keccak_xorandn {:?}", ctx.advice_rows["keccak_xorandn"]);
-                    println!(
-                        "ctx.cells keccak {:?}",
-                        ctx.advice_rows["keccak"].iter().sum::<usize>()
-                    );
-                    println!(
-                        "ctx.cells keccak_xor {:?}",
-                        ctx.advice_rows["keccak_xor"].iter().sum::<usize>()
-                    );
-                    println!(
-                        "ctx.cells keccak_xorandn {:?}",
-                        ctx.advice_rows["keccak_xorandn"].iter().sum::<usize>()
-                    );
+                    #[cfg(feature = "display")]
+                    {
+                        println!("stats {:?}", stats);
+                        println!(
+                            "ctx.rows rlc {:?}",
+                            ctx.advice_rows.get::<String>(&"rlc".to_string())
+                        );
+                        println!(
+                            "ctx.rows default {:?}",
+                            ctx.advice_rows.get::<String>(&"default".to_string())
+                        );
+                        println!("ctx.rows keccak {:?}", ctx.advice_rows["keccak"]);
+                        println!("ctx.rows keccak_xor {:?}", ctx.advice_rows["keccak_xor"]);
+                        println!("ctx.rows keccak_xorandn {:?}", ctx.advice_rows["keccak_xorandn"]);
+                        println!(
+                            "ctx.advice_rows sums: {:#?}",
+                            ctx.advice_rows
+                                .iter()
+                                .map(|(key, val)| (key, val.iter().sum::<usize>()))
+                                .collect::<Vec<_>>()
+                        );
+                    }
                     Ok(())
                 },
             )?;
@@ -1296,19 +1292,19 @@ mod tests {
 
         let block_str = std::fs::read_to_string("scripts/input_gen/block.json").unwrap();
         let block: serde_json::Value = serde_json::from_str(block_str.as_str()).unwrap();
-        println!("stateRoot {:?}", block["stateRoot"]);
+        // println!("stateRoot {:?}", block["stateRoot"]);
 
         let pf_str = std::fs::read_to_string("scripts/input_gen/acct_storage_pf.json").unwrap();
         let pf: serde_json::Value = serde_json::from_str(pf_str.as_str()).unwrap();
         let acct_pf = pf["accountProof"].clone();
         let storage_pf = pf["storageProof"][0].clone();
         // println!("acct_pf {:?}", acct_pf);
-        println!("storage_root {:?}", pf["storageHash"]);
+        // println!("storage_root {:?}", pf["storageHash"]);
         // println!("storage_pf {:?}", storage_pf);
 
         let key_bytes_str_pre: String = serde_json::from_value(storage_pf["key"].clone()).unwrap();
         let mut hasher = Keccak256::default();
-        println!("MPTC {:?}", Vec::from_hex(&key_bytes_str_pre).unwrap());
+        // println!("MPTC {:?}", Vec::from_hex(&key_bytes_str_pre).unwrap());
         hasher.update(&Vec::from_hex(&key_bytes_str_pre).unwrap());
         let key_bytes_str = hasher.finalize();
         let mut key_byte_hexs = Vec::new();
@@ -1316,7 +1312,7 @@ mod tests {
             key_byte_hexs.push(key_bytes_str[idx] / 16);
             key_byte_hexs.push(key_bytes_str[idx] % 16);
         }
-        println!("key_bytes_str {:?}", key_bytes_str);
+        // println!("key_bytes_str {:?}", key_bytes_str);
         let value_bytes_str: String = serde_json::from_value(storage_pf["value"].clone()).unwrap();
         let root_hash_str: String = serde_json::from_value(pf["storageHash"].clone()).unwrap();
         let pf_strs: Vec<String> = serde_json::from_value(storage_pf["proof"].clone()).unwrap();
@@ -1332,7 +1328,7 @@ mod tests {
         let (_, max_ext_bytes) = max_ext_lens(32);
         let (_, max_branch_bytes) = max_branch_lens();
         let max_node_bytes = max(max_ext_bytes, max_branch_bytes);
-        println!("max_node_bytes {:?} max_leaf_bytes {:?}", max_node_bytes, max_leaf_bytes);
+        // println!("max_node_bytes {:?} max_leaf_bytes {:?}", max_node_bytes, max_leaf_bytes);
 
         let max_depth = 9;
         let mut node_types = Vec::new();
@@ -1390,10 +1386,6 @@ mod tests {
                     let mut frag: Vec<Option<u8>> =
                         field_hexs[start_idx..].iter().map(|x| Some(*x)).collect();
                     frag.append(&mut vec![Some(0u8); 64 - frag.len()]);
-                    println!(
-                        "frag {:?} field_vec {:?} field_hexs {:?}",
-                        frag, field_vec, field_hexs
-                    );
                     key_frag_hexs.push(frag);
                 } else {
                     let mut frag: Vec<Option<u8>> = vec![Some(key_byte_hexs[key_idx])];
@@ -1413,7 +1405,7 @@ mod tests {
             }
         }
 
-        println!("key_frag_hexs {:?}", key_frag_hexs);
+        // println!("key_frag_hexs {:?}", key_frag_hexs);
 
         //	let mut value_bytes: Vec<Option<u8>> = Vec::from_hex(&value_bytes_str[2..]).unwrap().iter().map(|x| Some(*x)).collect();
         let mut value_bytes: Vec<Option<u8>> =
@@ -1421,7 +1413,7 @@ mod tests {
                 .iter()
                 .map(|x| Some(*x))
                 .collect();
-        println!("value_bytes {:?}", value_bytes);
+        // println!("value_bytes {:?}", value_bytes);
         value_bytes.append(&mut vec![Some(0u8); 33 - value_bytes.len()]);
         let circuit: MPTCircuit<Fr> = MPTCircuit {
             key_bytes: key_bytes_str.iter().map(|x| Some(*x)).collect(),
@@ -1445,7 +1437,7 @@ mod tests {
             _marker: PhantomData,
         };
 
-        println!("MPTCircuit {:?}", circuit);
+        // println!("MPTCircuit {:?}", circuit);
         let prover_try = MockProver::run(k, &circuit, vec![]);
         let prover = prover_try.unwrap();
         prover.assert_satisfied();

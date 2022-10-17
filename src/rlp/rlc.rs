@@ -1097,7 +1097,7 @@ impl<F: Field> Circuit<F> for TestCircuit<F> {
                     vec![],
                 )?;
 
-                println!("len_assigned {:?}", len_assigned[0]);
+                // println!("len_assigned {:?}", len_assigned[0]);
                 let rlc_trace = config.rlc.compute_rlc(
                     ctx,
                     &config.range,
@@ -1105,7 +1105,7 @@ impl<F: Field> Circuit<F> for TestCircuit<F> {
                     len_assigned[0].clone(),
                     self.max_len,
                 )?;
-                println!("rlc_trace {:?}", rlc_trace);
+                // println!("rlc_trace {:?}", rlc_trace);
 
                 let stats = config.range.finalize(ctx)?;
                 Ok(rlc_trace)
