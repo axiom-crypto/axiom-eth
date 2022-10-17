@@ -58,7 +58,7 @@ pub fn gen_proof<
 ) -> Vec<u8> {
     // MockProver::run(params.k(), &circuit, instances.clone()).unwrap().assert_satisfied();
     // Native verify
-    {
+    /*{
         let proof = {
             let mut transcript = Blake2bWrite::init(Vec::new());
             create_proof::<
@@ -92,7 +92,7 @@ pub fn gen_proof<
         let instances = &[instances[0].to_vec()];
         let proof = Plonk::read_proof(&svk, &protocol, instances, &mut transcript).unwrap();
         assert!(Plonk::verify(&svk, &dk, &protocol, instances, &proof).unwrap());
-    }
+    }*/
 
     let instances = instances.iter().map(|instances| instances.as_slice()).collect_vec();
     let proof = {

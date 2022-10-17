@@ -781,7 +781,9 @@ impl<F: Field> RlcChip<F> {
                 running_sum = running_sum + rlc_and_len_inputs[idx].1.value();
                 cells.push(Witness(running_sum));
             }
-            gate_offsets.push(3 * idx);
+            if idx < max_num_frags - 1 {
+                gate_offsets.push(3 * idx);
+            }
         }
         let assigned = range.gate.assign_region_smart(ctx, cells, gate_offsets, vec![], vec![])?;
         let total_len =
@@ -850,18 +852,7 @@ impl<F: Field> RlcChip<F> {
                 .collect(),
             &Existing(&num_frags),
         )?;
-        let concat_check = self.assign_region_rlc(
-            ctx,
-            &vec![
-                Existing(&concat_select),
-                Constant(F::zero()),
-                Constant(F::zero()),
-                Existing(&concat.0),
-            ],
-            vec![],
-            vec![0],
-            None,
-        )?;
+        let concat_check = ctx.region.constrain_equal(concat_select.cell(), concat.0.cell())?;
         Ok(())
     }
 

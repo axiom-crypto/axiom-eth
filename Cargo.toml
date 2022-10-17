@@ -52,7 +52,7 @@ ark-std = { version = "0.3.0", features = ["print-trace"] }
 clap = { version = "4.0.13", features = ["derive"], optional = true }
 
 # aggregation 
-plonk_verifier = { git = "https://github.com/jonathanpwang/plonk-verifier.git", branch = "jpw/10_07", optional = true }
+plonk_verifier = { git = "https://github.com/jonathanpwang/plonk-verifier.git", optional = true }
 
 # evm verifier 
 ethereum_types = { package = "ethereum-types", version = "0.13.1", default-features = false, features = ["std"], optional = true }
