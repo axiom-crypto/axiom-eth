@@ -116,7 +116,7 @@ pub struct MPTVarKeyProof<F: Field> {
 
     // proof specification
     leaf_bytes: AssignedBytes<F>,
-    proof_nodes: Vec<Vec<AssignedValue<F>>>,
+    proof_nodes: Vec<AssignedBytes<F>>,
     node_types: Vec<AssignedValue<F>>, // index 0 = root; 0 = branch, 1 = extension
     depth: AssignedValue<F>,
 
@@ -612,8 +612,8 @@ impl<F: Field> MPTChip<F> {
          * key_frag_is_odd[idx] in {0, 1}
          * key_frag_hexes are hexs
          * 0 < depth <= max_depth
-         * 0 < value_byte_len <= value_max_byte_len
-         * 0 < key_frag_byte_len[idx] <= key_byte_len + 1
+         * 0 <= value_byte_len <= value_max_byte_len
+         * 0 <= key_frag_byte_len[idx] <= key_byte_len + 1
          */
         for byte in proof.key_bytes.iter() {
             self.keccak.byte_to_hex(ctx, range, &byte)?;
@@ -750,7 +750,22 @@ impl<F: Field> MPTChip<F> {
             )?;
             key_frag_leaf_byte_rlcs.push(leaf_path_rlc);
         }
-        // TODO: Match fragments to node key
+        /* Match fragments to node key
+         */
+        for idx in 0..max_depth - 1 {
+            // When node is extension, check node key RLC equals key frag RLC
+            let mut node_key_is_equal = range.is_equal(
+                ctx,
+                &Existing(&exts_parsed[idx].key_path.rlc_val),
+                &Existing(&key_frag_ext_byte_rlcs[idx]),
+            )?;
+            // is equal or node not extension
+            let is_not_ext = range.gate.not(ctx, &Existing(&proof.node_types[idx]))?;
+            node_key_is_equal =
+                range.gate.or(ctx, &Existing(&node_key_is_equal), &Existing(&is_not_ext))?;
+            // assuming node type is not extension if idx > pf.len() [we don't care what happens for these idx]
+            range.gate.assert_is_const(ctx, &node_key_is_equal, F::one());
+        }
 
         /* Check key fragments concatenate to key using hex RLC
          */
@@ -770,7 +785,7 @@ impl<F: Field> MPTChip<F> {
                 &proof.key_frag_byte_len[idx],
                 &proof.key_frag_is_odd[idx],
             )?;
-            let len = value_to_option(frag_len.value()).unwrap().get_lower_32();
+            // let len = value_to_option(frag_len.value()).unwrap().get_lower_32();
             let fragment_rlc = self.rlp.rlc.compute_rlc(
                 ctx,
                 range,
@@ -801,9 +816,21 @@ impl<F: Field> MPTChip<F> {
             &rlc_cache,
         )?;
 
-        // TODO:
-        /* Check value matches
+        /* Check value matches. Currently proof.value_bytes is RLC encoded
+         * and proof.value_byte_len is the RLC encoding's length
          */
+        let value_rlc_trace = self.rlp.rlc.compute_rlc(
+            ctx,
+            range,
+            &proof.value_bytes,
+            proof.value_byte_len.clone(),
+            value_max_byte_len,
+        )?;
+        range.gate.assert_equal(
+            ctx,
+            &Existing(&value_rlc_trace.rlc_val),
+            &Existing(&leaf_parsed.value.rlc_val),
+        )?;
 
         /* Check hash chains
          * hash(node_types[0]) = root_hash
@@ -1090,18 +1117,24 @@ mod tests {
                         vec![],
                         vec![],
                     )?;
-                    let value_byte_len_pre = config.rlp.range.gate.assign_region_smart(
-                        ctx,
-                        vec![Witness(
-                            self.value_byte_len
-                                .map(|v| Value::known(F::from(v as u64)))
-                                .unwrap_or(Value::unknown()),
-                        )],
-                        vec![],
-                        vec![],
-                        vec![],
-                    )?;
-                    let value_byte_len = value_byte_len_pre[0].clone();
+                    let value_byte_len = config
+                        .rlp
+                        .range
+                        .gate
+                        .assign_region_smart(
+                            ctx,
+                            vec![Witness(
+                                self.value_byte_len
+                                    .map(|v| Value::known(F::from(v as u64)))
+                                    .unwrap_or(Value::unknown()),
+                            )],
+                            vec![],
+                            vec![],
+                            vec![],
+                        )?
+                        .into_iter()
+                        .nth(0)
+                        .unwrap();
                     let root_hash_bytes = config.rlp.range.gate.assign_region_smart(
                         ctx,
                         self.root_hash_bytes
@@ -1165,18 +1198,24 @@ mod tests {
                         vec![],
                         vec![],
                     )?;
-                    let depth_pre = config.rlp.range.gate.assign_region_smart(
-                        ctx,
-                        vec![Witness(
-                            self.depth
-                                .map(|v| Value::known(F::from(v as u64)))
-                                .unwrap_or(Value::unknown()),
-                        )],
-                        vec![],
-                        vec![],
-                        vec![],
-                    )?;
-                    let depth = depth_pre[0].clone();
+                    let depth = config
+                        .rlp
+                        .range
+                        .gate
+                        .assign_region_smart(
+                            ctx,
+                            vec![Witness(
+                                self.depth
+                                    .map(|v| Value::known(F::from(v as u64)))
+                                    .unwrap_or(Value::unknown()),
+                            )],
+                            vec![],
+                            vec![],
+                            vec![],
+                        )?
+                        .into_iter()
+                        .nth(0)
+                        .unwrap();
                     let mut key_frag_hexs = Vec::new();
                     for key_frag_hex in self.key_frag_hexs.iter() {
                         let key_frag_hex_pre = config.rlp.range.gate.assign_region_smart(
@@ -1413,12 +1452,13 @@ mod tests {
                 .iter()
                 .map(|x| Some(*x))
                 .collect();
+        let value_byte_len = Some(value_bytes.len());
         // println!("value_bytes {:?}", value_bytes);
-        value_bytes.append(&mut vec![Some(0u8); 33 - value_bytes.len()]);
+        value_bytes.extend(vec![Some(0u8); 33 - value_bytes.len()].into_iter());
         let circuit: MPTCircuit<Fr> = MPTCircuit {
             key_bytes: key_bytes_str.iter().map(|x| Some(*x)).collect(),
             value_bytes: value_bytes,
-            value_byte_len: Some((value_bytes_str.len() - 2) / 2),
+            value_byte_len,
             root_hash_bytes: Vec::from_hex(&root_hash_str[2..])
                 .unwrap()
                 .iter()
