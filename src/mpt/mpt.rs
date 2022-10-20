@@ -750,7 +750,7 @@ impl<F: Field> MPTChip<F> {
          */
         for idx in 0..max_depth - 1 {
             // When node is extension, check node key RLC equals key frag RLC
-            let mut node_key_is_equal = range.is_equal(
+            let mut node_key_is_equal = self.rlp.rlc.is_equal(
                 ctx,
                 &Existing(&exts_parsed[idx].key_path.rlc_val),
                 &Existing(&key_frag_ext_byte_rlcs[idx]),
@@ -758,9 +758,9 @@ impl<F: Field> MPTChip<F> {
             // is equal or node not extension
             let is_not_ext = range.gate.not(ctx, &Existing(&proof.node_types[idx]))?;
             node_key_is_equal =
-                range.gate.or(ctx, &Existing(&node_key_is_equal), &Existing(&is_not_ext))?;
+                self.rlp.rlc.or(ctx, &Existing(&node_key_is_equal), &Existing(&is_not_ext))?;
             // assuming node type is not extension if idx > pf.len() [we don't care what happens for these idx]
-            range.gate.assert_is_const(ctx, &node_key_is_equal, F::one());
+            ctx.constants_to_assign.push((F::one(), Some(node_key_is_equal.cell())));
         }
 
         /* Check key fragments concatenate to key using hex RLC
@@ -822,11 +822,8 @@ impl<F: Field> MPTChip<F> {
             proof.value_byte_len.clone(),
             value_max_byte_len,
         )?;
-        range.gate.assert_equal(
-            ctx,
-            &Existing(&value_rlc_trace.rlc_val),
-            &Existing(&leaf_parsed.value.rlc_val),
-        )?;
+        ctx.region
+            .constrain_equal(value_rlc_trace.rlc_val.cell(), leaf_parsed.value.rlc_val.cell())?;
 
         /* Check hash chains
          * hash(node_types[0]) = root_hash

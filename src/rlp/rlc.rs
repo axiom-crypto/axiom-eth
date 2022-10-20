@@ -557,6 +557,31 @@ impl<F: Field> RlcChip<F> {
         self.is_zero(ctx, &Existing(&assigned[0]))
     }
 
+    // | 1 - b | 1 | b | 1 | b | a | 1 - b | out |
+    pub fn or(
+        &self,
+        ctx: &mut Context<'_, F>,
+        a: &QuantumCell<F>,
+        b: &QuantumCell<F>,
+    ) -> Result<AssignedValue<F>, Error> {
+        let cells: Vec<QuantumCell<F>> = vec![
+            QuantumCell::Witness(b.value().map(|x| F::from(1) - *x)),
+            QuantumCell::Constant(F::from(1)),
+            b.clone(),
+            QuantumCell::Constant(F::from(1)),
+            b.clone(),
+            a.clone(),
+            QuantumCell::Witness(b.value().map(|x| F::from(1) - *x)),
+            QuantumCell::Witness(
+                a.value().zip(b.value()).map(|(av, bv)| *av + *bv - (*av) * (*bv)),
+            ),
+        ];
+        let mut assigned_cells = self.assign_region_rlc(ctx, &cells, vec![], vec![0, 4], None)?;
+        ctx.region.constrain_equal(assigned_cells[0].cell(), assigned_cells[6].cell())?;
+        ctx.region.constrain_equal(assigned_cells[2].cell(), assigned_cells[4].cell())?;
+        Ok(assigned_cells.pop().unwrap())
+    }
+
     pub fn select_from_idx(
         &self,
         ctx: &mut Context<'_, F>,
