@@ -39,7 +39,7 @@ def get_block_rlp(block):
 def get_block_rlp_list(block_numbers):
     with open('INFURA_ID', 'r') as f:
         infura_id = f.read()
-    infura = Web3(HTTPProvider("https://mainnet.infura.io/v3/{}".format(infura_id)))
+    infura = Web3(HTTPProvider("https://goerli.infura.io/v3/{}".format(infura_id)))
     blocks = []
     block_hashes = []
     for block_number in block_numbers:
@@ -106,7 +106,7 @@ def create_block_proof(lastBlockNumber, side):
     print("side: ", side)
 
 def main():
-    start_block_number = 0xef0018
+    start_block_number = 0x765fab
     num_blocks = 8
     (blocks, block_hashes) = get_block_rlp_list([x for x in range(start_block_number, start_block_number + num_blocks)])
 

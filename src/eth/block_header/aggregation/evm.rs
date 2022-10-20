@@ -30,7 +30,7 @@ use plonk_verifier::{
     system::halo2::{
         aggregation::{
             self, create_snark_shplonk, gen_pk, gen_srs, write_bytes, AggregationCircuit, Snark,
-            TargetCircuit,
+            TargetCircuit, KZG_QUERY_INSTANCE,
         },
         compile,
         transcript::evm::EvmTranscript,
@@ -138,7 +138,7 @@ pub fn gen_aggregation_evm_verifier(
     let protocol = compile(
         params,
         vk,
-        Config::kzg()
+        Config::kzg(KZG_QUERY_INSTANCE)
             .with_num_instance(num_instance.clone())
             .with_accumulator_indices(accumulator_indices),
     );
@@ -180,7 +180,11 @@ pub fn gen_evm_verifier(
 ) -> Vec<u8> {
     let svk = params.get_g()[0].into();
     let dk = (params.g2(), params.s_g2()).into();
-    let protocol = compile(params, vk, Config::kzg().with_num_instance(num_instance.clone()));
+    let protocol = compile(
+        params,
+        vk,
+        Config::kzg(KZG_QUERY_INSTANCE).with_num_instance(num_instance.clone()),
+    );
 
     let loader = EvmLoader::new::<Fq, Fr>();
     let mut transcript = EvmTranscript::<_, Rc<EvmLoader>, _, _>::new(loader.clone());
@@ -211,30 +215,12 @@ mod tests {
     }
 
     #[test]
-    pub fn test_aggregation_multi_eth_header() {
-        let block_circuit = EthBlockHeaderHashCircuit::<Fr>::default();
-        let block_instances = block_circuit.instances();
-        let (params_app, snark) = create_snark_shplonk::<EthMultiBlockHeaderCircuit>(
-            21,
-            vec![block_circuit],
-            vec![block_instances],
-            None,
-        );
-        let snarks = vec![snark];
-        let agg_circuit = aggregation::AggregationCircuit::new(&params_app, snarks, true);
-        println!("finished creating agg_circuit");
-
-        let k = load_aggregation_circuit_degree();
-        let prover = MockProver::run(k, &agg_circuit, agg_circuit.instances()).unwrap();
-        prover.assert_satisfied();
-    }
-
-    #[test]
     pub fn bench_aggregation_multi_eth_header() {
         let block_circuit = EthBlockHeaderHashCircuit::<Fr>::default();
         let block_instances = block_circuit.instances();
-        let (params_app, snark) = create_snark_shplonk::<EthMultiBlockHeaderCircuit>(
-            21,
+        let params_app = gen_srs(21);
+        let snark = create_snark_shplonk::<EthMultiBlockHeaderCircuit>(
+            &params_app,
             vec![block_circuit],
             vec![block_instances],
             None,

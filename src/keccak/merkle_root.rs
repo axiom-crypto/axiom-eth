@@ -38,7 +38,7 @@ use plonk_verifier::{
     system::halo2::{
         aggregation::{
             create_snark_shplonk, gen_pk, gen_srs, write_instances, PoseidonTranscript, Snark,
-            TargetCircuit,
+            TargetCircuit, KZG_QUERY_INSTANCE,
         },
         compile,
         transcript::halo2::ChallengeScalar,
@@ -156,8 +156,10 @@ impl MerkleRootCircuit<Fr> {
         );
 
         // copy from create_snark_shplonk
-        let config =
-            Config::kzg().set_zk(true).with_num_proof(1).with_num_instance(vec![instance.len()]);
+        let config = Config::kzg(KZG_QUERY_INSTANCE)
+            .set_zk(true)
+            .with_num_proof(1)
+            .with_num_instance(vec![instance.len()]);
         let protocol = compile(&params, pk.get_vk(), config);
 
         let instance1: Vec<&[Fr]> = vec![&instance];

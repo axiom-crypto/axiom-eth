@@ -340,16 +340,23 @@ pub(crate) fn hexes_to_u128<F: FieldExt>(
         .collect_vec()
 }
 
+// this circuit proves that there is a chain of blocks from `start_block_number` to `last_block_number` inclusive, where the last block RLP has matching block number `last_block_number` and we compute it's hash
 #[derive(Clone, Debug)]
 pub struct EthBlockHeaderHashCircuit<F> {
     pub inputs: Vec<Vec<Option<u8>>>,
-    // parent hash, last blockhash, merkle root
+    // just for convenience:
+    pub start_block_number: u64,
+    // exposed as public output:
+    pub last_block_number: u64,
+    // public: parentHash, last blockhash, merkle root
     pub instance: Vec<BigUint>,
     pub _marker: PhantomData<F>,
+    // all instances: last_block_number [1], parentHash [2], last blockhash [2], merkle root [2]
 }
 
 impl<F> Default for EthBlockHeaderHashCircuit<F> {
     fn default() -> Self {
+        // Goerli
         let blocks_str = std::fs::read_to_string("data/headers/default_blocks.json").unwrap();
         let blocks: Vec<String> = serde_json::from_str(blocks_str.as_str()).unwrap();
         let mut input_bytes = Vec::new();
@@ -357,7 +364,7 @@ impl<F> Default for EthBlockHeaderHashCircuit<F> {
             let mut block_vec: Vec<Option<u8>> =
                 Vec::from_hex(block_str).unwrap().iter().map(|y| Some(*y)).collect();
             block_vec
-                .append(&mut vec![Some(0u8); MAINNET_BLOCK_HEADER_RLP_MAX_BYTES - block_vec.len()]);
+                .append(&mut vec![Some(0u8); GOERLI_BLOCK_HEADER_RLP_MAX_BYTES - block_vec.len()]);
             input_bytes.push(block_vec);
         }
 
@@ -368,18 +375,30 @@ impl<F> Default for EthBlockHeaderHashCircuit<F> {
             .map(|instance| BigUint::from_str_radix(instance.as_str(), 16).unwrap())
             .collect_vec();
 
-        Self { inputs: input_bytes, instance, _marker: PhantomData }
+        Self {
+            inputs: input_bytes,
+            start_block_number: 0x765fb2 - 7,
+            last_block_number: 0x765fb2,
+            instance,
+            _marker: PhantomData,
+        }
     }
 }
 
 impl<F: Field> EthBlockHeaderHashCircuit<F> {
+    // last_block_number, parentHash, last blockhash, merkle root
     pub fn instances(&self) -> Vec<Vec<F>> {
-        let instance = self
-            .instance
-            .iter()
-            .flat_map(|x| vec![x.clone() >> 128usize, x.clone() % (BigUint::from(1u64) << 128)])
+        let instance = [F::from(self.last_block_number)]
             .into_iter()
-            .map(|x| biguint_to_fe(&x))
+            .chain(
+                self.instance
+                    .iter()
+                    .flat_map(|x| {
+                        vec![x.clone() >> 128usize, x.clone() % (BigUint::from(1u64) << 128)]
+                    })
+                    .into_iter()
+                    .map(|x| biguint_to_fe(&x)),
+            )
             .collect_vec();
         vec![instance]
     }
@@ -408,7 +427,13 @@ impl<F: Field> EthBlockHeaderHashCircuit<F> {
             .map(|instance| BigUint::from_str_radix(instance.as_str(), 16).unwrap())
             .collect_vec();
 
-        Self { inputs: input_bytes, instance, _marker: PhantomData }
+        Self {
+            inputs: input_bytes,
+            start_block_number: last_block_number - num_blocks + 1,
+            last_block_number,
+            instance,
+            _marker: PhantomData,
+        }
     }
 
     #[cfg(feature = "input_gen")]
@@ -417,11 +442,9 @@ impl<F: Field> EthBlockHeaderHashCircuit<F> {
         last_block_number: u64,
         num_blocks: u64,
     ) -> Self {
-        let (block_rlps, instance) = crate::input_gen::get_blocks_input(
-            provider,
-            last_block_number - num_blocks + 1,
-            num_blocks,
-        );
+        let start_block_number = last_block_number - num_blocks + 1;
+        let (block_rlps, instance) =
+            crate::input_gen::get_blocks_input(provider, start_block_number, num_blocks);
         let input_bytes = block_rlps
             .into_iter()
             .map(|block| {
@@ -441,7 +464,13 @@ impl<F: Field> EthBlockHeaderHashCircuit<F> {
         let instance =
             instance.into_iter().map(|bytes| BigUint::from_bytes_be(&bytes)).collect_vec();
 
-        Self { inputs: input_bytes, instance, _marker: PhantomData }
+        Self {
+            inputs: input_bytes,
+            start_block_number,
+            last_block_number,
+            instance,
+            _marker: PhantomData,
+        }
     }
 }
 
@@ -452,6 +481,8 @@ impl<F: Field> Circuit<F> for EthBlockHeaderHashCircuit<F> {
     fn without_witnesses(&self) -> Self {
         Self {
             inputs: self.inputs.iter().map(|input| vec![None; input.len()]).collect_vec(),
+            start_block_number: 0,
+            last_block_number: 0,
             instance: Vec::new(),
             _marker: PhantomData,
         }
@@ -478,9 +509,7 @@ impl<F: Field> Circuit<F> for EthBlockHeaderHashCircuit<F> {
         let using_simple_floor_planner = true;
         let mut first_pass = true;
         let mut phase = 0u8;
-        let mut parent_block_hash = None;
-        let mut latest_block_hash = None;
-        let mut merkle_root = None;
+        let mut assigned_instances = None;
         layouter.assign_region(
             || "Eth block header with merkle root",
             |region| {
@@ -531,13 +560,44 @@ impl<F: Field> Circuit<F> for EthBlockHeaderHashCircuit<F> {
                     .decompose_eth_block_header_chain(ctx, &config.rlp.range, &inputs_assigned)
                     .unwrap();
 
+                // check that block number matches RLC of number (4 bytes) in block header
+                let block_number_bytes = config.rlp.range.gate.assign_region(
+                    ctx,
+                    u32::to_be_bytes(self.last_block_number as u32)
+                        .map(|x| Witness(Value::known(F::from(x as u64))))
+                        .into_iter()
+                        .collect_vec(),
+                    vec![],
+                    None,
+                )?;
+                for byte in block_number_bytes.iter() {
+                    config.rlp.range.range_check(ctx, byte, 8)?;
+                }
+                let block_number_rlc = config.rlp.rlc.compute_rlc_fixed_len(
+                    ctx,
+                    &config.rlp.range,
+                    &block_number_bytes,
+                    4,
+                )?;
+                ctx.region.constrain_equal(
+                    block_number_rlc.rlc_val.cell(),
+                    block_header_trace.last().unwrap().number.rlc_val.cell(),
+                )?;
+
+                let (_, _, block_number) = config.rlp.range.gate.inner_product(
+                    ctx,
+                    &block_number_bytes.iter().map(|a| Existing(a)).collect_vec(),
+                    &(0..4).map(|i| Constant(F::from(1 << (8 * i)))).rev().collect_vec(),
+                )?;
+
+                let mut instances = vec![block_number];
                 // block_hash is 256 bits, but we need them in 128 bits to fit in Bn254 scalar field
-                parent_block_hash = Some(bytes_be_to_u128(
+                instances.append(&mut bytes_be_to_u128(
                     ctx,
                     config.rlp.range.gate(),
                     &inputs_assigned[0][4..36],
                 ));
-                latest_block_hash = Some(bytes_be_to_u128(
+                instances.append(&mut bytes_be_to_u128(
                     ctx,
                     config.rlp.range.gate(),
                     &block_header_trace.last().unwrap().block_hash_bytes,
@@ -550,20 +610,19 @@ impl<F: Field> Circuit<F> for EthBlockHeaderHashCircuit<F> {
                         .map(|trace| trace.block_hash_hexes.as_slice())
                         .collect_vec(),
                 )?;
-                merkle_root = Some(hexes_to_u128(ctx, config.rlp.range.gate(), &tree_root_hexes));
+                instances.append(&mut hexes_to_u128(
+                    ctx,
+                    config.rlp.range.gate(),
+                    &tree_root_hexes,
+                ));
+                assigned_instances = Some(instances);
 
                 let stats = config.rlp.range.finalize(ctx)?;
                 #[cfg(feature = "display")]
                 {
                     println!("stats (fixed rows, total fixed, lookups) {:?}", stats);
-                    println!(
-                        "ctx.rows rlc {:?}",
-                        ctx.advice_rows.get::<String>(&"rlc".to_string())
-                    );
-                    println!(
-                        "ctx.rows default {:?}",
-                        ctx.advice_rows.get::<String>(&"default".to_string())
-                    );
+                    println!("ctx.rows rlc {:?}", ctx.advice_rows["rlc"]);
+                    println!("ctx.rows default {:?}", ctx.advice_rows["default"]);
                     println!("ctx.rows keccak_xor {:?}", ctx.advice_rows["keccak_xor"]);
                     println!("ctx.rows keccak_xorandn {:?}", ctx.advice_rows["keccak_xorandn"]);
                     println!(
@@ -580,18 +639,10 @@ impl<F: Field> Circuit<F> for EthBlockHeaderHashCircuit<F> {
             },
         )?;
         Ok({
-            let parent_block_hash = parent_block_hash.unwrap();
-            let latest_block_hash = latest_block_hash.unwrap();
-            let merkle_root = merkle_root.unwrap();
-            assert_eq!(latest_block_hash.len(), 2);
-            assert_eq!(merkle_root.len(), 2);
+            let assigned_instances = assigned_instances.unwrap();
+            assert_eq!(assigned_instances.len(), 7);
             let mut layouter = layouter.namespace(|| "expose");
-            for (i, assigned_instance) in parent_block_hash
-                .iter()
-                .chain(latest_block_hash.iter())
-                .chain(merkle_root.iter())
-                .enumerate()
-            {
+            for (i, assigned_instance) in assigned_instances.iter().enumerate() {
                 layouter.constrain_instance(assigned_instance.cell(), config.instance, i)?;
             }
         })
@@ -747,9 +798,9 @@ mod tests {
 
     #[test]
     pub fn test_mock_one_eth_header() {
+        // Use mainnet settings
         let params_str = std::fs::read_to_string("configs/block_header.config").unwrap();
-        let params: crate::keccak::KeccakCircuitParams =
-            serde_json::from_str(params_str.as_str()).unwrap();
+        let params: EthBlockHeaderConfigParams = serde_json::from_str(params_str.as_str()).unwrap();
         let k = params.degree;
         let input_hex = "f90201a0d7519abd494a823b2c9c28908eaf250fe4a6287d747f1cc53a5a193b6533a549a01dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347944675c7e5baafbffbca748158becba61ef3b0a263a025000d51f040ee5c473fed74eda9ace87d55a35187b11bcde6f5176025c395bfa0a5800a6de6d28d7425ff72714af2af769b9f8f9e1baf56fb42f793fbb40fde07a056e1062a3dc63791e8a8496837606b14062da70ee69178cea97d6eeb5047550cb9010000236420014dc00423903000840002280080282100004704018340c0241c20011211400426000f900001d8088000011006020002ce98bc00c0000020c9a02040000688040200348c3a0082b81402002814922008085d008008200802802c4000130000101703124801400400018008a6108002020420144011200070020bc0202681810804221304004800088600300000040463614a000e200201c00611c0008e800b014081608010a0218a0b410010082000428209080200f50260a00840006700100f40a000000400000448301008c4a00341040e343500800d06250020010215200c008018002c88350404000bc5000a8000210c00724a0d0a4010210a448083eee2468401c9c3808343107884633899e780a07980d8d1f15474c9185e4d1cef5f207167735009daad2eb6af6da37ffba213c28800000000000000008501e08469e600000000000000000000000000000000000000000000000000000000000000000000000000000000";
         let input_bytes_pre: Vec<u8> = Vec::from_hex(input_hex).unwrap();
@@ -757,7 +808,7 @@ mod tests {
 
         let circuit =
             EthBlockHeaderTestCircuit::<Fr> { inputs: vec![input_bytes], _marker: PhantomData };
-        let prover_try = MockProver::run(k, &circuit, vec![]);
+        let prover_try = MockProver::run(k, &circuit, vec![vec![]]);
         let prover = prover_try.unwrap();
         prover.assert_satisfied();
         assert_eq!(prover.verify(), Ok(()));
@@ -765,9 +816,9 @@ mod tests {
 
     #[test]
     pub fn test_eth_block_header() -> Result<(), Box<dyn std::error::Error>> {
+        // Use mainnet settings
         let params_str = std::fs::read_to_string("configs/block_header.config").unwrap();
-        let params: crate::keccak::KeccakCircuitParams =
-            serde_json::from_str(params_str.as_str()).unwrap();
+        let params: EthBlockHeaderConfigParams = serde_json::from_str(params_str.as_str()).unwrap();
         let k = params.degree;
 
         let input_hex = "f90201a0d7519abd494a823b2c9c28908eaf250fe4a6287d747f1cc53a5a193b6533a549a01dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347944675c7e5baafbffbca748158becba61ef3b0a263a025000d51f040ee5c473fed74eda9ace87d55a35187b11bcde6f5176025c395bfa0a5800a6de6d28d7425ff72714af2af769b9f8f9e1baf56fb42f793fbb40fde07a056e1062a3dc63791e8a8496837606b14062da70ee69178cea97d6eeb5047550cb9010000236420014dc00423903000840002280080282100004704018340c0241c20011211400426000f900001d8088000011006020002ce98bc00c0000020c9a02040000688040200348c3a0082b81402002814922008085d008008200802802c4000130000101703124801400400018008a6108002020420144011200070020bc0202681810804221304004800088600300000040463614a000e200201c00611c0008e800b014081608010a0218a0b410010082000428209080200f50260a00840006700100f40a000000400000448301008c4a00341040e343500800d06250020010215200c008018002c88350404000bc5000a8000210c00724a0d0a4010210a448083eee2468401c9c3808343107884633899e780a07980d8d1f15474c9185e4d1cef5f207167735009daad2eb6af6da37ffba213c28800000000000000008501e08469e600000000000000000000000000000000000000000000000000000000000000000000000000000000";
@@ -799,7 +850,7 @@ mod tests {
             _,
             Blake2bWrite<Vec<u8>, G1Affine, Challenge255<G1Affine>>,
             EthBlockHeaderTestCircuit<Fr>,
-        >(&params, &pk, &[proof_circuit], &[&[]], rng, &mut transcript)?;
+        >(&params, &pk, &[proof_circuit], &[&[&[]]], rng, &mut transcript)?;
         let proof = transcript.finalize();
         end_timer!(pf_time);
 
@@ -813,7 +864,7 @@ mod tests {
             Challenge255<G1Affine>,
             Blake2bRead<&[u8], G1Affine, Challenge255<G1Affine>>,
             SingleStrategy<'_, Bn256>,
-        >(verifier_params, pk.get_vk(), strategy, &[&[]], &mut transcript)
+        >(verifier_params, pk.get_vk(), strategy, &[&[&[]]], &mut transcript)
         .is_ok());
         end_timer!(verify_time);
 
