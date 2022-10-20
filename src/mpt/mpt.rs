@@ -997,7 +997,7 @@ mod tests {
         },
     };
 
-    #[derive(Clone, Debug, Default)]
+    #[derive(Clone, Debug)]
     pub struct MPTCircuit<F> {
         pub key_bytes: Vec<Option<u8>>,
         pub value_bytes: Vec<Option<u8>>,
@@ -1322,6 +1322,164 @@ mod tests {
         }
     }
 
+    impl<F: Field> Default for MPTCircuit<F> {
+        fn default() -> Self {
+            let block_str = std::fs::read_to_string("scripts/input_gen/block.json").unwrap();
+            let block: serde_json::Value = serde_json::from_str(block_str.as_str()).unwrap();
+            // println!("stateRoot {:?}", block["stateRoot"]);
+
+            let pf_str = std::fs::read_to_string("scripts/input_gen/acct_storage_pf.json").unwrap();
+            let pf: serde_json::Value = serde_json::from_str(pf_str.as_str()).unwrap();
+            let acct_pf = pf["accountProof"].clone();
+            let storage_pf = pf["storageProof"][0].clone();
+            // println!("acct_pf {:?}", acct_pf);
+            // println!("storage_root {:?}", pf["storageHash"]);
+            // println!("storage_pf {:?}", storage_pf);
+
+            let key_bytes_str_pre: String =
+                serde_json::from_value(storage_pf["key"].clone()).unwrap();
+            let mut hasher = Keccak256::default();
+            // println!("MPTC {:?}", Vec::from_hex(&key_bytes_str_pre).unwrap());
+            hasher.update(&Vec::from_hex(&key_bytes_str_pre).unwrap());
+            let key_bytes_str = hasher.finalize();
+            let mut key_byte_hexs = Vec::new();
+            for idx in 0..32 {
+                key_byte_hexs.push(key_bytes_str[idx] / 16);
+                key_byte_hexs.push(key_bytes_str[idx] % 16);
+            }
+            // println!("key_bytes_str {:?}", key_bytes_str);
+            let value_bytes_str: String =
+                serde_json::from_value(storage_pf["value"].clone()).unwrap();
+            let root_hash_str: String = serde_json::from_value(pf["storageHash"].clone()).unwrap();
+            let pf_strs: Vec<String> = serde_json::from_value(storage_pf["proof"].clone()).unwrap();
+            let leaf_str: String = pf_strs[pf_strs.len() - 1].clone();
+
+            let key_byte_len = 32;
+            let value_max_byte_len = 33;
+            let (_, max_leaf_bytes) = max_leaf_lens(key_byte_len, value_max_byte_len);
+            let mut leaf_bytes: Vec<Option<u8>> =
+                Vec::from_hex(&leaf_str[2..]).unwrap().iter().map(|x| Some(*x)).collect();
+            leaf_bytes.append(&mut vec![Some(0u8); max_leaf_bytes - leaf_bytes.len()]);
+
+            let (_, max_ext_bytes) = max_ext_lens(32);
+            let (_, max_branch_bytes) = max_branch_lens();
+            let max_node_bytes = max(max_ext_bytes, max_branch_bytes);
+            // println!("max_node_bytes {:?} max_leaf_bytes {:?}", max_node_bytes, max_leaf_bytes);
+
+            let max_depth = 8;
+            let mut node_types = Vec::new();
+            let mut nodes = Vec::new();
+            let mut key_frag_hexs: Vec<Vec<Option<u8>>> = Vec::new();
+            let mut key_frag_is_odd = Vec::new();
+            let mut key_frag_byte_len = Vec::new();
+            let mut key_idx = 0;
+            for idx in 0..max_depth {
+                if idx < pf_strs.len() - 1 {
+                    let mut node: Vec<Option<u8>> = Vec::from_hex(&pf_strs[idx][2..])
+                        .unwrap()
+                        .iter()
+                        .map(|x| Some(*x))
+                        .collect();
+                    node.append(&mut vec![Some(0u8); max_node_bytes - node.len()]);
+                    nodes.push(node);
+
+                    let hex = Vec::from_hex(&pf_strs[idx][2..]).unwrap();
+                    let decode = Rlp::new(&hex);
+                    if decode.item_count().unwrap() == 2 {
+                        node_types.push(Some(1));
+                    } else {
+                        node_types.push(Some(0));
+                    }
+                } else if idx < max_depth - 1 {
+                    node_types.push(Some(0));
+                    let dummy_branch_str =
+                    "f1808080808080808080808080808080a0000000000000000000000000000000000000000000000000000000000000000080";
+                    let mut node: Vec<Option<u8>> =
+                        Vec::from_hex(dummy_branch_str).unwrap().iter().map(|x| Some(*x)).collect();
+                    node.append(&mut vec![Some(0u8); max_node_bytes - node.len()]);
+                    nodes.push(node);
+                }
+
+                if idx < pf_strs.len() {
+                    let hex = Vec::from_hex(&pf_strs[idx][2..]).unwrap();
+                    let decode = Rlp::new(&hex);
+                    if decode.item_count().unwrap() == 2 {
+                        let field = decode.at(0).unwrap().data().unwrap();
+                        key_frag_byte_len.push(Some(field.len()));
+                        let field_vec = field.to_vec();
+                        let mut field_hexs = Vec::new();
+                        for b in field_vec.iter() {
+                            field_hexs.push(b / 16);
+                            field_hexs.push(b % 16);
+                        }
+                        let start_idx = {
+                            if field_hexs[0] == 1u8 || field_hexs[0] == 3u8 {
+                                key_frag_is_odd.push(Some(1u8));
+                                1
+                            } else {
+                                key_frag_is_odd.push(Some(0u8));
+                                2
+                            }
+                        };
+
+                        let mut frag: Vec<Option<u8>> =
+                            field_hexs[start_idx..].iter().map(|x| Some(*x)).collect();
+                        frag.append(&mut vec![Some(0u8); 64 - frag.len()]);
+                        key_frag_hexs.push(frag);
+                    } else {
+                        let mut frag: Vec<Option<u8>> = vec![Some(key_byte_hexs[key_idx])];
+                        println!("frag {:?} key_idx {:?}", frag, key_idx);
+                        frag.append(&mut vec![Some(0u8); 64 - frag.len()]);
+                        key_frag_hexs.push(frag);
+                        key_frag_byte_len.push(Some(1usize));
+                        key_frag_is_odd.push(Some(1u8));
+                    }
+                    key_idx = key_idx + 2 * key_frag_byte_len[key_frag_byte_len.len() - 1].unwrap()
+                        - 2
+                        + key_frag_is_odd[key_frag_is_odd.len() - 1].unwrap() as usize;
+                } else {
+                    let frag: Vec<Option<u8>> = vec![Some(0u8); 64];
+                    key_frag_hexs.push(frag);
+                    key_frag_byte_len.push(Some(0usize));
+                    key_frag_is_odd.push(Some(0u8));
+                }
+            }
+
+            // println!("key_frag_hexs {:?}", key_frag_hexs);
+
+            //	let mut value_bytes: Vec<Option<u8>> = Vec::from_hex(&value_bytes_str[2..]).unwrap().iter().map(|x| Some(*x)).collect();
+            let mut value_bytes: Vec<Option<u8>> =
+                rlp::encode(&Vec::from_hex(&value_bytes_str[2..]).unwrap())
+                    .iter()
+                    .map(|x| Some(*x))
+                    .collect();
+            let value_byte_len = Some(value_bytes.len());
+            // println!("value_bytes {:?}", value_bytes);
+            value_bytes.extend(vec![Some(0u8); 33 - value_bytes.len()].into_iter());
+
+            MPTCircuit {
+                key_bytes: key_bytes_str.iter().map(|x| Some(*x)).collect(),
+                value_bytes: value_bytes,
+                value_byte_len,
+                root_hash_bytes: Vec::from_hex(&root_hash_str[2..])
+                    .unwrap()
+                    .iter()
+                    .map(|x| Some(*x))
+                    .collect(),
+                leaf_bytes,
+                nodes,
+                node_types,
+                depth: Some(pf_strs.len()),
+                key_frag_hexs,
+                key_frag_is_odd,
+                key_frag_byte_len,
+                key_byte_len,
+                value_max_byte_len,
+                max_depth,
+                _marker: PhantomData,
+            }
+        }
+    }
     #[test]
     pub fn test_mock_mpt_inclusion_fixed() -> Result<(), Error> {
         let params_str = std::fs::read_to_string("configs/keccak.config").unwrap();
@@ -1329,154 +1487,7 @@ mod tests {
             serde_json::from_str(params_str.as_str()).unwrap();
         let k = params.degree;
 
-        let block_str = std::fs::read_to_string("scripts/input_gen/block.json").unwrap();
-        let block: serde_json::Value = serde_json::from_str(block_str.as_str()).unwrap();
-        // println!("stateRoot {:?}", block["stateRoot"]);
-
-        let pf_str = std::fs::read_to_string("scripts/input_gen/acct_storage_pf.json").unwrap();
-        let pf: serde_json::Value = serde_json::from_str(pf_str.as_str()).unwrap();
-        let acct_pf = pf["accountProof"].clone();
-        let storage_pf = pf["storageProof"][0].clone();
-        // println!("acct_pf {:?}", acct_pf);
-        // println!("storage_root {:?}", pf["storageHash"]);
-        // println!("storage_pf {:?}", storage_pf);
-
-        let key_bytes_str_pre: String = serde_json::from_value(storage_pf["key"].clone()).unwrap();
-        let mut hasher = Keccak256::default();
-        // println!("MPTC {:?}", Vec::from_hex(&key_bytes_str_pre).unwrap());
-        hasher.update(&Vec::from_hex(&key_bytes_str_pre).unwrap());
-        let key_bytes_str = hasher.finalize();
-        let mut key_byte_hexs = Vec::new();
-        for idx in 0..32 {
-            key_byte_hexs.push(key_bytes_str[idx] / 16);
-            key_byte_hexs.push(key_bytes_str[idx] % 16);
-        }
-        // println!("key_bytes_str {:?}", key_bytes_str);
-        let value_bytes_str: String = serde_json::from_value(storage_pf["value"].clone()).unwrap();
-        let root_hash_str: String = serde_json::from_value(pf["storageHash"].clone()).unwrap();
-        let pf_strs: Vec<String> = serde_json::from_value(storage_pf["proof"].clone()).unwrap();
-        let leaf_str: String = pf_strs[pf_strs.len() - 1].clone();
-
-        let key_byte_len = 32;
-        let value_max_byte_len = 33;
-        let (_, max_leaf_bytes) = max_leaf_lens(key_byte_len, value_max_byte_len);
-        let mut leaf_bytes: Vec<Option<u8>> =
-            Vec::from_hex(&leaf_str[2..]).unwrap().iter().map(|x| Some(*x)).collect();
-        leaf_bytes.append(&mut vec![Some(0u8); max_leaf_bytes - leaf_bytes.len()]);
-
-        let (_, max_ext_bytes) = max_ext_lens(32);
-        let (_, max_branch_bytes) = max_branch_lens();
-        let max_node_bytes = max(max_ext_bytes, max_branch_bytes);
-        // println!("max_node_bytes {:?} max_leaf_bytes {:?}", max_node_bytes, max_leaf_bytes);
-
-        let max_depth = 9;
-        let mut node_types = Vec::new();
-        let mut nodes = Vec::new();
-        let mut key_frag_hexs: Vec<Vec<Option<u8>>> = Vec::new();
-        let mut key_frag_is_odd = Vec::new();
-        let mut key_frag_byte_len = Vec::new();
-        let mut key_idx = 0;
-        for idx in 0..max_depth {
-            if idx < pf_strs.len() - 1 {
-                let mut node: Vec<Option<u8>> =
-                    Vec::from_hex(&pf_strs[idx][2..]).unwrap().iter().map(|x| Some(*x)).collect();
-                node.append(&mut vec![Some(0u8); max_node_bytes - node.len()]);
-                nodes.push(node);
-
-                let hex = Vec::from_hex(&pf_strs[idx][2..]).unwrap();
-                let decode = Rlp::new(&hex);
-                if decode.item_count().unwrap() == 2 {
-                    node_types.push(Some(1));
-                } else {
-                    node_types.push(Some(0));
-                }
-            } else if idx < max_depth - 1 {
-                node_types.push(Some(0));
-                let dummy_branch_str =
-                    "f1808080808080808080808080808080a0000000000000000000000000000000000000000000000000000000000000000080";
-                let mut node: Vec<Option<u8>> =
-                    Vec::from_hex(dummy_branch_str).unwrap().iter().map(|x| Some(*x)).collect();
-                node.append(&mut vec![Some(0u8); max_node_bytes - node.len()]);
-                nodes.push(node);
-            }
-
-            if idx < pf_strs.len() {
-                let hex = Vec::from_hex(&pf_strs[idx][2..]).unwrap();
-                let decode = Rlp::new(&hex);
-                if decode.item_count().unwrap() == 2 {
-                    let field = decode.at(0).unwrap().data().unwrap();
-                    key_frag_byte_len.push(Some(field.len()));
-                    let field_vec = field.to_vec();
-                    let mut field_hexs = Vec::new();
-                    for b in field_vec.iter() {
-                        field_hexs.push(b / 16);
-                        field_hexs.push(b % 16);
-                    }
-                    let start_idx = {
-                        if field_hexs[0] == 1u8 || field_hexs[0] == 3u8 {
-                            key_frag_is_odd.push(Some(1u8));
-                            1
-                        } else {
-                            key_frag_is_odd.push(Some(0u8));
-                            2
-                        }
-                    };
-
-                    let mut frag: Vec<Option<u8>> =
-                        field_hexs[start_idx..].iter().map(|x| Some(*x)).collect();
-                    frag.append(&mut vec![Some(0u8); 64 - frag.len()]);
-                    key_frag_hexs.push(frag);
-                } else {
-                    let mut frag: Vec<Option<u8>> = vec![Some(key_byte_hexs[key_idx])];
-                    println!("frag {:?} key_idx {:?}", frag, key_idx);
-                    frag.append(&mut vec![Some(0u8); 64 - frag.len()]);
-                    key_frag_hexs.push(frag);
-                    key_frag_byte_len.push(Some(1usize));
-                    key_frag_is_odd.push(Some(1u8));
-                }
-                key_idx = key_idx + 2 * key_frag_byte_len[key_frag_byte_len.len() - 1].unwrap() - 2
-                    + key_frag_is_odd[key_frag_is_odd.len() - 1].unwrap() as usize;
-            } else {
-                let frag: Vec<Option<u8>> = vec![Some(0u8); 64];
-                key_frag_hexs.push(frag);
-                key_frag_byte_len.push(Some(0usize));
-                key_frag_is_odd.push(Some(0u8));
-            }
-        }
-
-        // println!("key_frag_hexs {:?}", key_frag_hexs);
-
-        //	let mut value_bytes: Vec<Option<u8>> = Vec::from_hex(&value_bytes_str[2..]).unwrap().iter().map(|x| Some(*x)).collect();
-        let mut value_bytes: Vec<Option<u8>> =
-            rlp::encode(&Vec::from_hex(&value_bytes_str[2..]).unwrap())
-                .iter()
-                .map(|x| Some(*x))
-                .collect();
-        let value_byte_len = Some(value_bytes.len());
-        // println!("value_bytes {:?}", value_bytes);
-        value_bytes.extend(vec![Some(0u8); 33 - value_bytes.len()].into_iter());
-        let circuit: MPTCircuit<Fr> = MPTCircuit {
-            key_bytes: key_bytes_str.iter().map(|x| Some(*x)).collect(),
-            value_bytes: value_bytes,
-            value_byte_len,
-            root_hash_bytes: Vec::from_hex(&root_hash_str[2..])
-                .unwrap()
-                .iter()
-                .map(|x| Some(*x))
-                .collect(),
-            leaf_bytes,
-            nodes,
-            node_types,
-            depth: Some(pf_strs.len()),
-            key_frag_hexs,
-            key_frag_is_odd,
-            key_frag_byte_len,
-            key_byte_len,
-            value_max_byte_len,
-            max_depth,
-            _marker: PhantomData,
-        };
-
+        let circuit = MPTCircuit::<Fr>::default();
         // println!("MPTCircuit {:?}", circuit);
         let prover_try = MockProver::run(k, &circuit, vec![]);
         let prover = prover_try.unwrap();
