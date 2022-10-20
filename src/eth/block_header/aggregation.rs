@@ -36,7 +36,8 @@ use plonk_verifier::{
     system::halo2::{
         aggregation::{
             self, aggregate, create_snark_shplonk, gen_pk, gen_srs, Halo2Loader,
-            PoseidonTranscript, Snark, SnarkWitness, TargetCircuit, RATE, R_F, R_P, T,
+            PoseidonTranscript, Snark, SnarkWitness, TargetCircuit, KZG_QUERY_INSTANCE, RATE, R_F,
+            R_P, T,
         },
         compile,
         transcript::{
@@ -80,6 +81,7 @@ impl BlockAggregationCircuit {
         println!("{:?}\n", params.get_g()[1]);
 
         let snarks_instance = snarks.iter().map(|snark| snark.instances()[0].clone()).collect_vec();
+
         let mut circuit = aggregation::AggregationCircuit::new(params, snarks, true);
         circuit.instances.drain(4 * LIMBS..);
 
@@ -193,7 +195,7 @@ pub fn create_block_agg_snarks(
         let pk = pk.as_ref().unwrap();
 
         // copy from create_snark_shplonk
-        let config = Config::kzg()
+        let config = Config::kzg(KZG_QUERY_INSTANCE)
             .set_zk(true)
             .with_num_proof(1)
             .with_accumulator_indices(aggregation::AggregationCircuit::accumulator_indices())
@@ -286,7 +288,10 @@ pub fn create_initial_block_header_snarks(
         let pk = pk.as_ref().unwrap();
 
         // copy from create_snark_shplonk
-        let config = Config::kzg().set_zk(true).with_num_proof(1).with_num_instance(vec![6]);
+        let config = Config::kzg(KZG_QUERY_INSTANCE)
+            .set_zk(true)
+            .with_num_proof(1)
+            .with_num_instance(vec![6]);
         let protocol = compile(params, pk.get_vk(), config);
 
         let instance = circuit.instances();
@@ -508,8 +513,9 @@ mod tests {
     pub fn test_aggregation_multi_eth_header() {
         let block_circuit = EthBlockHeaderHashCircuit::<Fr>::default();
         let block_instances = block_circuit.instances();
-        let (params_app, snark) = create_snark_shplonk::<EthMultiBlockHeaderCircuit>(
-            21,
+        let params_app = gen_srs(21);
+        let snark = create_snark_shplonk::<EthMultiBlockHeaderCircuit>(
+            &params_app,
             vec![block_circuit],
             vec![block_instances],
             None,
