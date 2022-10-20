@@ -113,7 +113,6 @@ pub enum Strategy {
 pub struct EthBlockHeaderConfigParams {
     pub degree: u32,
     pub num_basic_chips: usize,
-    pub num_chips_fixed: usize,
     pub range_strategy: Strategy,
     pub num_advice: Vec<usize>,
     pub num_lookup_advice: Vec<usize>,
@@ -144,7 +143,7 @@ impl<F: Field> EthBlockHeaderChip<F> {
         let rlp = RlpArrayChip::configure(
             meta,
             params.num_basic_chips,
-            params.num_chips_fixed,
+            0, // share fixed columns with rlp.range
             challenge_id.clone(),
             context_id,
             match params.range_strategy {

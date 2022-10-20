@@ -32,10 +32,12 @@ use hex::FromHex;
 use num_bigint::BigUint;
 use num_traits::cast::ToPrimitive;
 use rlp::{decode, decode_list, encode, Rlp};
+use serde::{Deserialize, Serialize};
 use sha3::{Digest, Keccak256};
-use std::{cmp::max, marker::PhantomData};
+use std::{cmp::max, io::Write, marker::PhantomData};
 
 use crate::{
+    eth::block_header::{EthBlockHeaderConfigParams, Strategy},
     keccak::{print_bytes, KeccakChip},
     rlp::rlc::{log2, RlcFixedTrace, RlcTrace},
     rlp::rlp::{max_rlp_len_len, RlpArrayChip, RlpArrayTrace},
@@ -172,41 +174,35 @@ pub struct MPTChip<F: Field> {
 impl<F: Field> MPTChip<F> {
     pub fn configure(
         meta: &mut ConstraintSystem<F>,
-        num_basic_chips: usize,
-        num_chips_fixed: usize,
         challenge_id: String,
         context_id: String,
-        range_strategy: RangeStrategy,
-        num_advice: &[usize],
-        num_lookup_advice: &[usize],
-        num_fixed: usize,
-        lookup_bits: usize,
+        params: EthBlockHeaderConfigParams,
     ) -> Self {
         let rlp = RlpArrayChip::configure(
             meta,
-            num_basic_chips,
-            num_chips_fixed,
+            params.num_basic_chips, // 2 advice per basic chip
+            0,                      // use the fixed columns of rlp.range
             challenge_id.clone(),
             context_id,
-            range_strategy,
-            num_advice,
-            num_lookup_advice,
-            num_fixed,
-            lookup_bits,
+            match params.range_strategy {
+                Strategy::Simple => RangeStrategy::Vertical,
+                _ => RangeStrategy::PlonkPlus,
+            },
+            &params.num_advice,
+            &params.num_lookup_advice,
+            params.num_fixed,
+            params.lookup_bits,
         );
-        let params_str = std::fs::read_to_string("configs/keccak.config").unwrap();
-        let params: crate::keccak::KeccakCircuitParams =
-            serde_json::from_str(params_str.as_str()).unwrap();
         // println!("params adv {:?} fix {:?}", params.num_advice, params.num_fixed);
         let keccak = KeccakChip::configure(
             meta,
             "keccak".to_string(),
             1088,
             256,
-            params.num_advice,
-            params.num_xor,
-            params.num_xorandn,
-            params.num_fixed,
+            params.keccak_num_advice,
+            params.keccak_num_xor,
+            params.keccak_num_xorandn,
+            0, // keccak should just use the fixed columns of rlp.range
         );
         Self { rlp, keccak }
     }
@@ -979,6 +975,8 @@ impl<F: Field> MPTChip<F> {
 #[cfg(test)]
 mod tests {
 
+    use std::{fs, io::BufRead};
+
     use super::*;
     use ark_std::{end_timer, start_timer};
     use halo2_proofs::{
@@ -1020,6 +1018,8 @@ mod tests {
         pub value_max_byte_len: usize,
         pub max_depth: usize,
         _marker: PhantomData<F>,
+
+        k: usize,
     }
 
     impl<F: Field> Circuit<F> for MPTCircuit<F> {
@@ -1031,18 +1031,11 @@ mod tests {
         }
 
         fn configure(meta: &mut ConstraintSystem<F>) -> Self::Config {
-            MPTChip::configure(
-                meta,
-                10,
-                5,
-                "gamma".to_string(),
-                "rlc".to_string(),
-                Vertical,
-                &[10],
-                &mut [5],
-                5,
-                10,
-            )
+            let params_str = fs::read_to_string("configs/mpt_circuit.config").unwrap();
+            let params: EthBlockHeaderConfigParams =
+                serde_json::from_str(params_str.as_str()).unwrap();
+
+            MPTChip::configure(meta, "gamma".to_string(), "rlc".to_string(), params)
         }
 
         fn synthesize(
@@ -1294,24 +1287,37 @@ mod tests {
                     let stats = config.rlp.range.finalize(ctx)?;
                     #[cfg(feature = "display")]
                     {
-                        println!("stats {:?}", stats);
+                        println!("[stats] {:?}", stats);
                         println!(
-                            "ctx.rows rlc {:?}",
-                            ctx.advice_rows.get::<String>(&"rlc".to_string())
-                        );
-                        println!(
-                            "ctx.rows default {:?}",
-                            ctx.advice_rows.get::<String>(&"default".to_string())
-                        );
-                        println!("ctx.rows keccak {:?}", ctx.advice_rows["keccak"]);
-                        println!("ctx.rows keccak_xor {:?}", ctx.advice_rows["keccak_xor"]);
-                        println!("ctx.rows keccak_xorandn {:?}", ctx.advice_rows["keccak_xorandn"]);
-                        println!(
-                            "ctx.advice_rows sums: {:#?}",
+                            "[ctx.advice_rows sums] {:#?}",
                             ctx.advice_rows
                                 .iter()
                                 .map(|(key, val)| (key, val.iter().sum::<usize>()))
                                 .collect::<Vec<_>>()
+                        );
+                        let total_rlc = ctx.advice_rows["rlc"].iter().sum::<usize>();
+                        println!("optimal rlc #: {}", (total_rlc + (1 << self.k) - 1) >> self.k);
+                        let total_default = ctx.advice_rows["default"].iter().sum::<usize>();
+                        println!(
+                            "optimal default #: {}",
+                            (total_default + (1 << self.k) - 1) >> self.k
+                        );
+                        println!(
+                            "optimal lookup #: {}",
+                            (ctx.cells_to_lookup.len() + (1 << self.k) - 1) >> self.k
+                        );
+                        println!("optimal fixed #: {}", (stats.1 + (1 << self.k) - 1) >> self.k);
+                        let total_keccak = ctx.advice_rows["keccak"].iter().sum::<usize>();
+                        println!(
+                            "optimal keccak #: {}",
+                            (total_keccak + (1 << self.k) - 1) >> self.k
+                        );
+                        let total_xor = ctx.advice_rows["keccak_xor"].iter().sum::<usize>();
+                        println!("optimal xor #: {}", (total_xor + (1 << self.k) - 1) >> self.k,);
+                        let total_xorandn = ctx.advice_rows["keccak_xorandn"].iter().sum::<usize>();
+                        println!(
+                            "Optimal xorandn #: {}",
+                            (total_xorandn + (1 << self.k) - 1) >> self.k
                         );
                     }
                     Ok(())
@@ -1477,23 +1483,171 @@ mod tests {
                 value_max_byte_len,
                 max_depth,
                 _marker: PhantomData,
+                k: 20,
             }
         }
     }
+
     #[test]
     pub fn test_mock_mpt_inclusion_fixed() -> Result<(), Error> {
-        let params_str = std::fs::read_to_string("configs/keccak.config").unwrap();
-        let params: crate::keccak::KeccakCircuitParams =
-            serde_json::from_str(params_str.as_str()).unwrap();
+        let params_str = std::fs::read_to_string("configs/mpt_circuit.config").unwrap();
+        let params: EthBlockHeaderConfigParams = serde_json::from_str(params_str.as_str()).unwrap();
         let k = params.degree;
 
-        let circuit = MPTCircuit::<Fr>::default();
+        let mut circuit = MPTCircuit::<Fr>::default();
+        circuit.k = k as usize;
         // println!("MPTCircuit {:?}", circuit);
         let prover_try = MockProver::run(k, &circuit, vec![]);
         let prover = prover_try.unwrap();
         prover.assert_satisfied();
         assert_eq!(prover.verify(), Ok(()));
 
+        Ok(())
+    }
+
+    #[test]
+    fn bench_mpt_inclusion_fixed() -> Result<(), Box<dyn std::error::Error>> {
+        let mut folder = std::path::PathBuf::new();
+        folder.push("configs/bench_mpt.config");
+        let bench_params_file = std::fs::File::open(folder.as_path())?;
+        folder.pop();
+        folder.pop();
+
+        folder.push("data");
+        folder.push("mpt_bench.csv");
+        dbg!(&folder);
+        let mut fs_results = std::fs::File::create(folder.as_path()).unwrap();
+        folder.pop();
+        write!(fs_results, "degree,total_advice,num_rlc_chip,num_default,num_lookup,num_fixed,num_keccak,num_xor,num_xorandn,proof_time,proof_size,verify_time\n")?;
+
+        let mut params_folder = std::path::PathBuf::new();
+        params_folder.push("./params");
+        if !params_folder.is_dir() {
+            std::fs::create_dir(params_folder.as_path())?;
+        }
+
+        let bench_params_reader = std::io::BufReader::new(bench_params_file);
+        for line in bench_params_reader.lines() {
+            let bench_params: EthBlockHeaderConfigParams =
+                serde_json::from_str(line.unwrap().as_str()).unwrap();
+            println!(
+                "---------------------- degree = {} ------------------------------",
+                bench_params.degree
+            );
+            let mut rng = rand::thread_rng();
+
+            {
+                folder.pop();
+                folder.push("configs/mpt_circuit.config");
+                let mut f = std::fs::File::create(folder.as_path())?;
+                write!(f, "{}", serde_json::to_string(&bench_params).unwrap())?;
+                folder.pop();
+                folder.pop();
+                folder.push("data");
+            }
+            let params_time = start_timer!(|| "Params construction");
+            let params = {
+                params_folder.push(format!("kzg_bn254_{}.srs", bench_params.degree));
+                let fd = std::fs::File::open(params_folder.as_path());
+                let params = if let Ok(mut f) = fd {
+                    println!("Found existing params file. Reading params...");
+                    ParamsKZG::<Bn256>::read(&mut f).unwrap()
+                } else {
+                    println!("Creating new params file...");
+                    let mut f = std::fs::File::create(params_folder.as_path())?;
+                    let params = ParamsKZG::<Bn256>::setup(bench_params.degree, &mut rng);
+                    params.write(&mut f).unwrap();
+                    params
+                };
+                params_folder.pop();
+                params
+            };
+            end_timer!(params_time);
+
+            let mut circuit = MPTCircuit::<Fr>::default();
+            circuit.k = bench_params.degree as usize;
+
+            let vk_time = start_timer!(|| "Generating vkey");
+            let vk = keygen_vk(&params, &circuit)?;
+            end_timer!(vk_time);
+
+            let pk_time = start_timer!(|| "Generating pkey");
+            let pk = keygen_pk(&params, vk, &circuit)?;
+            end_timer!(pk_time);
+
+            // create a proof
+            let proof_time = start_timer!(|| "SHPLONK");
+            let mut transcript = Blake2bWrite::<_, _, Challenge255<_>>::init(vec![]);
+            create_proof::<
+                KZGCommitmentScheme<Bn256>,
+                ProverSHPLONK<'_, Bn256>,
+                Challenge255<G1Affine>,
+                _,
+                Blake2bWrite<Vec<u8>, G1Affine, Challenge255<G1Affine>>,
+                _,
+            >(&params, &pk, &[circuit], &[&[]], rng, &mut transcript)?;
+            let proof = transcript.finalize();
+            end_timer!(proof_time);
+
+            let verify_time = start_timer!(|| "Verify time");
+            let verifier_params = params.verifier_params();
+            let strategy = SingleStrategy::new(&params);
+            let mut transcript = Blake2bRead::<_, _, Challenge255<_>>::init(&proof[..]);
+            assert!(verify_proof::<
+                KZGCommitmentScheme<Bn256>,
+                VerifierSHPLONK<'_, Bn256>,
+                Challenge255<G1Affine>,
+                Blake2bRead<&[u8], G1Affine, Challenge255<G1Affine>>,
+                SingleStrategy<'_, Bn256>,
+            >(verifier_params, pk.get_vk(), strategy, &[&[]], &mut transcript)
+            .is_ok());
+            end_timer!(verify_time);
+
+            let proof_size = {
+                folder.push("mpt_circuit_proof.data");
+                let mut fd = std::fs::File::create(folder.as_path()).unwrap();
+                folder.pop();
+                fd.write_all(&proof).unwrap();
+                fd.metadata().unwrap().len()
+            };
+
+            write!(
+                fs_results,
+                "{},{},{},{},{},{},{},{}, {}, {:?},{},{:?}\n",
+                bench_params.degree,
+                bench_params.num_basic_chips * 2
+                    + bench_params.num_advice[0]
+                    + bench_params.num_lookup_advice[0]
+                    + bench_params.keccak_num_advice
+                    + bench_params.keccak_num_xor * 3
+                    + bench_params.keccak_num_xorandn * 4,
+                bench_params.num_basic_chips,
+                bench_params.num_advice[0],
+                bench_params.num_lookup_advice[0],
+                bench_params.num_fixed,
+                bench_params.keccak_num_advice,
+                bench_params.keccak_num_xor,
+                bench_params.keccak_num_xorandn,
+                proof_time.time.elapsed(),
+                proof_size,
+                verify_time.time.elapsed()
+            )?;
+            /*
+            let circuit = KeccakCircuit::default();
+            let proof_time = start_timer!(|| "GWC");
+            let mut transcript = Blake2bWrite::<_, _, Challenge255<_>>::init(vec![]);
+            create_proof::<
+                KZGCommitmentScheme<Bn256>,
+                ProverGWC<'_, Bn256>,
+                Challenge255<G1Affine>,
+                _,
+                Blake2bWrite<Vec<u8>, G1Affine, Challenge255<G1Affine>>,
+                _,
+            >(&params, &pk, &[circuit], &[&[]], OsRng::default(), &mut transcript)?;
+            let proof = transcript.finalize();
+            end_timer!(proof_time);
+            */
+        }
         Ok(())
     }
 }
