@@ -90,6 +90,7 @@ pub fn print_bits_val<F: FieldExt>(tag: String, x: &[Value<F>]) {
     println!("{:?} {:?}", tag, asdf5);
 }
 
+// we fix limbs to be nibbles
 pub const LOOKUP_BITS: usize = 4;
 const LIMBS_PER_LANE: usize = 16; // 64 / LOOKUP_BITS
 

@@ -22,14 +22,16 @@ use halo2_proofs::{
 use num_bigint::BigUint;
 use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
+use std::io::{BufRead, Write};
 
 pub struct KeccakCircuit {
-    input: Vec<u64>,
+    input: Vec<Vec<u8>>,
+    k: usize,
 }
 
 impl Default for KeccakCircuit {
     fn default() -> Self {
-        Self { input: vec![] }
+        Self { input: vec![vec![]], k: 20 }
     }
 }
 
@@ -38,7 +40,7 @@ impl<F: FieldExt> Circuit<F> for KeccakCircuit {
     type FloorPlanner = SimpleFloorPlanner;
 
     fn without_witnesses(&self) -> Self {
-        Self { input: vec![0; self.input.len()] }
+        Self { input: vec![vec![0; self.input[0].len()]; self.input.len()], k: self.k }
     }
 
     fn configure(meta: &mut ConstraintSystem<F>) -> Self::Config {
@@ -87,41 +89,58 @@ impl<F: FieldExt> Circuit<F> for KeccakCircuit {
                 );
                 let ctx = &mut aux;
 
-                let input_bits = config
-                    .assign_region(
-                        ctx,
-                        self.input.iter().map(|&b| Witness(Value::known(F::from(b)))).collect_vec(),
-                        None,
-                        vec![],
-                        vec![],
-                    )
-                    .unwrap();
-                let output_bits = config.keccak_fully_padded(ctx, &input_bits)?;
-                if value_to_option(output_bits[0].value()).is_some() {
-                    println!(
-                        "{:?}",
-                        output_bits
-                            .iter()
-                            .rev()
-                            .fold(BigUint::from(0u64), |acc, cell| acc
-                                * BigUint::from(1u64 << super::LOOKUP_BITS)
-                                + fe_to_biguint(value_to_option(cell.value()).unwrap()))
-                            .to_bytes_le()
-                    );
+                dbg!(self.input.len());
+                for nibbles in self.input.iter() {
+                    let input_nibbles = config
+                        .assign_region(
+                            ctx,
+                            nibbles
+                                .iter()
+                                .map(|&b| Witness(Value::known(F::from(b as u64))))
+                                .collect_vec(),
+                            None,
+                            vec![],
+                            vec![],
+                        )
+                        .unwrap();
+                    let output_bits = config.keccak(ctx, input_nibbles)?;
+                    /*if value_to_option(output_bits[0].value()).is_some() {
+                        println!(
+                            "{:?}",
+                            output_bits
+                                .iter()
+                                .rev()
+                                .fold(BigUint::from(0u64), |acc, cell| acc
+                                    * BigUint::from(1u64 << super::LOOKUP_BITS)
+                                    + fe_to_biguint(value_to_option(cell.value()).unwrap()))
+                                .to_bytes_le()
+                        );
+                    }*/
                 }
                 let (_fixed_rows, total_fixed) =
                     ctx.assign_and_constrain_constants(&config.constants)?;
-                println!(
-                    "cells used: {:#?}",
-                    ctx.advice_rows
-                        .iter()
-                        .map(|(key, val)| (key, val.iter().sum::<usize>()))
-                        .collect_vec()
-                );
-                println!("total fixed cells: {}", total_fixed);
                 #[cfg(feature = "display")]
-                println!("{:#?}", ctx.op_count);
+                {
+                    println!(
+                        "{:#?}",
+                        ctx.advice_rows
+                            .iter()
+                            .map(|(key, val)| (key, val.iter().sum::<usize>()))
+                            .collect_vec()
+                    );
+                    println!("total fixed cells: {}", total_fixed);
+                    println!("[op count] {:#?}", ctx.op_count);
 
+                    let total_advice = ctx.advice_rows["keccak"].iter().sum::<usize>();
+                    println!("Optimal advice #: {}", (total_advice + (1 << self.k) - 1) >> self.k);
+                    let total_xor = ctx.advice_rows["keccak_xor"].iter().sum::<usize>();
+                    println!("Optimal xor #: {}", (total_xor + (1 << self.k) - 1) >> self.k,);
+                    let total_xorandn = ctx.advice_rows["keccak_xorandn"].iter().sum::<usize>();
+                    println!(
+                        "Optimal xorandn #: {}",
+                        (total_xorandn + (1 << self.k) - 1) >> self.k
+                    );
+                }
                 Ok(())
             },
         )?;
@@ -136,10 +155,17 @@ pub fn test_keccak() {
     let params_str = std::fs::read_to_string("configs/keccak.config").unwrap();
     let params: KeccakCircuitParams = serde_json::from_str(params_str.as_str()).unwrap();
     let k = params.degree;
-    let mut input = vec![1];
+    /*let mut input = vec![1];
     input.append(&mut vec![0; 1088 / 4 - 2]);
     input.push(1 << 3);
-    let circuit = KeccakCircuit { input };
+    let circuit = KeccakCircuit { input };*/
+    let input = (0..params.num_keccak_f)
+        .map(|_| {
+            let input_bytes: Vec<u8> = (0..128).map(|_| rand::random::<u8>()).collect();
+            input_bytes.into_iter().flat_map(|x| [x % 16, x / 16].into_iter()).collect()
+        })
+        .collect();
+    let circuit = KeccakCircuit { input, k: k as usize };
 
     let prover = MockProver::<Fr>::run(k, &circuit, vec![]).unwrap();
     prover.assert_satisfied();
@@ -147,79 +173,147 @@ pub fn test_keccak() {
 
 #[test]
 fn bench_keccak() -> Result<(), Box<dyn std::error::Error>> {
-    let conf_str = std::fs::read_to_string("configs/keccak.config").unwrap();
-    let config: KeccakCircuitParams = serde_json::from_str(conf_str.as_str()).unwrap();
-    let k = config.degree;
+    let mut folder = std::path::PathBuf::new();
+    folder.push("configs/bench_keccak.config");
+    let bench_params_file = std::fs::File::open(folder.as_path())?;
+    folder.pop();
+    folder.pop();
 
-    let mut rng = rand::thread_rng();
-    let params_time = start_timer!(|| "Params construction");
-    let path = format!("./params/kzg_bn254_{}.params", k);
-    let fd = std::fs::File::open(path.as_str());
-    let params = if let Ok(mut f) = fd {
-        println!("Found existing params file. Reading params...");
-        ParamsKZG::<Bn256>::read(&mut f).unwrap()
-    } else {
-        println!("Creating new params file...");
-        let mut f = std::fs::File::create(path.as_str())?;
-        let params = ParamsKZG::<Bn256>::setup(k, &mut rng);
-        params.write(&mut f).unwrap();
-        params
-    };
-    end_timer!(params_time);
+    folder.push("data");
+    folder.push("keccak_bench.csv");
+    dbg!(&folder);
+    let mut fs_results = std::fs::File::create(folder.as_path()).unwrap();
+    folder.pop();
+    write!(fs_results, "degree,num_advice,num_default,num_xor,num_xorandn,num_fixed,num_keccak,proof_time,proof_size,verify_time\n")?;
 
-    let circuit = KeccakCircuit { input: vec![0u64; 1088 / 4 * config.num_keccak_f] };
+    let mut params_folder = std::path::PathBuf::new();
+    params_folder.push("./params");
+    if !params_folder.is_dir() {
+        std::fs::create_dir(params_folder.as_path())?;
+    }
 
-    let vk_time = start_timer!(|| "Generating vkey");
-    let vk = keygen_vk(&params, &circuit)?;
-    end_timer!(vk_time);
+    let bench_params_reader = std::io::BufReader::new(bench_params_file);
+    for line in bench_params_reader.lines() {
+        let bench_params: KeccakCircuitParams =
+            serde_json::from_str(line.unwrap().as_str()).unwrap();
+        println!(
+            "---------------------- degree = {} ------------------------------",
+            bench_params.degree
+        );
+        let mut rng = rand::thread_rng();
 
-    let pk_time = start_timer!(|| "Generating pkey");
-    let pk = keygen_pk(&params, vk, &circuit)?;
-    end_timer!(pk_time);
+        {
+            folder.pop();
+            folder.push("configs/keccak.config");
+            let mut f = std::fs::File::create(folder.as_path())?;
+            write!(f, "{}", serde_json::to_string(&bench_params).unwrap())?;
+            folder.pop();
+            folder.pop();
+            folder.push("data");
+        }
+        let params_time = start_timer!(|| "Params construction");
+        let params = {
+            params_folder.push(format!("kzg_bn254_{}.srs", bench_params.degree));
+            let fd = std::fs::File::open(params_folder.as_path());
+            let params = if let Ok(mut f) = fd {
+                println!("Found existing params file. Reading params...");
+                ParamsKZG::<Bn256>::read(&mut f).unwrap()
+            } else {
+                println!("Creating new params file...");
+                let mut f = std::fs::File::create(params_folder.as_path())?;
+                let params = ParamsKZG::<Bn256>::setup(bench_params.degree, &mut rng);
+                params.write(&mut f).unwrap();
+                params
+            };
+            params_folder.pop();
+            params
+        };
+        end_timer!(params_time);
 
-    // create a proof
-    let proof_time = start_timer!(|| "SHPLONK");
-    let mut transcript = Blake2bWrite::<_, _, Challenge255<_>>::init(vec![]);
-    create_proof::<
-        KZGCommitmentScheme<Bn256>,
-        ProverSHPLONK<'_, Bn256>,
-        Challenge255<G1Affine>,
-        _,
-        Blake2bWrite<Vec<u8>, G1Affine, Challenge255<G1Affine>>,
-        _,
-    >(&params, &pk, &[circuit], &[&[]], rng, &mut transcript)?;
-    let proof = transcript.finalize();
-    end_timer!(proof_time);
+        let input = (0..bench_params.num_keccak_f)
+            .map(|_| {
+                let input_bytes: Vec<u8> = (0..128).map(|_| rand::random::<u8>()).collect();
+                input_bytes.into_iter().flat_map(|x| [x % 16, x / 16].into_iter()).collect()
+            })
+            .collect();
+        let proof_circuit = KeccakCircuit { input, k: bench_params.degree as usize };
 
-    let verify_time = start_timer!(|| "Verify time");
-    let verifier_params = params.verifier_params();
-    let strategy = SingleStrategy::new(&params);
-    let mut transcript = Blake2bRead::<_, _, Challenge255<_>>::init(&proof[..]);
-    assert!(verify_proof::<
-        KZGCommitmentScheme<Bn256>,
-        VerifierSHPLONK<'_, Bn256>,
-        Challenge255<G1Affine>,
-        Blake2bRead<&[u8], G1Affine, Challenge255<G1Affine>>,
-        SingleStrategy<'_, Bn256>,
-    >(verifier_params, pk.get_vk(), strategy, &[&[]], &mut transcript)
-    .is_ok());
-    end_timer!(verify_time);
+        let circuit = <KeccakCircuit as Circuit<Fr>>::without_witnesses(&proof_circuit);
 
-    /*
-    let circuit = KeccakCircuit::default();
-    let proof_time = start_timer!(|| "GWC");
-    let mut transcript = Blake2bWrite::<_, _, Challenge255<_>>::init(vec![]);
-    create_proof::<
-        KZGCommitmentScheme<Bn256>,
-        ProverGWC<'_, Bn256>,
-        Challenge255<G1Affine>,
-        _,
-        Blake2bWrite<Vec<u8>, G1Affine, Challenge255<G1Affine>>,
-        _,
-    >(&params, &pk, &[circuit], &[&[]], OsRng::default(), &mut transcript)?;
-    let proof = transcript.finalize();
-    end_timer!(proof_time);
-    */
+        let vk_time = start_timer!(|| "Generating vkey");
+        let vk = keygen_vk(&params, &circuit)?;
+        end_timer!(vk_time);
+
+        let pk_time = start_timer!(|| "Generating pkey");
+        let pk = keygen_pk(&params, vk, &circuit)?;
+        end_timer!(pk_time);
+
+        // create a proof
+        let proof_time = start_timer!(|| "SHPLONK");
+        let mut transcript = Blake2bWrite::<_, _, Challenge255<_>>::init(vec![]);
+        create_proof::<
+            KZGCommitmentScheme<Bn256>,
+            ProverSHPLONK<'_, Bn256>,
+            Challenge255<G1Affine>,
+            _,
+            Blake2bWrite<Vec<u8>, G1Affine, Challenge255<G1Affine>>,
+            _,
+        >(&params, &pk, &[proof_circuit], &[&[]], rng, &mut transcript)?;
+        let proof = transcript.finalize();
+        end_timer!(proof_time);
+
+        let verify_time = start_timer!(|| "Verify time");
+        let verifier_params = params.verifier_params();
+        let strategy = SingleStrategy::new(&params);
+        let mut transcript = Blake2bRead::<_, _, Challenge255<_>>::init(&proof[..]);
+        assert!(verify_proof::<
+            KZGCommitmentScheme<Bn256>,
+            VerifierSHPLONK<'_, Bn256>,
+            Challenge255<G1Affine>,
+            Blake2bRead<&[u8], G1Affine, Challenge255<G1Affine>>,
+            SingleStrategy<'_, Bn256>,
+        >(verifier_params, pk.get_vk(), strategy, &[&[]], &mut transcript)
+        .is_ok());
+        end_timer!(verify_time);
+
+        let proof_size = {
+            folder.push("keccak_circuit_proof.data");
+            let mut fd = std::fs::File::create(folder.as_path()).unwrap();
+            folder.pop();
+            fd.write_all(&proof).unwrap();
+            fd.metadata().unwrap().len()
+        };
+
+        write!(
+            fs_results,
+            "{},{},{},{},{},{},{},{:?},{},{:?}\n",
+            bench_params.degree,
+            bench_params.num_advice + bench_params.num_xor * 3 + bench_params.num_xorandn * 4,
+            bench_params.num_advice,
+            bench_params.num_xor,
+            bench_params.num_xorandn,
+            bench_params.num_fixed,
+            bench_params.num_keccak_f,
+            proof_time.time.elapsed(),
+            proof_size,
+            verify_time.time.elapsed()
+        )?;
+        /*
+        let circuit = KeccakCircuit::default();
+        let proof_time = start_timer!(|| "GWC");
+        let mut transcript = Blake2bWrite::<_, _, Challenge255<_>>::init(vec![]);
+        create_proof::<
+            KZGCommitmentScheme<Bn256>,
+            ProverGWC<'_, Bn256>,
+            Challenge255<G1Affine>,
+            _,
+            Blake2bWrite<Vec<u8>, G1Affine, Challenge255<G1Affine>>,
+            _,
+        >(&params, &pk, &[circuit], &[&[]], OsRng::default(), &mut transcript)?;
+        let proof = transcript.finalize();
+        end_timer!(proof_time);
+        */
+    }
     Ok(())
 }
 
