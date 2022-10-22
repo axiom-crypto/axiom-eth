@@ -33,6 +33,7 @@ use halo2_proofs::{
 use hex::encode;
 use itertools::Itertools;
 use num_bigint::BigUint;
+#[cfg(feature = "aggregation")]
 use plonk_verifier::{
     loader::native::NativeLoader,
     system::halo2::{
@@ -113,6 +114,7 @@ pub struct MerkleRootCircuit<F: FieldExt> {
     pub leaves: Vec<F>, // leaves are 256 bit integers stored as pairs of u128 in big endian
 }
 
+#[cfg(feature = "aggregation")]
 impl MerkleRootCircuit<Fr> {
     // inputs are leaves of merkle tree, each leaf is u256 represented as pair of u128 in big endian
     pub fn create_snark_shplonk(inputs: Vec<Fr>, name: &str) -> Snark {
@@ -295,6 +297,7 @@ impl<F: FieldExt> Circuit<F> for MerkleRootCircuit<F> {
     }
 }
 
+#[cfg(feature = "aggregation")]
 #[test]
 fn test_merkle_circuit() {
     MerkleRootCircuit::create_snark_shplonk(vec![Fr::zero(); 4], "test");

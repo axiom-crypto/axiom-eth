@@ -617,6 +617,7 @@ mod tests {
             Blake2bRead, Blake2bWrite, Challenge255, TranscriptReadBuffer, TranscriptWriterBuffer,
         },
     };
+    #[cfg(feature = "aggregation")]
     use plonk_verifier::system::halo2::aggregation::gen_srs;
     use std::marker::PhantomData;
 
@@ -840,7 +841,10 @@ mod tests {
         let config: EthBlockHeaderConfigParams = serde_json::from_str(config_str.as_str()).unwrap();
         let k = config.degree;
 
+        #[cfg(feature = "aggregation")]
         let params = gen_srs(k);
+        #[cfg(not(feature = "aggregation"))]
+        let params = ParamsKZG::<Bn256>::setup(k, &mut rand::thread_rng());
         let circuit = EthBlockHeaderHashCircuit::<Fr>::default();
 
         let vk_time = start_timer!(|| "vk gen");
