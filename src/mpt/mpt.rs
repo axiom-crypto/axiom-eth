@@ -37,12 +37,11 @@ use sha3::{Digest, Keccak256};
 use std::{cmp::max, io::Write, marker::PhantomData};
 
 use crate::{
-    eth::block_header::{EthBlockHeaderConfigParams, Strategy},
+    eth::eth::{EthConfigParams, Strategy},
     keccak::{print_bytes, KeccakChip},
     rlp::rlc::{log2, RlcFixedTrace, RlcTrace},
     rlp::rlp::{max_rlp_len_len, RlpArrayChip, RlpArrayTrace},
 };
-
 #[derive(Clone, Debug)]
 pub struct LeafTrace<F: Field> {
     rlp_trace: RlcTrace<F>,
@@ -85,26 +84,26 @@ pub type AssignedNibbles<F> = Vec<AssignedValue<F>>;
 #[derive(Clone, Debug)]
 pub struct MPTFixedKeyProof<F: Field> {
     // claim specification
-    key_bytes: AssignedBytes<F>,
-    value_bytes: AssignedBytes<F>,
-    value_byte_len: AssignedValue<F>,
-    root_hash_bytes: AssignedBytes<F>,
+    pub key_bytes: AssignedBytes<F>,
+    pub value_bytes: AssignedBytes<F>,
+    pub value_byte_len: AssignedValue<F>,
+    pub root_hash_bytes: AssignedBytes<F>,
 
     // proof specification
-    leaf_bytes: AssignedBytes<F>,
-    nodes: Vec<Vec<AssignedValue<F>>>,
-    node_types: Vec<AssignedValue<F>>, // index 0 = root; 0 = branch, 1 = extension
-    depth: AssignedValue<F>,
+    pub leaf_bytes: AssignedBytes<F>,
+    pub nodes: Vec<Vec<AssignedValue<F>>>,
+    pub node_types: Vec<AssignedValue<F>>, // index 0 = root; 0 = branch, 1 = extension
+    pub depth: AssignedValue<F>,
 
-    key_frag_hexs: Vec<AssignedNibbles<F>>,
+    pub key_frag_hexs: Vec<AssignedNibbles<F>>,
     // hex_len = 2 * byte_len + is_odd - 2
     // if nibble for branch: byte_len = is_odd = 1
-    key_frag_is_odd: Vec<AssignedValue<F>>,
-    key_frag_byte_len: Vec<AssignedValue<F>>,
+    pub key_frag_is_odd: Vec<AssignedValue<F>>,
+    pub key_frag_byte_len: Vec<AssignedValue<F>>,
 
-    key_byte_len: usize,
-    value_max_byte_len: usize,
-    max_depth: usize,
+    pub key_byte_len: usize,
+    pub value_max_byte_len: usize,
+    pub max_depth: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -167,8 +166,8 @@ pub fn max_branch_lens() -> (Vec<usize>, usize) {
 
 #[derive(Clone, Debug)]
 pub struct MPTChip<F: Field> {
-    rlp: RlpArrayChip<F>,
-    keccak: KeccakChip<F>,
+    pub rlp: RlpArrayChip<F>,
+    pub keccak: KeccakChip<F>,
 }
 
 impl<F: Field> MPTChip<F> {
@@ -176,7 +175,7 @@ impl<F: Field> MPTChip<F> {
         meta: &mut ConstraintSystem<F>,
         challenge_id: String,
         context_id: String,
-        params: EthBlockHeaderConfigParams,
+        params: EthConfigParams,
     ) -> Self {
         let rlp = RlpArrayChip::configure(
             meta,
@@ -1029,7 +1028,7 @@ mod tests {
 
         fn configure(meta: &mut ConstraintSystem<F>) -> Self::Config {
             let params_str = fs::read_to_string("configs/mpt_circuit.config").unwrap();
-            let params: EthBlockHeaderConfigParams =
+            let params: EthConfigParams =
                 serde_json::from_str(params_str.as_str()).unwrap();
 
             MPTChip::configure(meta, "gamma".to_string(), "rlc".to_string(), params)
@@ -1488,7 +1487,7 @@ mod tests {
     #[test]
     pub fn test_mock_mpt_inclusion_fixed() -> Result<(), Error> {
         let params_str = std::fs::read_to_string("configs/mpt_circuit.config").unwrap();
-        let params: EthBlockHeaderConfigParams = serde_json::from_str(params_str.as_str()).unwrap();
+        let params: EthConfigParams = serde_json::from_str(params_str.as_str()).unwrap();
         let k = params.degree;
 
         let mut circuit = MPTCircuit::<Fr>::default();
@@ -1525,7 +1524,7 @@ mod tests {
 
         let bench_params_reader = std::io::BufReader::new(bench_params_file);
         for line in bench_params_reader.lines() {
-            let bench_params: EthBlockHeaderConfigParams =
+            let bench_params: EthConfigParams =
                 serde_json::from_str(line.unwrap().as_str()).unwrap();
             println!(
                 "---------------------- degree = {} ------------------------------",

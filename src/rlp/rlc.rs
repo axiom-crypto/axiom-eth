@@ -52,12 +52,14 @@ pub struct RlcTrace<F: Field> {
     pub rlc_val: AssignedValue<F>,
     pub rlc_len: AssignedValue<F>,
     pub rlc_max: AssignedValue<F>,
+    pub val: Vec<AssignedValue<F>>,
     pub max_len: usize,
 }
 
 #[derive(Clone, Debug)]
 pub struct RlcFixedTrace<F: Field> {
     pub rlc_val: AssignedValue<F>,
+    pub val: Vec<AssignedValue<F>>,
     pub len: usize,
 }
 
@@ -394,6 +396,7 @@ impl<F: Field> RlcChip<F> {
                     rlc_val,
                     rlc_len: len,
                     rlc_max: rlc_cells[rlc_cells.len() - 1].clone(),
+		    val: input.clone(),
                     max_len,
                 }
             } else {
@@ -401,6 +404,7 @@ impl<F: Field> RlcChip<F> {
                     rlc_val: rlc_val.clone(),
                     rlc_len: len,
                     rlc_max: rlc_val.clone(),
+		    val: input.clone(),
                     max_len,
                 }
             }
@@ -438,7 +442,11 @@ impl<F: Field> RlcChip<F> {
             ctx.region.constrain_equal(rlc_cells[0].cell(), val_cells[0].cell())?;
         }
 
-        let rlc_trace = RlcFixedTrace { rlc_val: rlc_cells[rlc_cells.len() - 1].clone(), len };
+        let rlc_trace = RlcFixedTrace {
+	    rlc_val: rlc_cells[rlc_cells.len() - 1].clone(),
+	    val: input.clone(),
+	    len
+	};
         Ok(rlc_trace)
     }
 

@@ -1,4 +1,4 @@
-use super::{EthBlockHeaderConfigParams, EthBlockHeaderHashCircuit};
+use super::{EthConfigParams, EthBlockHeaderHashCircuit};
 use crate::keccak::merkle_root::MerkleRootCircuit;
 use ethers_providers::{Http, Provider};
 use halo2_base::utils::biguint_to_fe;
@@ -456,7 +456,7 @@ pub fn final_evm_verify(
 
 pub fn run(last_block_number: u64, deploy: bool) {
     let config_str = std::fs::read_to_string("configs/block_header.config").unwrap();
-    let config: EthBlockHeaderConfigParams = serde_json::from_str(config_str.as_str()).unwrap();
+    let config: EthConfigParams = serde_json::from_str(config_str.as_str()).unwrap();
     let mut params = gen_srs(config.degree);
     println!("{:?}", params.get_g()[0]);
     println!("{:?}\n", params.get_g()[1]);
@@ -492,7 +492,7 @@ mod tests {
     use std::io::BufReader;
 
     use super::*;
-    use crate::eth::block_header::EthBlockHeaderConfigParams;
+    use crate::eth::eth::EthConfigParams;
     use ark_std::{end_timer, start_timer};
     use halo2_proofs::{
         dev::MockProver,

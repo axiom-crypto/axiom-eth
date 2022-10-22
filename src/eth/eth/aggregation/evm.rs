@@ -199,7 +199,7 @@ pub fn gen_evm_verifier(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::eth::block_header::{
+    use crate::eth::eth::{
         aggregation::load_aggregation_circuit_degree, EthBlockHeaderHashCircuit,
     };
     use ark_std::{end_timer, start_timer};
