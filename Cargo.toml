@@ -11,10 +11,9 @@ required-features = ["plonk_verifier"]
 name = "bootstrap_history"
 required-features = ["aggregation", "clap"]
 
-[patch.crates-io]
+# [patch.crates-io]
 # bitvec = { git = "https://github.com/ed255/bitvec.git", rev = "5cfc5fa8496c66872d21905e677120fc3e79693c" }
 # halo2_proofs = { git = "https://github.com/privacy-scaling-explorations/halo2.git", tag = "v2022_09_10" }
-halo2_proofs = { git = "https://github.com/axiom-crypto/halo2.git", branch = "axiom/add-serialization", package = "halo2_proofs" }
 
 [patch."https://github.com/privacy-scaling-explorations/halo2"]
 halo2_proofs = { git = "https://github.com/axiom-crypto/halo2.git", branch = "axiom/add-serialization", package = "halo2_proofs" }
@@ -34,7 +33,7 @@ num-traits = "0.2"
 # halo2
 ff = "0.12.0"
 group = "0.11"
-halo2_base = { git = "ssh://github.com/axiom-crypto/halo2-lib-working.git", package = "halo2_base", default-features = false, optional = true }
+halo2_base = { git = "ssh://github.com/axiom-crypto/halo2-lib-working.git", package = "halo2_base", default-features = false }
 halo2_proofs = { git = "https://github.com/privacy-scaling-explorations/halo2.git", tag = "v2022_09_10" }
 halo2_curves = { git = "https://github.com/privacy-scaling-explorations/halo2curves", tag = "0.2.1", package = "halo2curves" }
 
@@ -53,8 +52,7 @@ ark-std = { version = "0.3.0", features = ["print-trace"] }
 clap = { version = "4.0.13", features = ["derive"], optional = true }
 
 # aggregation 
-# plonk_verifier = { git = "https://github.com/jonathanpwang/plonk-verifier.git", optional = true }
-plonk_verifier = { path = "../plonk-verifier", optional = true }
+plonk_verifier = { git = "https://github.com/jonathanpwang/plonk-verifier.git", optional = true }
 
 # evm verifier 
 ethereum_types = { package = "ethereum-types", version = "0.13.1", default-features = false, features = ["std"], optional = true }
@@ -85,7 +83,7 @@ jemallocator = { version = "0.3.2", optional = true }
 [dev-dependencies]
 
 [features]
-default = ["display", "aggregation", "clap", "jemalloc"]
+default = ["display", "clap", "jemalloc"]
 zkevm = ["dep:ecdsa", "dep:ecc", "dep:keccak256", "dep:maingate", "dep:integer", "dep:zkevm-circuits"]
 aggregation = ["plonk_verifier", "input_gen"]
 evm = ["dep:ethereum_types", "dep:foundry_evm"]

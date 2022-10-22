@@ -15,7 +15,6 @@ use hex::encode;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use num_bigint::BigUint;
-use plonk_verifier::system::halo2::LIMBS;
 use serde::{Deserialize, Serialize};
 use std::{marker::PhantomData, rc::Rc};
 
