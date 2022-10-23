@@ -158,6 +158,7 @@ impl<F: Field> EthBlockHeaderChip<F> {
         // println!("params adv {:?} fix {:?}", params.num_advice, params.num_fixed);
         let keccak = KeccakChip::configure(
             meta,
+            rlp.range.gate.clone(),
             "keccak".to_string(),
             1088,
             256,
@@ -498,7 +499,7 @@ impl<F: Field> Circuit<F> for EthBlockHeaderHashCircuit<F> {
                         num_advice: vec![
                             ("default".to_string(), config.rlp.range.gate.num_advice),
                             ("rlc".to_string(), config.rlp.rlc.basic_chips.len()),
-                            ("keccak".to_string(), config.keccak.rotation.len()),
+                            ("keccak_rot".to_string(), config.keccak.rotation.len()),
                             ("keccak_xor".to_string(), config.keccak.xor_values.len() / 3),
                             ("keccak_xorandn".to_string(), config.keccak.xorandn_values.len() / 4),
                         ],
@@ -674,7 +675,7 @@ mod tests {
                             num_advice: vec![
                                 ("default".to_string(), config.rlp.range.gate.num_advice),
                                 ("rlc".to_string(), config.rlp.rlc.basic_chips.len()),
-                                ("keccak".to_string(), config.keccak.rotation.len()),
+                                ("keccak_rot".to_string(), config.keccak.rotation.len()),
                                 ("keccak_xor".to_string(), config.keccak.xor_values.len() / 3),
                                 (
                                     "keccak_xorandn".to_string(),

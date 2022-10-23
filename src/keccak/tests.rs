@@ -1,6 +1,7 @@
 use super::*;
 use ark_std::{end_timer, start_timer};
 use halo2_base::{
+    gates::flex_gate::GateStrategy,
     utils::{fe_to_biguint, value_to_option},
     ContextParams,
 };
@@ -46,8 +47,11 @@ impl<F: FieldExt> Circuit<F> for KeccakCircuit {
     fn configure(meta: &mut ConstraintSystem<F>) -> Self::Config {
         let params_str = std::fs::read_to_string("configs/keccak.config").unwrap();
         let params: KeccakCircuitParams = serde_json::from_str(params_str.as_str()).unwrap();
+        let gate =
+            FlexGateConfig::configure(meta, GateStrategy::Vertical, &[1], 0, "default".to_string());
         let config = KeccakChip::configure(
             meta,
+            gate,
             "keccak".to_string(),
             1088,
             256,
@@ -81,7 +85,8 @@ impl<F: FieldExt> Circuit<F> for KeccakCircuit {
                     region,
                     ContextParams {
                         num_advice: vec![
-                            ("keccak".to_string(), config.rotation.len()),
+                            ("default".to_string(), config.gate.num_advice),
+                            ("keccak_rot".to_string(), config.rotation.len()),
                             ("keccak_xor".to_string(), config.xor_values.len() / 3),
                             ("keccak_xorandn".to_string(), config.xorandn_values.len() / 4),
                         ],
@@ -92,15 +97,15 @@ impl<F: FieldExt> Circuit<F> for KeccakCircuit {
                 dbg!(self.input.len());
                 for nibbles in self.input.iter() {
                     let input_nibbles = config
+                        .gate
                         .assign_region(
                             ctx,
                             nibbles
                                 .iter()
                                 .map(|&b| Witness(Value::known(F::from(b as u64))))
                                 .collect_vec(),
+                            vec![],
                             None,
-                            vec![],
-                            vec![],
                         )
                         .unwrap();
                     let output_bits = config.keccak(ctx, input_nibbles)?;
@@ -131,8 +136,8 @@ impl<F: FieldExt> Circuit<F> for KeccakCircuit {
                     println!("total fixed cells: {}", total_fixed);
                     println!("[op count] {:#?}", ctx.op_count);
 
-                    let total_advice = ctx.advice_rows["keccak"].iter().sum::<usize>();
-                    println!("Optimal advice #: {}", (total_advice + (1 << self.k) - 1) >> self.k);
+                    let total_rot = ctx.advice_rows["keccak_rot"].iter().sum::<usize>();
+                    println!("Optimal rot #: {}", (total_rot + (1 << self.k) - 1) >> self.k);
                     let total_xor = ctx.advice_rows["keccak_xor"].iter().sum::<usize>();
                     println!("Optimal xor #: {}", (total_xor + (1 << self.k) - 1) >> self.k,);
                     let total_xorandn = ctx.advice_rows["keccak_xorandn"].iter().sum::<usize>();
@@ -155,10 +160,14 @@ pub fn test_keccak() {
     let params_str = std::fs::read_to_string("configs/keccak.config").unwrap();
     let params: KeccakCircuitParams = serde_json::from_str(params_str.as_str()).unwrap();
     let k = params.degree;
-    /*let mut input = vec![1];
+    /*
+    // Padded test
+    let mut input = vec![1];
     input.append(&mut vec![0; 1088 / 4 - 2]);
     input.push(1 << 3);
-    let circuit = KeccakCircuit { input };*/
+    let circuit = KeccakCircuit { input };
+    */
+    // let input = vec![vec![]];
     let input = (0..params.num_keccak_f)
         .map(|_| {
             let input_bytes: Vec<u8> = (0..128).map(|_| rand::random::<u8>()).collect();
@@ -184,7 +193,7 @@ fn bench_keccak() -> Result<(), Box<dyn std::error::Error>> {
     dbg!(&folder);
     let mut fs_results = std::fs::File::create(folder.as_path()).unwrap();
     folder.pop();
-    write!(fs_results, "degree,num_advice,num_default,num_xor,num_xorandn,num_fixed,num_keccak,proof_time,proof_size,verify_time\n")?;
+    write!(fs_results, "degree,num_advice,num_rot,num_xor,num_xorandn,num_fixed,num_keccak,proof_time,proof_size,verify_time\n")?;
 
     let mut params_folder = std::path::PathBuf::new();
     params_folder.push("./params");
@@ -288,7 +297,7 @@ fn bench_keccak() -> Result<(), Box<dyn std::error::Error>> {
             fs_results,
             "{},{},{},{},{},{},{},{:?},{},{:?}\n",
             bench_params.degree,
-            bench_params.num_advice + bench_params.num_xor * 3 + bench_params.num_xorandn * 4,
+            bench_params.num_advice * 3 + bench_params.num_xor * 3 + bench_params.num_xorandn * 4,
             bench_params.num_advice,
             bench_params.num_xor,
             bench_params.num_xorandn,
