@@ -1305,11 +1305,8 @@ mod tests {
                             (ctx.cells_to_lookup.len() + (1 << self.k) - 1) >> self.k
                         );
                         println!("optimal fixed #: {}", (stats.1 + (1 << self.k) - 1) >> self.k);
-                        let total_keccak = ctx.advice_rows["keccak"].iter().sum::<usize>();
-                        println!(
-                            "optimal keccak #: {}",
-                            (total_keccak + (1 << self.k) - 1) >> self.k
-                        );
+                        let total_rot = ctx.advice_rows["keccak_rot"].iter().sum::<usize>();
+                        println!("optimal rot #: {}", (total_rot + (1 << self.k) - 1) >> self.k);
                         let total_xor = ctx.advice_rows["keccak_xor"].iter().sum::<usize>();
                         println!("optimal xor #: {}", (total_xor + (1 << self.k) - 1) >> self.k,);
                         let total_xorandn = ctx.advice_rows["keccak_xorandn"].iter().sum::<usize>();
@@ -1616,7 +1613,7 @@ mod tests {
                 bench_params.num_basic_chips * 2
                     + bench_params.num_advice[0]
                     + bench_params.num_lookup_advice[0]
-                    + bench_params.keccak_num_advice
+                    + bench_params.keccak_num_advice * 3
                     + bench_params.keccak_num_xor * 3
                     + bench_params.keccak_num_xorandn * 4,
                 bench_params.num_basic_chips,
