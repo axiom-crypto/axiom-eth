@@ -32,7 +32,7 @@ use halo2_proofs::{
 };
 use hex::FromHex;
 use itertools::Itertools;
-use num_bigint::BigUint;
+use num_bigint::{BigUint};
 use num_traits::{cast::ToPrimitive, Num};
 use rand_core::block;
 use serde::{Deserialize, Serialize};
@@ -124,6 +124,21 @@ pub struct EthAccountStorageTrace<F: Field> {
     storage_trace: EthStorageTrace<F>,
 }
 
+#[derive(Clone, Debug)]
+pub struct EthBlockAccountStorageTrace<F: Field> {
+    block_trace: EthBlockHeaderTrace<F>,
+    acct_trace: EthAccountTrace<F>,
+    storage_trace: EthStorageTrace<F>,
+}
+
+#[derive(Clone, Debug)]
+pub struct EthBlockAccountStorageMinTrace<F: Field> {
+    block_trace: EthBlockHeaderTrace<F>,
+    acct_trace: EthAccountTrace<F>,
+    storage_trace: EthStorageTrace<F>,
+    pub_hash: AssignedValue<F>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Strategy {
     Simple,
@@ -172,10 +187,10 @@ impl<F: Field> EthChip<F> {
         range: &RangeConfig<F>,
         block_header: &Vec<AssignedValue<F>>,
     ) -> Result<EthBlockHeaderTrace<F>, Error> {
-        let max_len = 1 + 2 + 520 + GOERLI_EXTRA_DATA_RLP_MAX_BYTES;
+        let max_len = 1 + 2 + 520 + MAINNET_EXTRA_DATA_RLP_MAX_BYTES;
         let max_field_lens = vec![
             33, 33, 21, 33, 33, 33, 259, 8, 4, 5, 5, 5, 
-            GOERLI_EXTRA_DATA_RLP_MAX_BYTES, 33, 9, 6,
+            MAINNET_EXTRA_DATA_RLP_MAX_BYTES, 33, 9, 6,
         ];
         let num_fields = 16;
         let rlp_array_trace = self.mpt.rlp.decompose_rlp_array(
@@ -266,7 +281,7 @@ impl<F: Field> EthChip<F> {
             ctx, vec![Constant(F::from(20))], vec![], vec![], vec![],
         )?;
 	let (hash_bytes, hash_hexes) = self.mpt.keccak.keccak_bytes_var_len(
-	    ctx, range, addr, len[0].clone(), 20, 20
+	    ctx, range, addr, len[0].clone(), 19, 20
 	)?;
 	
 	for (hash, key) in hash_bytes.iter().zip(proof.key_bytes.clone()) {
@@ -318,7 +333,7 @@ impl<F: Field> EthChip<F> {
             ctx, vec![Constant(F::from(32))], vec![], vec![], vec![],
         )?;
 	let (hash_bytes, hash_hexes) = self.mpt.keccak.keccak_bytes_var_len(
-	    ctx, range, slot, len[0].clone(), 32, 32
+	    ctx, range, slot, len[0].clone(), 31, 32
 	)?;
 	
 	for (hash, key) in hash_bytes.iter().zip(proof.key_bytes.clone()) {
@@ -337,7 +352,7 @@ impl<F: Field> EthChip<F> {
 
 	// parse slot value
 	let field_trace = self.mpt.rlp.decompose_rlp_field(
-	    ctx, range, &proof.value_bytes, 33
+	    ctx, range, &proof.value_bytes, 32
 	)?;
 	
 	let storage_trace = EthStorageTrace {
@@ -367,7 +382,157 @@ impl<F: Field> EthChip<F> {
 
 	let trace = EthAccountStorageTrace { acct_trace, storage_trace };
 	Ok(trace)
-    }    
+    }
+    
+    pub fn parse_block_acct_storage_pf(
+	&self,
+	ctx: &mut Context<'_, F>,
+	range: &RangeConfig<F>,
+	block_hash: &AssignedBytes<F>,
+	addr: &AssignedBytes<F>,
+	slot: &AssignedBytes<F>,
+	block_header: &AssignedBytes<F>,
+	acct_pf: &MPTFixedKeyProof<F>,
+	storage_pf: &MPTFixedKeyProof<F>,
+    ) -> Result<EthBlockAccountStorageTrace<F>, Error> {
+	// extract state root from block
+	let block_trace = self.decompose_eth_block_header(
+	    ctx, range, block_header
+	)?;
+	let state_root = &block_trace.state_root.val;
+
+	// check block_hash
+	for (hash, b_hash) in block_hash.iter().zip(block_trace.block_hash.val.clone()) {
+	    ctx.region.constrain_equal(hash.cell(), b_hash.cell())?;
+	}
+	
+	// verify account + storage proof
+	let acct_storage_trace = self.parse_acct_storage_pf(
+	    ctx, range, addr, state_root, slot, acct_pf, storage_pf
+	)?;
+	let trace = EthBlockAccountStorageTrace {
+	    block_trace,
+	    acct_trace: acct_storage_trace.acct_trace,
+	    storage_trace: acct_storage_trace.storage_trace,
+	};
+	Ok(trace)
+    }
+
+    pub fn uint_to_bytes_be(
+	&self,
+	ctx: &mut Context<'_, F>,
+	range: &RangeConfig<F>,
+	input: &AssignedValue<F>,
+	num_bytes: usize,
+    ) -> Result<Vec<AssignedValue<F>>, Error> {
+	let coeffs = (0..num_bytes).map(|idx| {
+	    Witness(input.value().map(|x| {
+		biguint_to_fe(&((fe_to_biguint(x) / BigUint::from(256u64).pow(u32::try_from(num_bytes - 1 - idx).unwrap())) % BigUint::from(256u64)))
+	    }))
+	}).collect();
+	let weights = (0..num_bytes).map(|idx| {
+	    Constant(biguint_to_fe(&BigUint::from(256u64).pow(u32::try_from(num_bytes - 1 - idx).unwrap())))
+	}).collect();
+	let (coeffs_assigned, _, val) = range.gate.inner_product(
+	    ctx, &coeffs, &weights
+	)?;
+
+	ctx.region.constrain_equal(input.cell(), val.cell())?;
+	for coeff in coeffs_assigned.clone().unwrap().iter() {
+	    self.mpt.keccak.byte_to_hex(ctx, range, coeff)?;
+	}
+	Ok(coeffs_assigned.unwrap())
+    }
+
+    pub fn bytes_be_to_uint(
+	&self,
+	ctx: &mut Context<'_, F>,
+	range: &RangeConfig<F>,
+	input: &AssignedBytes<F>,
+	num_bytes: usize,
+    ) -> Result<AssignedValue<F>, Error> {
+	let (_, _, val) = range.gate.inner_product(
+	    ctx,
+	    &input[..num_bytes].iter().map(|x| Existing(x)).collect(),
+	    &(0..num_bytes).map(|idx| {
+		Constant(biguint_to_fe(&BigUint::from(256u64).pow(u32::try_from(num_bytes - 1 - idx).unwrap())))
+	    }).collect()
+	)?;
+	Ok(val)
+    }
+    
+    // slot and block_hash are big-endian 16-byte
+    pub fn parse_block_acct_storage_pf_min(
+	&self,
+	ctx: &mut Context<'_, F>,
+	range: &RangeConfig<F>,
+	block_hash: &(AssignedValue<F>, AssignedValue<F>),
+	addr: &AssignedValue<F>,
+	slot: &(AssignedValue<F>, AssignedValue<F>),
+	block_header: &AssignedBytes<F>,
+	acct_pf: &MPTFixedKeyProof<F>,
+	storage_pf: &MPTFixedKeyProof<F>,
+    ) -> Result<EthBlockAccountStorageMinTrace<F>, Error> {
+	// extract state root from block
+	let block_trace = self.decompose_eth_block_header(
+	    ctx, range, block_header
+	)?;
+	let state_root = &block_trace.state_root.val;
+
+	// check block_hash	
+	let mut block_hash_bytes = self.uint_to_bytes_be(
+	    ctx, range, &block_hash.0, 16
+	)?;
+	let block_hash_bytes2 = self.uint_to_bytes_be(
+	    ctx, range, &block_hash.1, 16
+	)?;
+	block_hash_bytes.extend(block_hash_bytes2);
+	for (hash, b_hash) in block_hash_bytes.iter().zip(block_trace.block_hash.val.clone()) {
+	    ctx.region.constrain_equal(hash.cell(), b_hash.cell())?;
+	}
+
+	// verify account + storage proof
+	let addr_bytes = self.uint_to_bytes_be(
+	    ctx, range, addr, 20
+	)?;
+	let mut slot_bytes = self.uint_to_bytes_be(
+	    ctx, range, &slot.0, 16
+	)?;
+	let slot_bytes2 = self.uint_to_bytes_be(
+	    ctx, range, &slot.1, 16
+	)?;
+	slot_bytes.extend(slot_bytes2);
+	let acct_storage_trace = self.parse_acct_storage_pf(
+	    ctx, range, &addr_bytes, state_root, &slot_bytes, acct_pf, storage_pf
+	)?;
+
+	// blockHash || address || slot || blockNumber || slot value
+	// 32 + 20 + 32 + 4 + 32 = 120 bytes
+	let mut hash_inp = Vec::new();
+	hash_inp.extend(block_hash_bytes);
+	hash_inp.extend(addr_bytes);
+	hash_inp.extend(slot_bytes);
+	hash_inp.extend(block_trace.number.val.clone());
+	hash_inp.extend(acct_storage_trace.storage_trace.value_trace.val.clone());
+	
+	let len = range.gate.assign_region_smart(
+            ctx, vec![Constant(F::from(120))], vec![], vec![], vec![],
+        )?;
+	let (pub_hash_bytes, _) = self.mpt.keccak.keccak_bytes_var_len(
+	    ctx, range, &hash_inp, len[0].clone(), 119, 120
+	)?;
+	let pub_hash = self.bytes_be_to_uint(
+	    ctx, range, &pub_hash_bytes, 31
+	)?;
+	
+	let trace = EthBlockAccountStorageMinTrace {
+	    block_trace,
+	    acct_trace: acct_storage_trace.acct_trace,
+	    storage_trace: acct_storage_trace.storage_trace,
+	    pub_hash,
+	};
+	Ok(trace)
+    }   
 }
 
 pub fn limbs_be_to_u128<F: FieldExt>(
@@ -456,7 +621,7 @@ impl<F> Default for EthBlockHeaderHashCircuit<F> {
             let mut block_vec: Vec<Option<u8>> =
                 Vec::from_hex(block_str).unwrap().iter().map(|y| Some(*y)).collect();
             block_vec
-                .append(&mut vec![Some(0u8); GOERLI_BLOCK_HEADER_RLP_MAX_BYTES - block_vec.len()]);
+                .append(&mut vec![Some(0u8); MAINNET_BLOCK_HEADER_RLP_MAX_BYTES - block_vec.len()]);
             input_bytes.push(block_vec);
         }
 
@@ -697,297 +862,3 @@ impl<F: Field> Circuit<F> for EthBlockHeaderHashCircuit<F> {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use ark_std::{end_timer, start_timer};
-    use halo2_proofs::{
-        circuit::{AssignedCell, Layouter, SimpleFloorPlanner, Value},
-        dev::MockProver,
-        halo2curves::bn256::{Bn256, Fr, G1Affine, G2Affine},
-        plonk::*,
-        poly::commitment::ParamsProver,
-        poly::kzg::{
-            commitment::{KZGCommitmentScheme, ParamsKZG},
-            multiopen::{ProverGWC, ProverSHPLONK, VerifierGWC, VerifierSHPLONK},
-            strategy::SingleStrategy,
-        },
-        transcript::{
-            Blake2bRead, Blake2bWrite, Challenge255, TranscriptReadBuffer, TranscriptWriterBuffer,
-        },
-    };
-    use plonk_verifier::system::halo2::aggregation::gen_srs;
-    use std::marker::PhantomData;
-
-    #[derive(Clone, Debug, Default)]
-    pub struct EthBlockHeaderTestCircuit<F> {
-        pub inputs: Vec<Vec<Option<u8>>>,
-        pub _marker: PhantomData<F>,
-    }
-
-    impl<F: Field> Circuit<F> for EthBlockHeaderTestCircuit<F> {
-        type Config = EthChip<F>;
-        type FloorPlanner = SimpleFloorPlanner;
-
-        fn without_witnesses(&self) -> Self {
-            Self::default()
-        }
-
-        fn configure(meta: &mut ConstraintSystem<F>) -> Self::Config {
-            let params_str = fs::read_to_string("configs/block_header.config").unwrap();
-            let params: EthConfigParams =
-                serde_json::from_str(params_str.as_str()).unwrap();
-
-            EthChip::configure(meta, "gamma".to_string(), "rlc".to_string(), params)
-        }
-
-        fn synthesize(
-            &self,
-            config: Self::Config,
-            mut layouter: impl Layouter<F>,
-        ) -> Result<(), Error> {
-            let witness_time = start_timer!(|| "witness gen");
-            config.mpt.rlp.range.load_lookup_table(&mut layouter)?;
-            config.mpt.keccak.load_lookup_table(&mut layouter)?;
-            let gamma = layouter.get_challenge(config.mpt.rlp.rlc.gamma);
-            println!("gamma {:?}", gamma);
-
-            let using_simple_floor_planner = true;
-            let mut first_pass = true;
-            let mut phase = 0u8;
-            let mut block_header_trace = None;
-            layouter.assign_region(
-                || "Eth block test",
-                |region| {
-                    if using_simple_floor_planner && first_pass {
-                        first_pass = false;
-                        return Ok(());
-                    }
-                    phase = phase + 1u8;
-
-                    println!("phase {:?}", phase);
-                    let mut aux = Context::new(
-                        region,
-                        ContextParams {
-                            num_advice: vec![
-                                ("default".to_string(), config.mpt.rlp.range.gate.num_advice),
-                                ("rlc".to_string(), config.mpt.rlp.rlc.basic_chips.len()),
-                                ("keccak".to_string(), config.mpt.keccak.rotation.len()),
-                                ("keccak_xor".to_string(), config.mpt.keccak.xor_values.len() / 3),
-                                (
-                                    "keccak_xorandn".to_string(),
-                                    config.mpt.keccak.xorandn_values.len() / 4,
-                                ),
-                            ],
-                        },
-                    );
-                    let ctx = &mut aux;
-                    ctx.challenge.insert("gamma".to_string(), gamma);
-
-                    let mut inputs_assigned = Vec::with_capacity(self.inputs.len());
-                    for input in self.inputs.iter() {
-                        let input_assigned = config.mpt.rlp.range.gate.assign_region_smart(
-                            ctx,
-                            input
-                                .iter()
-                                .map(|x| {
-                                    Witness(
-                                        x.map(|v| Value::known(F::from(v as u64)))
-                                            .unwrap_or(Value::unknown()),
-                                    )
-                                })
-                                .collect(),
-                            vec![],
-                            vec![],
-                            vec![],
-                        )?;
-                        inputs_assigned.push(input_assigned);
-                    }
-
-                    block_header_trace = Some(
-                        config
-                            .decompose_eth_block_header_chain(
-                                ctx,
-                                &config.mpt.rlp.range,
-                                &inputs_assigned,
-                            )
-                            .unwrap(),
-                    );
-
-                    let stats = config.mpt.rlp.range.finalize(ctx)?;
-                    println!("stats (fixed rows, total fixed, lookups) {:?}", stats);
-                    println!(
-                        "ctx.rows rlc {:?}",
-                        ctx.advice_rows.get::<String>(&"rlc".to_string())
-                    );
-                    println!(
-                        "ctx.rows default {:?}",
-                        ctx.advice_rows.get::<String>(&"default".to_string())
-                    );
-                    println!("ctx.rows keccak_xor {:?}", ctx.advice_rows["keccak_xor"]);
-                    println!("ctx.rows keccak_xorandn {:?}", ctx.advice_rows["keccak_xorandn"]);
-                    println!(
-                        "ctx.advice_rows sums: {:#?}",
-                        ctx.advice_rows
-                            .iter()
-                            .map(|(key, val)| (key, val.iter().sum::<usize>()))
-                            .collect::<Vec<_>>()
-                    );
-                    #[cfg(feature = "display")]
-                    println!("{:#?}", ctx.op_count);
-
-                    Ok(())
-                },
-            )?;
-            end_timer!(witness_time);
-            Ok(())
-        }
-    }
-
-    #[test]
-    pub fn test_mock_one_eth_header() {
-        let config_str = std::fs::read_to_string("configs/block_header.config").unwrap();
-        let config: EthConfigParams = serde_json::from_str(config_str.as_str()).unwrap();
-        let k = config.degree;
-	
-//        let params_str = std::fs::read_to_string("configs/block_header.config").unwrap();
-//        let params: crate::keccak::KeccakCircuitParams =
-//            serde_json::from_str(params_str.as_str()).unwrap();
-//        let k = params.degree;
-        let input_hex = "f90201a0d7519abd494a823b2c9c28908eaf250fe4a6287d747f1cc53a5a193b6533a549a01dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347944675c7e5baafbffbca748158becba61ef3b0a263a025000d51f040ee5c473fed74eda9ace87d55a35187b11bcde6f5176025c395bfa0a5800a6de6d28d7425ff72714af2af769b9f8f9e1baf56fb42f793fbb40fde07a056e1062a3dc63791e8a8496837606b14062da70ee69178cea97d6eeb5047550cb9010000236420014dc00423903000840002280080282100004704018340c0241c20011211400426000f900001d8088000011006020002ce98bc00c0000020c9a02040000688040200348c3a0082b81402002814922008085d008008200802802c4000130000101703124801400400018008a6108002020420144011200070020bc0202681810804221304004800088600300000040463614a000e200201c00611c0008e800b014081608010a0218a0b410010082000428209080200f50260a00840006700100f40a000000400000448301008c4a00341040e343500800d06250020010215200c008018002c88350404000bc5000a8000210c00724a0d0a4010210a448083eee2468401c9c3808343107884633899e780a07980d8d1f15474c9185e4d1cef5f207167735009daad2eb6af6da37ffba213c28800000000000000008501e08469e600000000000000000000000000000000000000000000000000000000000000000000000000000000";
-        let input_bytes_pre: Vec<u8> = Vec::from_hex(input_hex).unwrap();
-        let input_bytes: Vec<Option<u8>> = input_bytes_pre.iter().map(|x| Some(*x)).collect();
-
-        let circuit =
-            EthBlockHeaderTestCircuit::<Fr> { inputs: vec![input_bytes], _marker: PhantomData };
-        let prover_try = MockProver::run(k, &circuit, vec![vec![]]);
-        let prover = prover_try.unwrap();
-        prover.assert_satisfied();
-        assert_eq!(prover.verify(), Ok(()));
-    }
-
-    #[test]
-    pub fn test_eth_block_header() -> Result<(), Box<dyn std::error::Error>> {
-        let config_str = std::fs::read_to_string("configs/block_header.config").unwrap();
-        let config: EthConfigParams = serde_json::from_str(config_str.as_str()).unwrap();
-        let k = config.degree;
-
-//        let params_str = std::fs::read_to_string("configs/block_header.config").unwrap();
-//        let params: crate::keccak::KeccakCircuitParams =
-//            serde_json::from_str(params_str.as_str()).unwrap();
-//        let k = params.degree;
-
-        let input_hex = "f90201a0d7519abd494a823b2c9c28908eaf250fe4a6287d747f1cc53a5a193b6533a549a01dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347944675c7e5baafbffbca748158becba61ef3b0a263a025000d51f040ee5c473fed74eda9ace87d55a35187b11bcde6f5176025c395bfa0a5800a6de6d28d7425ff72714af2af769b9f8f9e1baf56fb42f793fbb40fde07a056e1062a3dc63791e8a8496837606b14062da70ee69178cea97d6eeb5047550cb9010000236420014dc00423903000840002280080282100004704018340c0241c20011211400426000f900001d8088000011006020002ce98bc00c0000020c9a02040000688040200348c3a0082b81402002814922008085d008008200802802c4000130000101703124801400400018008a6108002020420144011200070020bc0202681810804221304004800088600300000040463614a000e200201c00611c0008e800b014081608010a0218a0b410010082000428209080200f50260a00840006700100f40a000000400000448301008c4a00341040e343500800d06250020010215200c008018002c88350404000bc5000a8000210c00724a0d0a4010210a448083eee2468401c9c3808343107884633899e780a07980d8d1f15474c9185e4d1cef5f207167735009daad2eb6af6da37ffba213c28800000000000000008501e08469e600000000000000000000000000000000000000000000000000000000000000000000000000000000";
-        let input_bytes_pre: Vec<u8> = Vec::from_hex(input_hex).unwrap();
-        let input_bytes: Vec<Vec<Option<u8>>> =
-            vec![input_bytes_pre.iter().map(|x| Some(*x)).collect()];
-        let input_nones: Vec<Vec<Option<u8>>> =
-            vec![input_bytes_pre.iter().map(|x| None).collect()];
-
-        let mut rng = rand::thread_rng();
-        let params = ParamsKZG::<Bn256>::setup(k, &mut rng);
-        let circuit = EthBlockHeaderTestCircuit::<Fr> { inputs: input_nones, _marker: PhantomData };
-
-        let vk_time = start_timer!(|| "vk gen");
-        let vk = keygen_vk(&params, &circuit)?;
-        end_timer!(vk_time);
-        let pk_time = start_timer!(|| "pk gen");
-        let pk = keygen_pk(&params, vk, &circuit)?;
-        end_timer!(pk_time);
-
-        let proof_circuit =
-            EthBlockHeaderTestCircuit::<Fr> { inputs: input_bytes, _marker: PhantomData };
-        let mut transcript = Blake2bWrite::<_, _, Challenge255<_>>::init(vec![]);
-        let pf_time = start_timer!(|| "proof gen");
-        create_proof::<
-            KZGCommitmentScheme<Bn256>,
-            ProverGWC<'_, Bn256>,
-            Challenge255<G1Affine>,
-            _,
-            Blake2bWrite<Vec<u8>, G1Affine, Challenge255<G1Affine>>,
-            EthBlockHeaderTestCircuit<Fr>,
-        >(&params, &pk, &[proof_circuit], &[&[]], rng, &mut transcript)?;
-        let proof = transcript.finalize();
-        end_timer!(pf_time);
-
-        let verifier_params = params.verifier_params();
-        let strategy = SingleStrategy::new(&params);
-        let mut transcript = Blake2bRead::<_, _, Challenge255<_>>::init(&proof[..]);
-        let verify_time = start_timer!(|| "verify");
-        assert!(verify_proof::<
-            KZGCommitmentScheme<Bn256>,
-            VerifierGWC<'_, Bn256>,
-            Challenge255<G1Affine>,
-            Blake2bRead<&[u8], G1Affine, Challenge255<G1Affine>>,
-            SingleStrategy<'_, Bn256>,
-        >(verifier_params, pk.get_vk(), strategy, &[&[]], &mut transcript)
-        .is_ok());
-        end_timer!(verify_time);
-
-        Ok(())
-    }
-
-    #[test]
-    pub fn test_mock_multi_eth_header() {
-        let config_str = std::fs::read_to_string("configs/block_header.config").unwrap();
-        let config: EthConfigParams = serde_json::from_str(config_str.as_str()).unwrap();
-        let k = config.degree;
-
-        let circuit = EthBlockHeaderHashCircuit::<Fr>::default();
-        let instances = circuit.instances();
-
-        let prover_try = MockProver::run(k, &circuit, instances);
-        let prover = prover_try.unwrap();
-        prover.assert_satisfied();
-    }
-
-    #[test]
-    pub fn test_multi_eth_header() -> Result<(), Box<dyn std::error::Error>> {
-        let config_str = std::fs::read_to_string("configs/block_header.config").unwrap();
-        let config: EthConfigParams = serde_json::from_str(config_str.as_str()).unwrap();
-        let k = config.degree;
-
-        let params = gen_srs(k);
-        let circuit = EthBlockHeaderHashCircuit::<Fr>::default();
-
-        let vk_time = start_timer!(|| "vk gen");
-        let vk = keygen_vk(&params, &circuit)?;
-        end_timer!(vk_time);
-        let pk_time = start_timer!(|| "pk gen");
-        let pk = keygen_pk(&params, vk, &circuit)?;
-        end_timer!(pk_time);
-
-        let proof_circuit = circuit.clone();
-        let instance = circuit.instances()[0].clone();
-        let mut transcript = Blake2bWrite::<_, _, Challenge255<_>>::init(vec![]);
-        let rng = rand::thread_rng();
-
-        let pf_time = start_timer!(|| "proof gen");
-        create_proof::<
-            KZGCommitmentScheme<Bn256>,
-            ProverGWC<'_, Bn256>,
-            Challenge255<G1Affine>,
-            _,
-            Blake2bWrite<Vec<u8>, G1Affine, Challenge255<G1Affine>>,
-            _,
-        >(&params, &pk, &[proof_circuit], &[&[&instance]], rng, &mut transcript)?;
-        let proof = transcript.finalize();
-        end_timer!(pf_time);
-
-        let verifier_params = params.verifier_params();
-        let strategy = SingleStrategy::new(&params);
-        let mut transcript = Blake2bRead::<_, _, Challenge255<_>>::init(&proof[..]);
-        let verify_time = start_timer!(|| "verify");
-        assert!(verify_proof::<
-            KZGCommitmentScheme<Bn256>,
-            VerifierGWC<'_, Bn256>,
-            Challenge255<G1Affine>,
-            Blake2bRead<&[u8], G1Affine, Challenge255<G1Affine>>,
-            SingleStrategy<'_, Bn256>,
-        >(verifier_params, pk.get_vk(), strategy, &[&[&instance]], &mut transcript)
-        .is_ok());
-        end_timer!(verify_time);
-
-        Ok(())
-    }
-}

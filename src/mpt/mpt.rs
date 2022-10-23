@@ -684,7 +684,6 @@ impl<F: Field> MPTChip<F> {
         let mut exts_parsed = Vec::with_capacity(max_depth - 1);
         let mut branches_parsed = Vec::with_capacity(max_depth - 1);
         for idx in 0..max_depth - 1 {
-            // println!("idx {:?}", idx);
             let mut ext_in = Vec::with_capacity(ext_max_byte_len);
             for byte_idx in 0..node_max_byte_len {
                 let ext_byte = range.gate.select(

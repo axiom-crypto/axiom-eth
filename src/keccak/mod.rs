@@ -323,6 +323,7 @@ impl<F: FieldExt> KeccakChip<F> {
             range.gate.assign_region_smart(ctx, append, vec![], vec![], vec![])?;
         out_vec_pre.append(&mut new_out_vec_pre);
 
+	// TODO: What if in_min_len = in_max_len?
         // check equality matches up to len
         let mut is_equal_vec = Vec::new();
         for idx in in_min_len..in_max_len {
