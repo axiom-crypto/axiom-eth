@@ -1,6 +1,6 @@
 use crate::rlp::rlc::log2;
 use halo2_base::{
-    gates::{range::RangeConfig, GateInstructions, RangeInstructions},
+    gates::{flex_gate::FlexGateConfig, range::RangeConfig, GateInstructions, RangeInstructions},
     utils::{fe_to_biguint, value_to_option},
     AssignedValue, Context,
     QuantumCell::{self, Constant, Existing, Witness},
@@ -15,6 +15,7 @@ use hex::encode;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use num_bigint::BigUint;
+use plonk_verifier::system::halo2::LIMBS;
 use serde::{Deserialize, Serialize};
 use std::{marker::PhantomData, rc::Rc};
 
@@ -96,51 +97,35 @@ const LIMBS_PER_LANE: usize = 16; // 64 / LOOKUP_BITS
 
 #[derive(Clone, Debug)]
 pub struct RotationChip<F: FieldExt> {
-    pub value: Column<Advice>,
-    pub q_is_bit: Selector,
-    pub q_decompose: Selector,
+    pub values: Vec<Column<Advice>>,
+    pub q_rol: Vec<Selector>,
     _marker: PhantomData<F>,
 }
 
 impl<F: FieldExt> RotationChip<F> {
     pub fn configure(meta: &mut ConstraintSystem<F>) -> Self {
-        let value = meta.advice_column();
-        meta.enable_equality(value);
-        let config = Self {
-            value,
-            q_is_bit: meta.selector(),
-            q_decompose: meta.selector(),
-            _marker: PhantomData,
-        };
-        meta.create_gate("is bit", |meta| {
-            let q = meta.query_selector(config.q_is_bit);
-            let a = meta.query_advice(config.value, Rotation::cur());
-            vec![q * (a.clone() * a.clone() - a)]
-        });
-        meta.create_gate("decompose", |meta| {
-            let q = meta.query_selector(config.q_decompose);
-            let a = (0..LOOKUP_BITS)
-                .map(|i| meta.query_advice(config.value, Rotation(i as i32)))
-                .collect_vec();
-            let out = meta.query_advice(config.value, Rotation(LOOKUP_BITS as i32));
-            vec![
-                q * (a.iter().enumerate().fold(Expression::Constant(F::zero()), |acc, (i, b)| {
-                    acc + Expression::Constant(F::from(1u64 << i)) * b.clone()
-                }) - out),
-            ]
-        });
-        config
+        let values = (0..3)
+            .map(|_| {
+                let a = meta.advice_column();
+                meta.enable_equality(a);
+                a
+            })
+            .collect_vec();
+        let q_rol = (0..LOOKUP_BITS - 1).map(|_| meta.complex_selector()).collect_vec();
+
+        Self { values, q_rol, _marker: PhantomData }
     }
 }
 
 #[derive(Clone, Debug)]
 pub struct KeccakChip<F: FieldExt> {
+    pub gate: FlexGateConfig<F>,
     pub rotation: Vec<RotationChip<F>>,
     pub xor_values: Vec<Column<Advice>>,
     pub xorandn_values: Vec<Column<Advice>>,
     pub constants: Vec<Column<Fixed>>,
-    pub lookups: [TableColumn; 5], // a, b, c, a ^ b, a ^ (!b & c)
-    context_id: Rc<String>,
+    pub lookups: [TableColumn; 5 + LOOKUP_BITS - 1], // a, b, c, a ^ b, a ^ (!b & c), rol(a,b,1), .. rol(a,b,LOOKUP_BITS -1)
+    rot_id: Rc<String>,
     xor_id: Rc<String>,
     xorandn_id: Rc<String>,
     rate_in_limbs: usize,
@@ -152,17 +137,18 @@ pub struct KeccakChip<F: FieldExt> {
 impl<F: FieldExt> KeccakChip<F> {
     pub fn configure(
         meta: &mut ConstraintSystem<F>,
+        gate: FlexGateConfig<F>,
         context_id: String,
         rate: usize,
         // delimited_suffix: u8,
         output_bit_len: usize,
-        num_advice: usize,
+        num_rol: usize,
         num_xor: usize,
         num_xorandn: usize,
         num_fixed: usize,
     ) -> Self {
         assert_eq!(rate % LOOKUP_BITS, 0);
-        let rotation = (0..num_advice).map(|_| RotationChip::configure(meta)).collect_vec();
+        let rotation = (0..num_rol).map(|_| RotationChip::configure(meta)).collect_vec();
         let xor_values = (0..3 * num_xor)
             .map(|_| {
                 let a = meta.advice_column();
@@ -184,8 +170,11 @@ impl<F: FieldExt> KeccakChip<F> {
                 f
             })
             .collect_vec();
-        let lookups: [TableColumn; 5] =
-            (0..5).map(|_| meta.lookup_table_column()).collect_vec().try_into().unwrap();
+        let lookups: [TableColumn; 5 + LOOKUP_BITS - 1] = (0..5 + LOOKUP_BITS - 1)
+            .map(|_| meta.lookup_table_column())
+            .collect_vec()
+            .try_into()
+            .unwrap();
 
         for i in 0..num_xor {
             meta.lookup("a ^ b = c", |meta| {
@@ -204,14 +193,30 @@ impl<F: FieldExt> KeccakChip<F> {
                 vec![(a, lookups[0]), (b, lookups[1]), (c, lookups[2]), (d, lookups[4])]
             });
         }
+        for i in 0..num_rol {
+            for r in 0..LOOKUP_BITS - 1 {
+                meta.lookup("rotate (a,b) left to get c = a'", |meta| {
+                    let q = meta.query_selector(rotation[i].q_rol[r]);
+                    let a = meta.query_advice(rotation[i].values[0], Rotation::cur());
+                    let b = meta.query_advice(rotation[i].values[1], Rotation::cur());
+                    let c = meta.query_advice(rotation[i].values[2], Rotation::cur());
+                    vec![
+                        (q.clone() * a, lookups[0]),
+                        (q.clone() * b, lookups[1]),
+                        (q * c, lookups[5 + r]),
+                    ]
+                });
+            }
+        }
 
         Self {
+            gate,
             rotation,
             xor_values,
             xorandn_values,
             constants,
             lookups,
-            context_id: Rc::new(context_id.clone()),
+            rot_id: Rc::new(format!("{}_rot", context_id)),
             xor_id: Rc::new(format!("{}_xor", context_id)),
             xorandn_id: Rc::new(format!("{}_xorandn", context_id)),
             rate_in_limbs: rate / LOOKUP_BITS,
@@ -259,6 +264,19 @@ impl<F: FieldExt> KeccakChip<F> {
                                 offset,
                                 || Value::known(F::from(a ^ (!b & c))),
                             )?;
+                            let mask = (1 << LOOKUP_BITS) - 1;
+                            for r in 0..LOOKUP_BITS - 1 {
+                                table.assign_cell(
+                                    || format!("rol(a,b,{})", r + 1),
+                                    self.lookups[5 + r],
+                                    offset,
+                                    || {
+                                        Value::known(F::from(
+                                            ((a << (r + 1)) | (b >> (LOOKUP_BITS - r - 1))) & mask,
+                                        ))
+                                    },
+                                )?;
+                            }
                             offset += 1;
                         }
                     }
@@ -268,14 +286,8 @@ impl<F: FieldExt> KeccakChip<F> {
         )
     }
 
-    fn load_zero(&self, ctx: &mut Context<'_, F>) -> AssignedValue<F> {
-        if let Some(zero) = &ctx.zero_cell {
-            zero.clone()
-        } else {
-            let zero = self.load_const(ctx, F::zero());
-            ctx.zero_cell = Some(zero.clone());
-            zero
-        }
+    pub fn load_const(&self, ctx: &mut Context<'_, F>, c: F) -> AssignedValue<F> {
+        self.gate.assign_region(ctx, vec![Constant(c)], vec![], None).unwrap().pop().unwrap()
     }
 
     pub fn pad_bytes(
@@ -471,15 +483,11 @@ impl<F: FieldExt> KeccakChip<F> {
         Ok(out_vec)
     }
 
-    fn load_const(&self, ctx: &mut Context<'_, F>, c: F) -> AssignedValue<F> {
-        self.assign_region(ctx, vec![Constant(c)], None, vec![], vec![]).unwrap()[0].clone()
-    }
-
     fn min_rot_index_in(&self, ctx: &Context<'_, F>, phase: u8) -> usize {
-        let advice_rows = ctx.advice_rows_get(&self.context_id);
+        let advice_rows = ctx.advice_rows_get(&self.rot_id);
 
         (0..advice_rows.len())
-            .filter(|&i| self.rotation[i].value.column_type().phase() == phase)
+            .filter(|&i| (0..3).all(|j| self.rotation[i].values[j].column_type().phase() == phase))
             .min_by(|i, j| advice_rows[*i].cmp(&advice_rows[*j]))
             .expect(format!("Should exist advice column in phase {}", phase).as_str())
     }
@@ -504,66 +512,6 @@ impl<F: FieldExt> KeccakChip<F> {
             })
             .min_by(|i, j| advice_rows[*i].cmp(&advice_rows[*j]))
             .expect(format!("Should exist advice column in phase {}", phase).as_str())
-    }
-
-    pub fn assign_region(
-        &self,
-        ctx: &mut Context<'_, F>,
-        inputs: Vec<QuantumCell<F>>,
-        column_index: Option<usize>,
-        is_bit_offsets: Vec<isize>,
-        decompose_offsets: Vec<isize>,
-    ) -> Result<Vec<AssignedValue<F>>, Error> {
-        self.assign_region_in(
-            ctx,
-            inputs,
-            column_index,
-            is_bit_offsets,
-            decompose_offsets,
-            ctx.current_phase(),
-        )
-    }
-
-    // same as `assign_region` except you can specify the `phase` to assign in
-    pub fn assign_region_in(
-        &self,
-        ctx: &mut Context<'_, F>,
-        inputs: Vec<QuantumCell<F>>, // there are no gates!
-        column_index: Option<usize>,
-        is_bit_offsets: Vec<isize>,
-        decompose_offsets: Vec<isize>,
-        phase: u8,
-    ) -> Result<Vec<AssignedValue<F>>, Error> {
-        let gate_index =
-            if let Some(id) = column_index { id } else { self.min_rot_index_in(ctx, phase) };
-        let row_offset = ctx.advice_rows_get(&self.context_id)[gate_index];
-
-        let mut assignments = Vec::with_capacity(inputs.len());
-        for (i, input) in inputs.iter().enumerate() {
-            let assigned = ctx.assign_cell(
-                input.clone(),
-                self.rotation[gate_index].value,
-                &self.context_id,
-                gate_index,
-                row_offset + i,
-                phase,
-            )?;
-            assignments.push(assigned);
-        }
-        for &i in &is_bit_offsets {
-            self.rotation[gate_index]
-                .q_is_bit
-                .enable(&mut ctx.region, (row_offset as isize + i) as usize)?;
-        }
-        for &i in &decompose_offsets {
-            self.rotation[gate_index]
-                .q_decompose
-                .enable(&mut ctx.region, (row_offset as isize + i) as usize)?;
-        }
-
-        ctx.advice_rows_get_mut(&self.context_id)[gate_index] += inputs.len();
-
-        Ok(assignments)
     }
 
     // maps 16 * x + y to (x, y)
@@ -732,46 +680,61 @@ impl<F: FieldExt> KeccakChip<F> {
         Ok(output)
     }
 
-    pub fn num_to_bits(
+    /// Given nibbles a, b rotates the bits of big endian concat a||b to the left by `r` bits and returns the bits in window for previous a
+    pub fn rol_nibble(
         &self,
         ctx: &mut Context<'_, F>,
         a: &AssignedValue<F>,
-    ) -> Result<Vec<AssignedValue<F>>, Error> {
-        let mut bits = (0..LOOKUP_BITS)
-            .map(|i| a.value().map(|a| F::from((a.get_lower_32() as u64 >> i) & 1)))
-            .map(|v| Witness(v))
-            .collect_vec();
-        bits.push(Existing(a));
-        let mut output = self.assign_region(
-            ctx,
-            bits,
-            None,
-            (0..LOOKUP_BITS).map(|i| i as isize).collect_vec(),
-            vec![0],
-        )?;
-        output.pop();
-        Ok(output)
-    }
-
-    pub fn bits_to_num(
-        &self,
-        ctx: &mut Context<'_, F>,
-        bits: &[AssignedValue<F>],
+        b: &AssignedValue<F>,
+        r: usize,
     ) -> Result<AssignedValue<F>, Error> {
-        assert_eq!(bits.len(), LOOKUP_BITS);
-        let v = (0..LOOKUP_BITS).fold(Value::known(F::zero()), |acc, i| {
-            acc + bits[i].value().map(|x| F::from(1u64 << i) * x)
+        assert!(r < LOOKUP_BITS);
+        if r == 0 {
+            return Ok(a.clone());
+        }
+        let mask = (1 << LOOKUP_BITS) - 1;
+        let c_val = a.value().zip(b.value()).map(|(a, b)| {
+            let a = a.get_lower_32();
+            let b = b.get_lower_32();
+            F::from((((a << r) | (b >> (LOOKUP_BITS - r))) & mask) as u64)
         });
-        let mut assignments = self
-            .assign_region(
-                ctx,
-                bits.iter().map(|a| Existing(a)).chain([Witness(v)]).collect_vec(),
-                None,
-                vec![],
-                vec![0],
-            )
-            .unwrap();
-        Ok(assignments.pop().unwrap())
+
+        #[cfg(feature = "display")]
+        {
+            let count = ctx.op_count.entry("rot".to_string()).or_insert(0);
+            *count += 1;
+        }
+        let phase = ctx.current_phase();
+        let id = self.min_rot_index_in(ctx, phase);
+        let row_offset = ctx.advice_rows_get(&self.rot_id)[id];
+
+        self.rotation[id].q_rol[r - 1].enable(&mut ctx.region, row_offset)?;
+        ctx.assign_cell(
+            Existing(a),
+            self.rotation[id].values[0],
+            &self.rot_id,
+            3 * id,
+            row_offset,
+            phase,
+        )?;
+        ctx.assign_cell(
+            Existing(b),
+            self.rotation[id].values[1],
+            &self.rot_id,
+            3 * id + 1,
+            row_offset,
+            phase,
+        )?;
+        let output = ctx.assign_cell(
+            Witness(c_val),
+            self.rotation[id].values[2],
+            &self.rot_id,
+            3 * id + 2,
+            row_offset,
+            phase,
+        )?;
+        ctx.advice_rows_get_mut(&self.rot_id)[id] += 1;
+        Ok(output)
     }
 
     pub fn rol64(
@@ -781,28 +744,20 @@ impl<F: FieldExt> KeccakChip<F> {
         n: usize,
     ) -> Result<Vec<AssignedValue<F>>, Error> {
         assert_eq!(a.len(), LIMBS_PER_LANE);
-        let n = n % 64;
-        if n % LOOKUP_BITS == 0 {
-            let n = n / LOOKUP_BITS;
+        let m = n / LOOKUP_BITS;
+        let r = n % LOOKUP_BITS;
+
+        if r == 0 {
             return Ok((0..LIMBS_PER_LANE)
-                .map(|i| a[(i + LIMBS_PER_LANE - n) % LIMBS_PER_LANE].clone())
+                .map(|i| a[(i + LIMBS_PER_LANE - m) % LIMBS_PER_LANE].clone())
                 .collect_vec());
         }
-        let mut bits = Vec::with_capacity(64);
-        for limb in a.iter() {
-            bits.append(&mut self.num_to_bits(ctx, limb).unwrap());
-        }
-        let mut output = Vec::with_capacity(LIMBS_PER_LANE);
-        for i in (0..64).step_by(LOOKUP_BITS) {
-            output.push(
-                self.bits_to_num(
-                    ctx,
-                    &(i..i + LOOKUP_BITS).map(|z| bits[(z + 64 - n) % 64].clone()).collect_vec(),
-                )
-                .unwrap(),
-            );
-        }
-        Ok(output)
+        (0..LIMBS_PER_LANE)
+            .map(|i| {
+                let i = (i + LIMBS_PER_LANE - m) % LIMBS_PER_LANE;
+                self.rol_nibble(ctx, &a[i], &a[(i + LIMBS_PER_LANE - 1) % LIMBS_PER_LANE], r)
+            })
+            .collect()
     }
 
     pub fn keccak_f1600_round(
@@ -956,7 +911,7 @@ impl<F: FieldExt> KeccakChip<F> {
                     [
                         &input_limbs[0..block_size],
                         &(block_size..25 * LIMBS_PER_LANE)
-                            .map(|_| self.load_zero(ctx))
+                            .map(|_| self.gate.load_zero(ctx).unwrap())
                             .collect_vec(),
                     ]
                     .concat(),
@@ -987,10 +942,12 @@ impl<F: FieldExt> KeccakChip<F> {
         ctx: &mut Context<'_, F>,
         mut input_limbs: Vec<AssignedValue<F>>,
     ) -> Result<Vec<AssignedValue<F>>, Error> {
+        let one = self.load_const(ctx, F::one());
+        let zero = self.gate.load_zero(ctx)?;
         // === Padding ===
-        input_limbs.push(self.load_const(ctx, F::one()));
+        input_limbs.push(one.clone());
         while input_limbs.len() % self.rate_in_limbs != self.rate_in_limbs - 1 {
-            input_limbs.push(self.load_const(ctx, F::zero()));
+            input_limbs.push(zero.clone());
         }
         input_limbs.push(self.load_const(ctx, F::from(1 << (LOOKUP_BITS - 1))));
 
@@ -1052,7 +1009,7 @@ impl<F: FieldExt> KeccakChip<F> {
                     [
                         &input_hexs[0..block_size],
                         &(block_size..25 * LIMBS_PER_LANE)
-                            .map(|_| self.load_zero(ctx))
+                            .map(|_| self.gate.load_zero(ctx).unwrap())
                             .collect_vec(),
                     ]
                     .concat(),

@@ -61,9 +61,10 @@ pub struct MerkleChip<F: FieldExt> {
 impl<F: FieldExt> MerkleChip<F> {
     pub fn configure(meta: &mut ConstraintSystem<F>, params: KeccakCircuitParams) -> Self {
         let gate =
-            FlexGateConfig::configure(meta, GateStrategy::Vertical, &[1], 1, "default".to_string());
+            FlexGateConfig::configure(meta, GateStrategy::Vertical, &[1], 1, "keccak".to_string());
         let keccak = KeccakChip::configure(
             meta,
+            gate.clone(),
             "keccak".to_string(),
             1088,
             256,
@@ -241,8 +242,8 @@ impl<F: FieldExt> Circuit<F> for MerkleRootCircuit<F> {
                     region,
                     ContextParams {
                         num_advice: vec![
-                            ("default".to_string(), config.gate.num_advice),
-                            ("keccak".to_string(), config.keccak.rotation.len()),
+                            ("keccak".to_string(), config.gate.num_advice),
+                            ("keccak_rot".to_string(), config.keccak.rotation.len()),
                             ("keccak_xor".to_string(), config.keccak.xor_values.len() / 3),
                             ("keccak_xorandn".to_string(), config.keccak.xorandn_values.len() / 4),
                         ],

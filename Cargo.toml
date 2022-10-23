@@ -5,6 +5,7 @@ edition = "2021"
 
 [[bin]]
 name = "gen_srs"
+required-features = ["plonk_verifier"]
 
 [[bin]]
 name = "bootstrap_history"
