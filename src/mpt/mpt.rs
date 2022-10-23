@@ -820,15 +820,16 @@ impl<F: Field> MPTChip<F> {
             proof.value_byte_len.clone(),
             value_max_byte_len,
         )?;
+
         ctx.region
             .constrain_equal(value_rlc_trace.rlc_val.cell(), leaf_parsed.value.rlc_val.cell())?;
 
         /* Check hash chains
-         * hash(node_types[0]) = root_hash
-         * hash(node_types[idx + 1]) is in node_types[idx]
-         * hash(leaf_bytes) is in node_types[depth - 2]
+         * hash(node[0]) = root_hash
+         * hash(node[idx + 1]) is in node[idx]
+         * hash(leaf_bytes) is in node[depth - 2]
          */
-        let mut matches = Vec::new();
+        let mut matches = Vec::with_capacity(max_depth - 1);
         for idx in 0..max_depth {
             let mut node_hash_rlc = leaf_parsed.leaf_hash.rlc_val.clone();
             if idx < max_depth - 1 {
@@ -895,7 +896,7 @@ impl<F: Field> MPTChip<F> {
                     &Existing(&proof.node_types[idx - 1]),
                 )?;
                 /*println!(
-                    "idx {:?} match_hash_rlc {:?} node_hash_rlc {:?}",
+                    "idx {:?} match_hash_rlc {:#?} node_hash_rlc {:#?}",
                     idx,
                     match_hash_rlc.value(),
                     node_hash_rlc.value()
@@ -905,48 +906,45 @@ impl<F: Field> MPTChip<F> {
                     &Existing(&match_hash_rlc),
                     &Existing(&node_hash_rlc),
                 )?;
+                // dbg!(&is_match);
                 matches.push(is_match);
             }
         }
-
-        let mut match_sums = Vec::new();
+        let mut match_sums = Vec::with_capacity(3 * (max_depth - 2) + 1);
         let mut running_sum = Value::known(F::zero());
-        let mut gate_offsets = Vec::new();
-        for idx in 0..max_depth - 1 {
+        let mut gate_offsets = Vec::with_capacity(max_depth - 2);
+        for (idx, match_) in matches.iter().enumerate() {
             if idx == 0 {
-                match_sums.push(Existing(&matches[idx]));
-                running_sum = running_sum + matches[idx].value();
+                match_sums.push(Existing(match_));
+                running_sum = running_sum + match_.value();
             } else {
-                match_sums.push(Existing(&matches[idx]));
+                match_sums.push(Existing(match_));
                 match_sums.push(Constant(F::one()));
-                running_sum = running_sum + matches[idx].value();
+                running_sum = running_sum + match_.value();
                 match_sums.push(Witness(running_sum));
             }
             if idx < max_depth - 2 {
                 gate_offsets.push(3 * idx);
             }
         }
+
         let assigned =
             self.rlp.rlc.assign_region_rlc(ctx, &match_sums, vec![], gate_offsets, None)?;
         // println!("assigned sums {:?}", assigned);
+
+        let depth_minus_one =
+            self.rlp.range.gate.sub(ctx, &Existing(&proof.depth), &Constant(F::one()))?;
         let match_cnt = self.rlp.rlc.select_from_idx(
             ctx,
-            &(0..max_depth - 1).map(|idx| Existing(&assigned[3 * idx])).collect(),
-            &Existing(&proof.depth),
+            &[Constant(F::zero())]
+                .into_iter()
+                .chain((0..max_depth - 1).map(|idx| Existing(&assigned[3 * idx])).into_iter())
+                .collect(),
+            &Existing(&depth_minus_one),
         )?;
-        // println!("match_cnt {:?} depth {:?}", match_cnt, proof.depth);
-        let check_equal = self.rlp.rlc.assign_region_rlc(
-            ctx,
-            &vec![
-                Constant(F::one()),
-                Constant(F::one()),
-                Existing(&match_cnt),
-                Existing(&proof.depth),
-            ],
-            vec![],
-            vec![0],
-            None,
-        )?;
+        // println!("match_cnt {:#?} depth {:#?}", match_cnt, proof.depth);
+        ctx.region.constrain_equal(match_cnt.cell(), depth_minus_one.cell())?;
+
         Ok(())
     }
 

@@ -532,10 +532,8 @@ impl<F: Field> RlcChip<F> {
         ctx: &mut Context<'_, F>,
         a: &QuantumCell<F>,
     ) -> Result<AssignedValue<F>, Error> {
-        let is_zero =
-            a.value().map(|x| if (*x).is_zero_vartime() { F::from(1) } else { F::from(0) });
-        let inv =
-            a.value().map(|x| if *x == F::from(0) { F::from(1) } else { (*x).invert().unwrap() });
+        let is_zero = a.value().map(|x| if x.is_zero_vartime() { F::one() } else { F::zero() });
+        let inv = a.value().map(|x| if *x == F::zero() { F::one() } else { x.invert().unwrap() });
 
         let cells = vec![
             Witness(is_zero),
@@ -549,7 +547,7 @@ impl<F: Field> RlcChip<F> {
         ];
         let assigned = self.assign_region_rlc(ctx, &cells, vec![], vec![0, 4], None)?;
         ctx.region.constrain_equal(assigned[0].cell(), assigned[6].cell())?;
-        Ok(assigned[0].clone())
+        Ok(assigned.into_iter().nth(0).unwrap())
     }
 
     pub fn is_equal(
@@ -559,7 +557,7 @@ impl<F: Field> RlcChip<F> {
         b: &QuantumCell<F>,
     ) -> Result<AssignedValue<F>, Error> {
         let cells = vec![
-            Witness(a.value().zip(b.value()).map(|(av, bv)| *av - *bv)),
+            Witness(a.value().cloned() - b.value()),
             Constant(F::from(1)),
             b.clone(),
             a.clone(),

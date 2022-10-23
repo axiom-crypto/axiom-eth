@@ -290,16 +290,14 @@ impl<F: FieldExt> KeccakChip<F> {
         let out_len = ((in_max_len + 1 + 135) / 136) * 136;
 
         // first pad with 0s and a single 1 postfix
-        let mut out_vec_pre = Vec::new();
-        for idx in 0..in_min_len {
-            out_vec_pre.push(inputs[idx].clone());
-        }
+        let mut out_vec_pre = Vec::with_capacity(in_max_len);
+        out_vec_pre.extend_from_slice(&inputs[..in_min_len]);
         let mut append: Vec<QuantumCell<F>> = (in_min_len..in_max_len)
             .map(|idx| {
                 inputs[idx].value().zip(len.value()).map(|(v, l)| {
-                    if idx < usize::try_from(fe_to_biguint(l)).unwrap() {
+                    if idx < l.get_lower_32() as usize {
                         *v
-                    } else if idx == usize::try_from(fe_to_biguint(l)).unwrap() {
+                    } else if idx == l.get_lower_32() as usize {
                         F::from(1u64)
                     } else {
                         F::zero()
@@ -309,21 +307,19 @@ impl<F: FieldExt> KeccakChip<F> {
             .map(|v| Witness(v))
             .collect();
         let next = Witness(len.value().map(|l| {
-            if in_max_len == usize::try_from(fe_to_biguint(l)).unwrap() {
+            if in_max_len == l.get_lower_32() as usize {
                 F::from(1u64)
             } else {
                 F::zero()
             }
         }));
         append.push(next);
-        for _ in in_max_len + 1..out_len {
-            append.push(Constant(F::zero()));
-        }
+        append.extend((in_max_len + 1..out_len).map(|_| Constant(F::zero())).into_iter());
         let mut new_out_vec_pre =
             range.gate.assign_region_smart(ctx, append, vec![], vec![], vec![])?;
         out_vec_pre.append(&mut new_out_vec_pre);
 
-	// TODO: What if in_min_len = in_max_len?
+        // TODO: What if in_min_len = in_max_len?
         // check equality matches up to len
         let mut is_equal_vec = Vec::new();
         for idx in in_min_len..in_max_len {
@@ -439,36 +435,35 @@ impl<F: FieldExt> KeccakChip<F> {
         // | byte idx | len - 1 | len | .. | 136 * N - 1 | ...  | 136 * max - 1|
         // | byte     | XX      | 1   |    | 128          | 0... | 128           |
         // if len == 136 * max - 1, then have 129 instead of 1
-        let mut out_vec = Vec::new();
-        for idx in 0..in_min_len {
-            out_vec.push(out_vec_pre[idx].clone());
-        }
-        for idx in in_min_len..out_len {
-            if (idx + 1) % 136 != 0 {
-                out_vec.push(out_vec_pre[idx].clone());
-            } else {
+        let mut out_vec = out_vec_pre;
+        assert_eq!(out_vec.len(), out_len);
+        for (idx, out) in out_vec.iter_mut().enumerate().skip(in_min_len) {
+            if (idx + 1) % 136 == 0 {
                 let is_in_pad_range = range.is_less_than_safe(ctx, &len, idx + 1, log2(out_len))?;
-                let out_val = range.gate.assign_region_smart(
-                    ctx,
-                    vec![
-                        Existing(&out_vec_pre[idx]),
-                        Existing(&is_in_pad_range),
-                        Constant(F::from(128u64)),
-                        Witness(
-                            out_vec_pre[idx]
-                                .value()
-                                .zip(is_in_pad_range.value())
-                                .map(|(v, p)| *v + (*p) * F::from(128)),
-                        ),
-                    ],
-                    vec![0],
-                    vec![],
-                    vec![],
-                )?;
-                out_vec.push(out_val[3].clone());
+                let out_val = range
+                    .gate
+                    .assign_region_smart(
+                        ctx,
+                        vec![
+                            Existing(out),
+                            Existing(&is_in_pad_range),
+                            Constant(F::from(128u64)),
+                            Witness(
+                                out.value()
+                                    .zip(is_in_pad_range.value())
+                                    .map(|(v, p)| *v + (*p) * F::from(128)),
+                            ),
+                        ],
+                        vec![0],
+                        vec![],
+                        vec![],
+                    )?
+                    .into_iter()
+                    .nth(3)
+                    .unwrap();
+                *out = out_val;
             }
         }
-        assert_eq!(out_len, out_vec.len());
         Ok(out_vec)
     }
 
@@ -996,6 +991,30 @@ impl<F: FieldExt> KeccakChip<F> {
         input_limbs.push(self.load_const(ctx, F::from(1 << (LOOKUP_BITS - 1))));
 
         self.keccak_fully_padded(ctx, &input_limbs)
+    }
+
+    pub fn keccak_bytes_fixed_len(
+        &self,
+        ctx: &mut Context<'_, F>,
+        range: &RangeConfig<F>,
+        input: &[AssignedValue<F>],
+    ) -> Result<Vec<AssignedValue<F>>, Error> {
+        let mut nibbles = Vec::with_capacity(2 * input.len());
+        for byte in input.iter() {
+            let (hex1, hex2) = self.byte_to_hex(ctx, range, byte)?;
+            nibbles.extend([hex2, hex1].into_iter());
+        }
+        let hash_nibbles = self.keccak(ctx, nibbles)?;
+        let mut hash_bytes = Vec::with_capacity(32);
+        for idx in (0..64).step_by(2) {
+            let (_, _, byte) = range.gate.inner_product(
+                ctx,
+                &hash_nibbles[idx..idx + 2].iter().map(|a| Existing(a)).collect(),
+                &[1, 16].map(|a| Constant(F::from(a))).into_iter().collect(),
+            )?;
+            hash_bytes.push(byte);
+        }
+        Ok(hash_bytes)
     }
 
     /// Return (output in bytes, output in hexes)

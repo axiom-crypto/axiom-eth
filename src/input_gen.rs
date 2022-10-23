@@ -177,8 +177,7 @@ pub fn get_block_acct_storage_input(
         } else {
             let dummy_branch_str =
 		"f1808080808080808080808080808080a0000000000000000000000000000000000000000000000000000000000000000080";
-            let mut node2: Vec<u8> =
-                Vec::from_hex(dummy_branch_str).unwrap().iter().map(|x| *x).collect();
+            let node2 = Vec::from_hex(dummy_branch_str).unwrap().into_iter();
             node.extend(node2);
             node.extend(vec![0; acct_pf_max_branch_bytes - node.len()]);
             acct_pf_node_types.push(0);
@@ -264,8 +263,7 @@ pub fn get_block_acct_storage_input(
         } else {
             let dummy_branch_str =
 		"f1808080808080808080808080808080a0000000000000000000000000000000000000000000000000000000000000000080";
-            let mut node2: Vec<u8> =
-                Vec::from_hex(dummy_branch_str).unwrap().iter().map(|x| *x).collect();
+            let node2 = Vec::from_hex(dummy_branch_str).unwrap().into_iter();
             node.extend(node2);
             node.extend(vec![0; storage_pf_max_branch_bytes - node.len()]);
             storage_pf_node_types.push(0);
@@ -292,47 +290,44 @@ pub fn get_block_acct_storage_input(
         slot: (Some(slot_out.0.clone()), Some(slot_out.1.clone())),
         block_header,
 
-        acct_pf_key_bytes: acct_pf_key_bytes.iter().map(|x| Some(*x)).collect(),
-        acct_pf_value_bytes: acct_pf_value_bytes.iter().map(|x| Some(*x)).collect(),
+        acct_pf_key_bytes: acct_pf_key_bytes.into_iter().map(Some).collect(),
+        acct_pf_value_bytes: acct_pf_value_bytes.into_iter().map(Some).collect(),
         acct_pf_value_byte_len: Some(BigUint::from(acct_pf_value_byte_len)),
-        acct_pf_root_hash_bytes: acct_pf_root_hash_bytes.iter().map(|x| Some(*x)).collect(),
-        acct_pf_leaf_bytes: acct_pf_leaf_bytes.iter().map(|x| Some(*x)).collect(),
-        acct_pf_nodes: acct_pf_nodes.iter().map(|x| x.iter().map(|y| Some(*y)).collect()).collect(),
-        acct_pf_node_types: acct_pf_node_types.iter().map(|x| Some(*x)).collect(),
+        acct_pf_root_hash_bytes: acct_pf_root_hash_bytes.into_iter().map(Some).collect(),
+        acct_pf_leaf_bytes: acct_pf_leaf_bytes.into_iter().map(Some).collect(),
+        acct_pf_nodes: acct_pf_nodes
+            .into_iter()
+            .map(|x| x.into_iter().map(Some).collect())
+            .collect(),
+        acct_pf_node_types: acct_pf_node_types.into_iter().map(Some).collect(),
         acct_pf_depth: Some(BigUint::from(acct_pf_depth)),
         acct_pf_key_frag_hexs: acct_pf_key_frag_hexs
-            .iter()
-            .map(|x| x.iter().map(|y| Some(*y)).collect())
+            .into_iter()
+            .map(|x| x.into_iter().map(Some).collect())
             .collect(),
-        acct_pf_key_frag_is_odd: acct_pf_key_frag_is_odd.iter().map(|x| Some(*x)).collect(),
-        acct_pf_key_frag_byte_len: acct_pf_key_frag_byte_len
-            .iter()
-            .map(|x| Some(x.clone()))
-            .collect(),
+        acct_pf_key_frag_is_odd: acct_pf_key_frag_is_odd.into_iter().map(Some).collect(),
+        acct_pf_key_frag_byte_len: acct_pf_key_frag_byte_len.into_iter().map(Some).collect(),
         acct_pf_key_byte_len,
         acct_pf_value_max_byte_len,
         acct_pf_max_depth,
 
-        storage_pf_key_bytes: storage_pf_key_bytes.iter().map(|x| Some(*x)).collect(),
-        storage_pf_value_bytes: storage_pf_value_bytes.iter().map(|x| Some(*x)).collect(),
+        storage_pf_key_bytes: storage_pf_key_bytes.into_iter().map(Some).collect(),
+        storage_pf_value_bytes: storage_pf_value_bytes.into_iter().map(Some).collect(),
         storage_pf_value_byte_len: Some(BigUint::from(storage_pf_value_byte_len)),
-        storage_pf_root_hash_bytes: storage_pf_root_hash_bytes.iter().map(|x| Some(*x)).collect(),
-        storage_pf_leaf_bytes: storage_pf_leaf_bytes.iter().map(|x| Some(*x)).collect(),
+        storage_pf_root_hash_bytes: storage_pf_root_hash_bytes.into_iter().map(Some).collect(),
+        storage_pf_leaf_bytes: storage_pf_leaf_bytes.into_iter().map(Some).collect(),
         storage_pf_nodes: storage_pf_nodes
-            .iter()
-            .map(|x| x.iter().map(|y| Some(*y)).collect())
+            .into_iter()
+            .map(|x| x.into_iter().map(Some).collect())
             .collect(),
-        storage_pf_node_types: storage_pf_node_types.iter().map(|x| Some(*x)).collect(),
+        storage_pf_node_types: storage_pf_node_types.into_iter().map(Some).collect(),
         storage_pf_depth: Some(BigUint::from(storage_pf_depth)),
         storage_pf_key_frag_hexs: storage_pf_key_frag_hexs
-            .iter()
-            .map(|x| x.iter().map(|y| Some(*y)).collect())
+            .into_iter()
+            .map(|x| x.into_iter().map(Some).collect())
             .collect(),
-        storage_pf_key_frag_is_odd: storage_pf_key_frag_is_odd.iter().map(|x| Some(*x)).collect(),
-        storage_pf_key_frag_byte_len: storage_pf_key_frag_byte_len
-            .iter()
-            .map(|x| Some(x.clone()))
-            .collect(),
+        storage_pf_key_frag_is_odd: storage_pf_key_frag_is_odd.into_iter().map(Some).collect(),
+        storage_pf_key_frag_byte_len: storage_pf_key_frag_byte_len.into_iter().map(Some).collect(),
         storage_pf_key_byte_len,
         storage_pf_value_max_byte_len,
         storage_pf_max_depth,

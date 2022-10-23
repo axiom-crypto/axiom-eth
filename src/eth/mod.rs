@@ -176,26 +176,19 @@ impl<F: Field> EthChip<F> {
         state_root: &AssignedBytes<F>,
         addr: &AssignedBytes<F>,
         proof: &MPTFixedKeyProof<F>,
-    ) -> Result<EthAccountTrace<F>, Error> {
+    ) -> Result<() /*EthAccountTrace<F>*/, Error> {
         assert_eq!(32, proof.key_byte_len);
 
         // check key is keccak(addr)
-        let len = range.gate.assign_region_smart(
-            ctx,
-            vec![Constant(F::from(20))],
-            vec![],
-            vec![],
-            vec![],
-        )?;
-        let (hash_bytes, hash_hexes) =
-            self.mpt.keccak.keccak_bytes_var_len(ctx, range, addr, len[0].clone(), 19, 20)?;
+        assert_eq!(addr.len(), 20);
+        let hash_bytes = self.mpt.keccak.keccak_bytes_fixed_len(ctx, range, addr)?;
 
-        for (hash, key) in hash_bytes.iter().zip(proof.key_bytes.clone()) {
+        for (hash, key) in hash_bytes.iter().zip(proof.key_bytes.iter()) {
             ctx.region.constrain_equal(hash.cell(), key.cell())?;
         }
 
         // check MPT root is state root
-        for (pf_root, root) in proof.root_hash_bytes.iter().zip(state_root.clone()) {
+        for (pf_root, root) in proof.root_hash_bytes.iter().zip(state_root.iter()) {
             ctx.region.constrain_equal(pf_root.cell(), root.cell())?;
         }
 
@@ -203,6 +196,7 @@ impl<F: Field> EthChip<F> {
         // keccak(addr) => RLP([nonce, balance, storage_root, code_hash])
         self.mpt.parse_mpt_inclusion_fixed_key(ctx, range, proof, 32, 114, proof.max_depth)?;
 
+        /*
         // parse value
         let array_trace = self.mpt.rlp.decompose_rlp_array(
             ctx,
@@ -212,14 +206,14 @@ impl<F: Field> EthChip<F> {
             114,
             4,
         )?;
-
         let eth_account_trace = EthAccountTrace {
             nonce_trace: array_trace.field_traces[0].clone(),
             balance_trace: array_trace.field_traces[1].clone(),
             storage_root_trace: array_trace.field_traces[2].clone(),
             code_hash_trace: array_trace.field_traces[3].clone(),
         };
-        Ok(eth_account_trace)
+        Ok(eth_account_trace)*/
+        Ok(())
     }
 
     pub fn parse_storage_pf(
@@ -240,7 +234,7 @@ impl<F: Field> EthChip<F> {
             vec![],
             vec![],
         )?;
-        let (hash_bytes, hash_hexes) =
+        let (hash_bytes, _) =
             self.mpt.keccak.keccak_bytes_var_len(ctx, range, slot, len[0].clone(), 31, 32)?;
 
         for (hash, key) in hash_bytes.iter().zip(proof.key_bytes.clone()) {
@@ -271,16 +265,17 @@ impl<F: Field> EthChip<F> {
         slot: &AssignedBytes<F>,
         acct_pf: &MPTFixedKeyProof<F>,
         storage_pf: &MPTFixedKeyProof<F>,
-    ) -> Result<EthAccountStorageTrace<F>, Error> {
+    ) -> Result<() /*EthAccountStorageTrace<F>*/, Error> {
         let acct_trace = self.parse_acct_pf(ctx, range, state_root, addr, acct_pf)?;
-        let storage_root = &acct_trace.storage_root_trace.val;
+        /*let storage_root = &acct_trace.storage_root_trace.val;
 
         let storage_trace = self.parse_storage_pf(ctx, range, storage_root, slot, storage_pf)?;
-
         let trace = EthAccountStorageTrace { acct_trace, storage_trace };
-        Ok(trace)
+        Ok(trace)*/
+        Ok(())
     }
 
+    /*
     pub fn parse_block_acct_storage_pf(
         &self,
         ctx: &mut Context<'_, F>,
@@ -310,7 +305,7 @@ impl<F: Field> EthChip<F> {
             storage_trace: acct_storage_trace.storage_trace,
         };
         Ok(trace)
-    }
+    } */
 
     pub fn uint_to_bytes_be(
         &self,
@@ -373,13 +368,13 @@ impl<F: Field> EthChip<F> {
         &self,
         ctx: &mut Context<'_, F>,
         range: &RangeConfig<F>,
-        block_hash: &(AssignedValue<F>, AssignedValue<F>),
-        addr: &AssignedValue<F>,
-        slot: &(AssignedValue<F>, AssignedValue<F>),
+        block_hash: &(AssignedValue<F>, AssignedValue<F>), // H256 as (u128, u128)
+        addr: &AssignedValue<F>,                           // U160
+        slot: &(AssignedValue<F>, AssignedValue<F>),       // H256 as (u128, u128)
         block_header: &AssignedBytes<F>,
         acct_pf: &MPTFixedKeyProof<F>,
         storage_pf: &MPTFixedKeyProof<F>,
-    ) -> Result<EthBlockAccountStorageMinTrace<F>, Error> {
+    ) -> Result<() /*EthBlockAccountStorageMinTrace<F>*/, Error> {
         // extract state root from block
         let block_trace = self.decompose_eth_block_header(ctx, range, block_header)?;
         let state_root = &block_trace.state_root.val;
@@ -407,6 +402,7 @@ impl<F: Field> EthChip<F> {
             storage_pf,
         )?;
 
+        /*
         // blockHash || address || slot || blockNumber || slot value
         // 32 + 20 + 32 + 4 + 32 = 120 bytes
         let mut hash_inp = Vec::new();
@@ -439,7 +435,8 @@ impl<F: Field> EthChip<F> {
             storage_trace: acct_storage_trace.storage_trace,
             pub_hash,
         };
-        Ok(trace)
+        Ok(trace) */
+        Ok(())
     }
 }
 
