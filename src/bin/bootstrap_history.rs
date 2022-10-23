@@ -1,6 +1,6 @@
 use ark_std::{end_timer, start_timer};
 use clap::Parser;
-use halo2_mpt::eth::eth::aggregation::{self, FULL_DEPTH};
+use halo2_mpt::eth::aggregation::{self, FULL_DEPTH};
 
 #[derive(Parser, Debug)]
 struct Cli {

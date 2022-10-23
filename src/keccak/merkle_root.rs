@@ -3,7 +3,7 @@ use std::{
     io::{Read, Write},
 };
 
-use crate::eth::eth::hexes_to_u128;
+use crate::eth::block_header::hexes_to_u128;
 
 use super::{KeccakChip, KeccakCircuitParams};
 use halo2_base::{

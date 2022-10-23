@@ -37,7 +37,7 @@ use sha3::{Digest, Keccak256};
 use std::{cmp::max, io::Write, marker::PhantomData};
 
 use crate::{
-    eth::eth::{EthConfigParams, Strategy},
+    eth::{EthConfigParams, Strategy},
     keccak::{print_bytes, KeccakChip},
     rlp::rlc::{log2, RlcFixedTrace, RlcTrace},
     rlp::rlp::{max_rlp_len_len, RlpArrayChip, RlpArrayTrace},
@@ -1027,8 +1027,7 @@ mod tests {
 
         fn configure(meta: &mut ConstraintSystem<F>) -> Self::Config {
             let params_str = fs::read_to_string("configs/mpt_circuit.config").unwrap();
-            let params: EthConfigParams =
-                serde_json::from_str(params_str.as_str()).unwrap();
+            let params: EthConfigParams = serde_json::from_str(params_str.as_str()).unwrap();
 
             MPTChip::configure(meta, "gamma".to_string(), "rlc".to_string(), params)
         }

@@ -396,7 +396,7 @@ impl<F: Field> RlcChip<F> {
                     rlc_val,
                     rlc_len: len,
                     rlc_max: rlc_cells[rlc_cells.len() - 1].clone(),
-		    val: input.clone(),
+                    val: input.clone(),
                     max_len,
                 }
             } else {
@@ -404,7 +404,7 @@ impl<F: Field> RlcChip<F> {
                     rlc_val: rlc_val.clone(),
                     rlc_len: len,
                     rlc_max: rlc_val.clone(),
-		    val: input.clone(),
+                    val: input.clone(),
                     max_len,
                 }
             }
@@ -443,10 +443,10 @@ impl<F: Field> RlcChip<F> {
         }
 
         let rlc_trace = RlcFixedTrace {
-	    rlc_val: rlc_cells[rlc_cells.len() - 1].clone(),
-	    val: input.clone(),
-	    len
-	};
+            rlc_val: rlc_cells[rlc_cells.len() - 1].clone(),
+            val: input.clone(),
+            len,
+        };
         Ok(rlc_trace)
     }
 
@@ -482,14 +482,18 @@ impl<F: Field> RlcChip<F> {
         a: &QuantumCell<F>,
         b: &QuantumCell<F>,
     ) -> Result<(), Error> {
-        self.assign_region_rlc(
-            ctx,
-            &vec![a.clone(), Constant(F::zero()), Constant(F::zero()), b.clone()],
-            vec![],
-            vec![0],
-            None,
-        )?;
-        Ok(())
+        if let (&Existing(a), &Existing(b)) = (a, b) {
+            ctx.region.constrain_equal(a.cell(), b.cell())
+        } else {
+            self.assign_region_rlc(
+                ctx,
+                &vec![a.clone(), Constant(F::zero()), Constant(F::zero()), b.clone()],
+                vec![],
+                vec![0],
+                None,
+            )?;
+            Ok(())
+        }
     }
 
     // returns a * sel + b * (1 - sel)
