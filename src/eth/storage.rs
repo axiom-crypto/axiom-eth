@@ -34,6 +34,7 @@ use itertools::Itertools;
 use num_bigint::BigUint;
 use num_traits::{cast::ToPrimitive, Num};
 use plonk_verifier::system::halo2::aggregation::gen_srs;
+use plonk_verifier::system::halo2::aggregation::TargetCircuit;
 use rand_core::block;
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
@@ -594,6 +595,13 @@ impl<F: Field> Circuit<F> for EthSingleAcctStorageProof<F> {
     }
 }
 
+impl TargetCircuit for EthSingleAcctStorageProof<Fr> {
+    const N_PROOFS: usize = 1;
+    const NAME: &'static str = "storage_1";
+
+    type Circuit = Self;
+}
+
 #[cfg(feature = "input_gen")]
 #[cfg(test)]
 mod tests {
@@ -808,14 +816,19 @@ mod tests {
     pub fn evm_one_eth_block_acct_storage() {
         #[cfg(feature = "evm")]
         use crate::eth::aggregation::evm::evm_verify;
-        use crate::eth::aggregation::evm::{
-            gen_aggregation_evm_verifier, gen_evm_verifier, gen_proof,
+        use crate::eth::aggregation::{
+            evm::{gen_aggregation_evm_verifier, gen_evm_verifier, gen_proof},
+            load_aggregation_circuit_degree,
         };
-        use plonk_verifier::system::halo2::{aggregation::gen_pk, transcript::evm::EvmTranscript};
+        use plonk_verifier::system::halo2::{
+            aggregation::{create_snark_shplonk, gen_pk, AggregationCircuit},
+            transcript::evm::EvmTranscript,
+        };
 
-        let file = std::fs::File::open("configs/storage_1_for_evm.config").unwrap();
+        let file = std::fs::File::open("configs/storage_1.config").unwrap();
         let config: EthConfigParams = serde_json::from_reader(file).unwrap();
         let k = config.degree;
+
         let provider_url = match NETWORK {
             Network::Mainnet => MAINNET_PROVIDER_URL,
             Network::Goerli => GOERLI_PROVIDER_URL,
@@ -839,25 +852,41 @@ mod tests {
 
         let mut circuit: EthSingleAcctStorageProof<Fr> = input.into();
         circuit.k = k as usize;
+        let instances = circuit.instances();
 
         let params = gen_srs(k);
-        let pk = gen_pk(&params, &circuit, "storage_1");
+        let snark = create_snark_shplonk::<EthSingleAcctStorageProof<Fr>>(
+            &params,
+            vec![circuit],
+            vec![instances],
+            None,
+        );
+        let snarks = vec![snark];
 
-        let deployment_code = gen_evm_verifier(&params, pk.get_vk(), vec![1]);
-        fs::write(
-            format!("./data/storage_1_{}_bytecode.dat", k).as_str(),
-            hex::encode(&deployment_code),
-        )
-        .unwrap();
+        std::env::set_var("VERIFY_CONFIG", "./configs/verify_for_evm.config");
+        let k = load_aggregation_circuit_degree();
+        let params = gen_srs(k);
+        let agg_circuit = AggregationCircuit::new(&params, snarks, true);
+        let pk = gen_pk(&params, &agg_circuit, "storage_agg_circuit");
 
+        let deployment_code = gen_aggregation_evm_verifier(
+            &params,
+            pk.get_vk(),
+            agg_circuit.num_instance(),
+            AggregationCircuit::accumulator_indices(),
+        );
+        fs::write("./data/storage_verifier_bytecode.dat", hex::encode(&deployment_code)).unwrap();
+
+        let proof_time = start_timer!(|| "create agg_circuit proof");
         let proof = gen_proof::<
             _,
             _,
             EvmTranscript<G1Affine, _, _, _>,
             EvmTranscript<G1Affine, _, _, _>,
-        >(&params, &pk, circuit.clone(), circuit.instances());
+        >(&params, &pk, agg_circuit.clone(), agg_circuit.instances());
+        end_timer!(proof_time);
 
         #[cfg(feature = "evm")]
-        evm_verify(deployment_code, circuit.instances(), proof);
+        evm_verify(deployment_code, agg_circuit.instances(), proof);
     }
 }
