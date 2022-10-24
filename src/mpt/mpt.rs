@@ -199,7 +199,7 @@ impl<F: Field> MPTChip<F> {
             "keccak".to_string(),
             1088,
             256,
-            params.keccak_num_advice,
+            params.keccak_num_rot,
             params.keccak_num_xor,
             params.keccak_num_xorandn,
             0, // keccak should just use the fixed columns of rlp.range
@@ -1616,14 +1616,14 @@ mod tests {
                 bench_params.num_basic_chips * 2
                     + bench_params.num_advice[0]
                     + bench_params.num_lookup_advice[0]
-                    + bench_params.keccak_num_advice * 3
+                    + bench_params.keccak_num_rot * 3
                     + bench_params.keccak_num_xor * 3
                     + bench_params.keccak_num_xorandn * 4,
                 bench_params.num_basic_chips,
                 bench_params.num_advice[0],
                 bench_params.num_lookup_advice[0],
                 bench_params.num_fixed,
-                bench_params.keccak_num_advice,
+                bench_params.keccak_num_rot,
                 bench_params.keccak_num_xor,
                 bench_params.keccak_num_xorandn,
                 proof_time.time.elapsed(),

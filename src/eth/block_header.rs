@@ -202,7 +202,7 @@ impl<F: Field> EthBlockHeaderChip<F> {
             "keccak".to_string(),
             1088,
             256,
-            params.keccak_num_advice,
+            params.keccak_num_rot,
             params.keccak_num_xor,
             params.keccak_num_xorandn,
             0, // keccak should just use the fixed columns of RLP chip

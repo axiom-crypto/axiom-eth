@@ -5,7 +5,7 @@ use halo2_base::{
         range::{RangeConfig, RangeStrategy, RangeStrategy::Vertical},
         GateInstructions, RangeInstructions,
     },
-    utils::{biguint_to_fe, fe_to_biguint},
+    utils::{biguint_to_fe, fe_to_biguint, value_to_option},
     AssignedValue, Context, ContextParams, QuantumCell,
     QuantumCell::{Constant, Existing, Witness},
 };
@@ -51,6 +51,7 @@ use crate::{
 #[cfg(feature = "aggregation")]
 pub mod aggregation;
 pub mod block_header;
+pub mod storage;
 
 use block_header::{bytes_be_to_u128, decompose_eth_block_header, EthBlockHeaderTrace};
 
@@ -77,7 +78,7 @@ pub struct EthConfigParams {
     pub num_fixed: usize,
     pub lookup_bits: usize,
 
-    pub keccak_num_advice: usize,
+    pub keccak_num_rot: usize,
     pub keccak_num_xor: usize,
     pub keccak_num_xorandn: usize,
 }
@@ -92,7 +93,7 @@ pub struct EthAccountTrace<F: Field> {
 
 #[derive(Clone, Debug)]
 pub struct EthStorageTrace<F: Field> {
-    value_trace: RlcTrace<F>,
+    value: AssignedBytes<F>,
 }
 
 #[derive(Clone, Debug)]
@@ -240,9 +241,11 @@ impl<F: Field> EthChip<F> {
         self.mpt.parse_mpt_inclusion_fixed_key(ctx, range, proof, 32, 33, proof.max_depth)?;
 
         // parse slot value
-        let field_trace = self.mpt.rlp.decompose_rlp_field(ctx, range, &proof.value_bytes, 32)?;
+        let slot_value =
+            self.mpt.rlp.decompose_rlp_field_get_value(ctx, range, &proof.value_bytes, 32)?;
+        assert_eq!(slot_value.len(), 32);
 
-        let storage_trace = EthStorageTrace { value_trace: field_trace.field_trace };
+        let storage_trace = EthStorageTrace { value: slot_value };
         Ok(storage_trace)
     }
 
@@ -302,24 +305,49 @@ impl<F: Field> EthChip<F> {
         input: &AssignedValue<F>,
         num_bytes: usize,
     ) -> Result<Vec<AssignedValue<F>>, Error> {
+        let mask = BigUint::from(255u64);
         let coeffs = (0..num_bytes)
             .map(|idx| {
                 Witness(input.value().map(|x| {
-                    biguint_to_fe(
-                        &((fe_to_biguint(x)
-                            / BigUint::from(256u64)
-                                .pow(u32::try_from(num_bytes - 1 - idx).unwrap()))
-                            % BigUint::from(256u64)),
+                    F::from(
+                        ((fe_to_biguint(x) >> (8 * (num_bytes - 1 - idx))) & &mask)
+                            .to_u64()
+                            .unwrap(),
                     )
                 }))
             })
             .collect();
         let weights = (0..num_bytes)
-            .map(|idx| {
-                Constant(biguint_to_fe(
-                    &BigUint::from(256u64).pow(u32::try_from(num_bytes - 1 - idx).unwrap()),
-                ))
-            })
+            .map(|idx| Constant(biguint_to_fe(&(BigUint::from(1u64) << (8 * idx)))))
+            .rev()
+            .collect();
+        let (coeffs_assigned, _, val) = range.gate.inner_product(ctx, &coeffs, &weights)?;
+
+        ctx.region.constrain_equal(input.cell(), val.cell())?;
+        for coeff in coeffs_assigned.clone().unwrap().iter() {
+            self.mpt.keccak.byte_to_hex(ctx, range, coeff)?;
+        }
+        Ok(coeffs_assigned.unwrap())
+    }
+
+    pub fn uint_to_bytes_le(
+        &self,
+        ctx: &mut Context<'_, F>,
+        range: &RangeConfig<F>,
+        input: &AssignedValue<F>,
+        num_bytes: usize,
+    ) -> Result<Vec<AssignedValue<F>>, Error> {
+        let mask = BigUint::from(255u64);
+        let coeffs =
+            (0..num_bytes)
+                .map(|idx| {
+                    Witness(input.value().map(|x| {
+                        F::from(((fe_to_biguint(x) >> (8 * idx)) & &mask).to_u64().unwrap())
+                    }))
+                })
+                .collect();
+        let weights = (0..num_bytes)
+            .map(|idx| Constant(biguint_to_fe(&(BigUint::from(1u64) << (8 * idx)))))
             .collect();
         let (coeffs_assigned, _, val) = range.gate.inner_product(ctx, &coeffs, &weights)?;
 
@@ -394,10 +422,18 @@ impl<F: Field> EthChip<F> {
         hash_inp.extend(addr_bytes);
         hash_inp.extend(slot_bytes);
         hash_inp.extend(block_trace.number.val.clone());
-        hash_inp.extend(acct_storage_trace.storage_trace.value_trace.val.clone());
+        hash_inp.extend(acct_storage_trace.storage_trace.value.iter().cloned());
         assert_eq!(hash_inp.len(), 120);
+        /*for byte in hash_inp.iter() {
+            print!("{:02x}", value_to_option(byte.value()).unwrap().get_lower_32());
+        }
+        println!("");*/
 
         let pub_hash_bytes = self.mpt.keccak.keccak_bytes_fixed_len(ctx, range, &hash_inp)?;
+        /*for byte in pub_hash_bytes.iter() {
+            print!("{:02x}", value_to_option(byte.value()).unwrap().get_lower_32());
+        }
+        println!("");*/
         let pub_hash = self.bytes_be_to_uint(ctx, range, &pub_hash_bytes, 31)?;
 
         let trace = EthBlockAccountStorageMinTrace {
@@ -409,7 +445,3 @@ impl<F: Field> EthChip<F> {
         Ok(trace)
     }
 }
-
-#[cfg(feature = "input_gen")]
-#[cfg(test)]
-pub mod tests;

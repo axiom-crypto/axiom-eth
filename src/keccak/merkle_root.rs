@@ -69,7 +69,7 @@ impl<F: FieldExt> MerkleChip<F> {
             "keccak".to_string(),
             1088,
             256,
-            params.num_advice,
+            params.num_rot,
             params.num_xor,
             params.num_xorandn,
             0,

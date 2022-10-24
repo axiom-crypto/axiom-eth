@@ -397,6 +397,76 @@ impl<F: Field> RlpArrayChip<F> {
         Ok(parsed_rlp_field)
     }
 
+    pub fn decompose_rlp_field_get_value(
+        &self,
+        ctx: &mut Context<'_, F>,
+        range: &RangeConfig<F>,
+        rlp_field: &Vec<AssignedValue<F>>,
+        max_field_len: usize,
+    ) -> Result<Vec<AssignedValue<F>>, Error> {
+        let max_len_len = max_rlp_len_len(max_field_len);
+        let max_rlp_field_len = 1 + max_len_len + max_field_len;
+        assert_eq!(rlp_field.len(), max_rlp_field_len);
+
+        let cache_bits = log2(max_rlp_field_len);
+        let rlc_cache = self.rlc.load_rlc_cache(ctx, cache_bits)?;
+
+        let prefix = rlp_field[0].clone();
+        let prefix_parsed = self.parse_rlp_field_prefix(ctx, range, &prefix)?;
+
+        let len_len = prefix_parsed.len_len.clone();
+        range.check_less_than_safe(ctx, &len_len, max_len_len + 1, log2(max_len_len + 1))?;
+        let (len_cells, len_byte_val) =
+            self.parse_rlp_len(ctx, range, &rlp_field, &len_len, max_len_len)?;
+
+        let field_len = range.gate.select(
+            ctx,
+            &Existing(&len_byte_val),
+            &Existing(&prefix_parsed.next_len),
+            &Existing(&prefix_parsed.is_big),
+        )?;
+        range.check_less_than_safe(ctx, &field_len, max_field_len + 1, log2(max_field_len + 1))?;
+
+        let field_cells = witness_subarray_from_idxs(
+            ctx,
+            range,
+            &rlp_field,
+            Value::known(F::from(1)) + len_len.value().copied(),
+            Value::known(F::from(1)) + len_len.value().copied() + field_len.value().copied(),
+            max_field_len,
+        )?;
+
+        let (_, _, rlp_len) = range.gate.inner_product(
+            ctx,
+            &vec![Constant(F::from(1)), Constant(F::from(1)), Constant(F::from(1))],
+            &vec![Constant(F::from(1)), Existing(&len_len), Existing(&field_len)],
+        )?;
+
+        let len_rlc = self.rlc.compute_rlc(ctx, range, &len_cells, len_len, max_len_len)?;
+        let field_rlc = self.rlc.compute_rlc(ctx, range, &field_cells, field_len, max_field_len)?;
+        let rlp_field_rlc =
+            self.rlc.compute_rlc(ctx, range, rlp_field, rlp_len, max_rlp_field_len)?;
+        let one_vec =
+            self.rlc.assign_region_rlc(ctx, &vec![Constant(F::from(1))], vec![], vec![], None)?;
+        let one = one_vec[0].clone();
+
+        let concat_check = self.rlc.constrain_rlc_concat(
+            ctx,
+            range,
+            &vec![
+                (prefix.clone(), one),
+                (len_rlc.rlc_val.clone(), len_rlc.rlc_len.clone()),
+                (field_rlc.rlc_val.clone(), field_rlc.rlc_len.clone()),
+            ],
+            &vec![1, max_len_len, max_field_len],
+            (rlp_field_rlc.rlc_val.clone(), rlp_field_rlc.rlc_len.clone()),
+            rlp_field_rlc.max_len,
+            &rlc_cache,
+        )?;
+
+        Ok(field_cells)
+    }
+
     pub fn decompose_rlp_array(
         &self,
         ctx: &mut Context<'_, F>,

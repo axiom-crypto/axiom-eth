@@ -83,6 +83,8 @@ pub struct EthBlockAcctStorageInput {
     pub storage_pf_key_byte_len: usize,
     pub storage_pf_value_max_byte_len: usize,
     pub storage_pf_max_depth: usize,
+
+    pub pub_hash: BigUint,
 }
 
 pub fn get_block_acct_storage_input(
@@ -283,6 +285,32 @@ pub fn get_block_acct_storage_input(
     }
     let storage_pf_depth = storage_pf.proof.len();
 
+    let mut hasher = Keccak256::default();
+    let mut hash_inp = Vec::with_capacity(120);
+    hash_inp.extend_from_slice(block_hash_pre.as_bytes());
+    hash_inp.extend_from_slice(addr.as_bytes());
+    let mut slot_bytes = [0u8; 32];
+    slot.to_big_endian(&mut slot_bytes);
+    hash_inp.extend(slot_bytes);
+    let mut block_number_bytes = (block_number as u32).to_be_bytes().to_vec();
+    while block_number_bytes.len() > 1 && block_number_bytes[0] == 0 {
+        block_number_bytes.drain(..1);
+    }
+    block_number_bytes.extend(vec![0; 4 - block_number_bytes.len()]);
+    hash_inp.extend(block_number_bytes);
+    let mut slot_value = Vec::with_capacity(32);
+    slot_value.extend_from_slice(&decode_leaf[1][1..]);
+    slot_value.extend(vec![0; 32 - slot_value.len()]);
+    hash_inp.extend(slot_value);
+    /*for byte in &hash_inp {
+        print!("{:02x}", *byte);
+    }
+    println!("");*/
+    hasher.update(hash_inp);
+    let pub_hash = hasher.finalize().to_vec();
+    dbg!(BigUint::from_bytes_be(&pub_hash).to_str_radix(16));
+    let pub_hash = BigUint::from_bytes_be(&pub_hash[..31]);
+
     EthBlockAcctStorageInput {
         block_hash: (Some(block_hash.0.clone()), Some(block_hash.1.clone())),
         addr: Some(addr_out),
@@ -330,6 +358,7 @@ pub fn get_block_acct_storage_input(
         storage_pf_key_byte_len,
         storage_pf_value_max_byte_len,
         storage_pf_max_depth,
+        pub_hash,
     }
 }
 

@@ -1121,7 +1121,7 @@ impl<F: FieldExt> KeccakChip<F> {
 #[derive(Serialize, Deserialize)]
 pub struct KeccakCircuitParams {
     pub degree: u32,
-    pub num_advice: usize,
+    pub num_rot: usize,
     pub num_xor: usize,
     pub num_xorandn: usize,
     pub num_fixed: usize,
