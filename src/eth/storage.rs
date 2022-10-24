@@ -863,7 +863,7 @@ mod tests {
         );
         let snarks = vec![snark];
 
-        std::env::set_var("VERIFY_CONFIG", "./configs/verify_for_evm.config");
+        std::env::set_var("VERIFY_CONFIG", "./configs/verify_circuit.config");
         let k = load_aggregation_circuit_degree();
         let params = gen_srs(k);
         let agg_circuit = AggregationCircuit::new(&params, snarks, true);
