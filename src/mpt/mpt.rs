@@ -779,7 +779,16 @@ impl<F: Field> MPTChip<F> {
                 &proof.key_frag_byte_len[idx],
                 &proof.key_frag_is_odd[idx],
             )?;
-            // let len = value_to_option(frag_len.value()).unwrap().get_lower_32();
+            /*dbg!(&proof.key_frag_byte_len[idx]);
+            let len = value_to_option(frag_len.value()).unwrap().get_lower_32() as usize;
+            print!("{}: ", len);
+            for j in 0..len {
+                print!(
+                    "{:02x} ",
+                    value_to_option(proof.key_frag_hexs[idx][j].value()).unwrap().get_lower_32()
+                );
+            }
+            println!("");*/
             let fragment_rlc = self.rlp.rlc.compute_rlc(
                 ctx,
                 range,
@@ -801,7 +810,7 @@ impl<F: Field> MPTChip<F> {
         self.rlp.rlc.constrain_rlc_concat_var(
             ctx,
             range,
-            &fragment_rlcs.iter().map(|f| (f.rlc_val.clone(), f.rlc_len.clone())).collect(),
+            &fragment_rlcs.into_iter().map(|f| (f.rlc_val, f.rlc_len)).collect(),
             &vec![2 * key_byte_len; max_depth],
             (key_hex_rlc.rlc_val.clone(), assigned_len[0].clone()),
             2 * key_byte_len,
@@ -944,7 +953,6 @@ impl<F: Field> MPTChip<F> {
         )?;
         // println!("match_cnt {:#?} depth {:#?}", match_cnt, proof.depth);
         ctx.region.constrain_equal(match_cnt.cell(), depth_minus_one.cell())?;
-
         Ok(())
     }
 
@@ -1426,7 +1434,7 @@ mod tests {
                         key_frag_hexs.push(frag);
                     } else {
                         let mut frag: Vec<Option<u8>> = vec![Some(key_byte_hexs[key_idx])];
-                        println!("frag {:?} key_idx {:?}", frag, key_idx);
+                        // println!("frag {:?} key_idx {:?}", frag, key_idx);
                         frag.append(&mut vec![Some(0u8); 64 - frag.len()]);
                         key_frag_hexs.push(frag);
                         key_frag_byte_len.push(Some(1usize));

@@ -464,7 +464,6 @@ impl<F: Field> Circuit<F> for EthBlockAcctStorageTestCircuit<F> {
 
 #[test]
 pub fn test_mock_one_eth_block_acct_storage() -> Result<(), Box<dyn std::error::Error>> {
-    assert_eq!(NETWORK, Network::Mainnet);
     let k = 21;
     let provider_url = match NETWORK {
         Network::Mainnet => MAINNET_PROVIDER_URL,
@@ -474,8 +473,16 @@ pub fn test_mock_one_eth_block_acct_storage() -> Result<(), Box<dyn std::error::
     let provider = Provider::<Http>::try_from(format!("{}{}", provider_url, infura_id).as_str())
         .expect("could not instantiate HTTP Provider");
 
-    let addr = "0xb47e3cd837dDF8e4c57F05d70Ab865de6e193BBB".parse::<Address>()?;
-    let input = get_block_acct_storage_input(&provider, 0xef0000, addr, U256::from(2), 8, 8);
+    let input = match NETWORK {
+        Network::Mainnet => {
+            let addr = "0xb47e3cd837dDF8e4c57F05d70Ab865de6e193BBB".parse::<Address>()?;
+            get_block_acct_storage_input(&provider, 0xef0000, addr, U256::from(2), 8, 8)
+        }
+        Network::Goerli => {
+            let addr = "0xf2d1f94310823fe26cfa9c9b6fd152834b8e7849".parse::<Address>()?;
+            get_block_acct_storage_input(&provider, 0x713d54, addr, U256::from(2), 8, 8)
+        }
+    };
 
     let circuit = EthBlockAcctStorageTestCircuit::<Fr> {
         block_hash: (

@@ -1028,6 +1028,7 @@ impl<F: FieldExt> KeccakChip<F> {
         max_len: usize,
     ) -> Result<(Vec<AssignedValue<F>>, Vec<AssignedValue<F>>), Error> {
         assert_eq!(input.len(), max_len);
+        // TODO: something wrong here when `len` is close to `max_len` or something
         let padded_bytes =
             KeccakChip::pad_bytes(ctx, range, &input, len.clone(), min_len, max_len)?;
         let mut padded_hexs = Vec::with_capacity(8 * padded_bytes.len());

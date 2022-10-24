@@ -59,7 +59,7 @@ pub enum Network {
     Mainnet,
     Goerli,
 }
-pub const NETWORK: Network = Network::Mainnet;
+pub const NETWORK: Network = Network::Goerli;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Strategy {
@@ -176,7 +176,7 @@ impl<F: Field> EthChip<F> {
         state_root: &AssignedBytes<F>,
         addr: &AssignedBytes<F>,
         proof: &MPTFixedKeyProof<F>,
-    ) -> Result<() /*EthAccountTrace<F>*/, Error> {
+    ) -> Result<EthAccountTrace<F>, Error> {
         assert_eq!(32, proof.key_byte_len);
 
         // check key is keccak(addr)
@@ -196,7 +196,6 @@ impl<F: Field> EthChip<F> {
         // keccak(addr) => RLP([nonce, balance, storage_root, code_hash])
         self.mpt.parse_mpt_inclusion_fixed_key(ctx, range, proof, 32, 114, proof.max_depth)?;
 
-        /*
         // parse value
         let array_trace = self.mpt.rlp.decompose_rlp_array(
             ctx,
@@ -212,8 +211,7 @@ impl<F: Field> EthChip<F> {
             storage_root_trace: array_trace.field_traces[2].clone(),
             code_hash_trace: array_trace.field_traces[3].clone(),
         };
-        Ok(eth_account_trace)*/
-        Ok(())
+        Ok(eth_account_trace)
     }
 
     pub fn parse_storage_pf(
@@ -227,15 +225,7 @@ impl<F: Field> EthChip<F> {
         assert_eq!(32, proof.key_byte_len);
 
         // check key is keccak(slot)
-        let len = range.gate.assign_region_smart(
-            ctx,
-            vec![Constant(F::from(32))],
-            vec![],
-            vec![],
-            vec![],
-        )?;
-        let (hash_bytes, _) =
-            self.mpt.keccak.keccak_bytes_var_len(ctx, range, slot, len[0].clone(), 31, 32)?;
+        let hash_bytes = self.mpt.keccak.keccak_bytes_fixed_len(ctx, range, slot)?;
 
         for (hash, key) in hash_bytes.iter().zip(proof.key_bytes.clone()) {
             ctx.region.constrain_equal(hash.cell(), key.cell())?;
@@ -265,17 +255,15 @@ impl<F: Field> EthChip<F> {
         slot: &AssignedBytes<F>,
         acct_pf: &MPTFixedKeyProof<F>,
         storage_pf: &MPTFixedKeyProof<F>,
-    ) -> Result<() /*EthAccountStorageTrace<F>*/, Error> {
+    ) -> Result<EthAccountStorageTrace<F>, Error> {
         let acct_trace = self.parse_acct_pf(ctx, range, state_root, addr, acct_pf)?;
-        /*let storage_root = &acct_trace.storage_root_trace.val;
+        let storage_root = &acct_trace.storage_root_trace.val;
 
         let storage_trace = self.parse_storage_pf(ctx, range, storage_root, slot, storage_pf)?;
         let trace = EthAccountStorageTrace { acct_trace, storage_trace };
-        Ok(trace)*/
-        Ok(())
+        Ok(trace)
     }
 
-    /*
     pub fn parse_block_acct_storage_pf(
         &self,
         ctx: &mut Context<'_, F>,
@@ -305,7 +293,7 @@ impl<F: Field> EthChip<F> {
             storage_trace: acct_storage_trace.storage_trace,
         };
         Ok(trace)
-    } */
+    }
 
     pub fn uint_to_bytes_be(
         &self,
@@ -353,11 +341,8 @@ impl<F: Field> EthChip<F> {
             ctx,
             &input[..num_bytes].iter().map(|x| Existing(x)).collect(),
             &(0..num_bytes)
-                .map(|idx| {
-                    Constant(biguint_to_fe(
-                        &BigUint::from(256u64).pow(u32::try_from(num_bytes - 1 - idx).unwrap()),
-                    ))
-                })
+                .map(|idx| Constant(biguint_to_fe(&(BigUint::from(1u64) << (8 * idx)))))
+                .rev()
                 .collect(),
         )?;
         Ok(val)
@@ -374,7 +359,7 @@ impl<F: Field> EthChip<F> {
         block_header: &AssignedBytes<F>,
         acct_pf: &MPTFixedKeyProof<F>,
         storage_pf: &MPTFixedKeyProof<F>,
-    ) -> Result<() /*EthBlockAccountStorageMinTrace<F>*/, Error> {
+    ) -> Result<EthBlockAccountStorageMinTrace<F>, Error> {
         // extract state root from block
         let block_trace = self.decompose_eth_block_header(ctx, range, block_header)?;
         let state_root = &block_trace.state_root.val;
@@ -402,7 +387,6 @@ impl<F: Field> EthChip<F> {
             storage_pf,
         )?;
 
-        /*
         // blockHash || address || slot || blockNumber || slot value
         // 32 + 20 + 32 + 4 + 32 = 120 bytes
         let mut hash_inp = Vec::new();
@@ -411,22 +395,9 @@ impl<F: Field> EthChip<F> {
         hash_inp.extend(slot_bytes);
         hash_inp.extend(block_trace.number.val.clone());
         hash_inp.extend(acct_storage_trace.storage_trace.value_trace.val.clone());
+        assert_eq!(hash_inp.len(), 120);
 
-        let len = range.gate.assign_region_smart(
-            ctx,
-            vec![Constant(F::from(120))],
-            vec![],
-            vec![],
-            vec![],
-        )?;
-        let (pub_hash_bytes, _) = self.mpt.keccak.keccak_bytes_var_len(
-            ctx,
-            range,
-            &hash_inp,
-            len[0].clone(),
-            119,
-            120,
-        )?;
+        let pub_hash_bytes = self.mpt.keccak.keccak_bytes_fixed_len(ctx, range, &hash_inp)?;
         let pub_hash = self.bytes_be_to_uint(ctx, range, &pub_hash_bytes, 31)?;
 
         let trace = EthBlockAccountStorageMinTrace {
@@ -435,8 +406,7 @@ impl<F: Field> EthChip<F> {
             storage_trace: acct_storage_trace.storage_trace,
             pub_hash,
         };
-        Ok(trace) */
-        Ok(())
+        Ok(trace)
     }
 }
 

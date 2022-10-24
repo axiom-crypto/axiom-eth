@@ -1,3 +1,8 @@
+use crate::eth::{
+    block_header::{GOERLI_BLOCK_HEADER_RLP_MAX_BYTES, MAINNET_BLOCK_HEADER_RLP_MAX_BYTES},
+    Network, NETWORK,
+};
+use crate::mpt::mpt::{max_branch_lens, max_leaf_lens};
 use eth_types::H256;
 use ethers_core::types::{
     Address, Block, BlockId, BlockId::Number, BlockNumber, EIP1186ProofResponse, StorageProof, U256,
@@ -18,8 +23,6 @@ use std::{
     path::Path,
 };
 use tokio::runtime::Runtime;
-
-use crate::mpt::mpt::{max_branch_lens, max_leaf_lens};
 
 pub fn encode_hash(hash: &H256) -> (BigUint, BigUint) {
     let bytes = hash.as_bytes();
@@ -99,7 +102,11 @@ pub fn get_block_acct_storage_input(
     let block = rt.block_on(provider.get_block(block_number)).unwrap().unwrap();
     let block_hash_pre = block.hash.unwrap();
     let mut block_rlp = get_block_rlp(block.clone());
-    block_rlp.extend(vec![0; 556 - block_rlp.len()]);
+    let header_rlp_max_bytes = match NETWORK {
+        Network::Mainnet => MAINNET_BLOCK_HEADER_RLP_MAX_BYTES,
+        Network::Goerli => GOERLI_BLOCK_HEADER_RLP_MAX_BYTES,
+    };
+    block_rlp.extend(vec![0; header_rlp_max_bytes - block_rlp.len()]);
 
     let mut slot_bytes = vec![0; 32];
     slot.to_big_endian(&mut slot_bytes);
@@ -111,20 +118,20 @@ pub fn get_block_acct_storage_input(
             Some(Number(BlockNumber::from(block_number))),
         ))
         .unwrap();
-    let serialized = serde_json::to_value(pf).unwrap();
-    let pf2: EIP1186ProofResponse = serde_json::from_value(serialized).unwrap();
+    //let serialized = serde_json::to_value(pf).unwrap();
+    //let pf2: EIP1186ProofResponse = serde_json::from_value(serialized).unwrap();
 
     let block_hash = encode_hash(&block_hash_pre);
     let addr_out = encode_addr(&addr);
     let slot_out = encode_u256(&slot);
-    let block_header: Vec<Option<u8>> = block_rlp.iter().map(|x| Some(*x)).collect();
+    let block_header: Vec<Option<u8>> = block_rlp.into_iter().map(Some).collect();
 
-    let acct_pf = pf2.account_proof.clone();
+    let acct_pf = pf.account_proof.clone();
     let (_, acct_pf_max_leaf_bytes) =
         max_leaf_lens(acct_pf_key_byte_len, acct_pf_value_max_byte_len);
     let (_, acct_pf_max_branch_bytes) = max_branch_lens();
-    let acct_pf_key_bytes: Vec<u8> = keccak256(addr).iter().map(|x| *x).collect();
-    let mut acct_pf_value_bytes = get_acct_rlp(&pf2);
+    let acct_pf_key_bytes: Vec<u8> = keccak256(addr).to_vec();
+    let mut acct_pf_value_bytes = get_acct_rlp(&pf);
     let acct_pf_value_byte_len = acct_pf_value_bytes.len();
     acct_pf_value_bytes.extend(vec![0; acct_pf_value_max_byte_len - acct_pf_value_byte_len]);
     let acct_pf_root_hash_bytes: Vec<u8> = block.state_root.as_bytes().iter().map(|x| *x).collect();
@@ -138,27 +145,38 @@ pub fn get_block_acct_storage_input(
     let key_hexs =
         acct_pf_key_bytes.iter().map(|x| vec![x / 16, x % 16]).collect::<Vec<Vec<u8>>>().concat();
     let mut hex_idx = 0;
-    for idx in 0..acct_pf_max_depth - 1 {
-        let mut node: Vec<u8> = Vec::new();
+    for idx in 0..acct_pf_max_depth {
         if idx < acct_pf.len() - 1 {
-            node.extend(acct_pf[idx].iter().map(|x| *x).collect::<Vec<u8>>());
+            let mut node = acct_pf[idx].to_vec();
             node.extend(vec![0; acct_pf_max_branch_bytes - node.len()]);
+            acct_pf_nodes.push(node);
+        } else if idx < acct_pf_max_depth - 1 {
+            let dummy_branch_str =
+		"f1808080808080808080808080808080a0000000000000000000000000000000000000000000000000000000000000000080";
+            let mut node = Vec::from_hex(dummy_branch_str).unwrap();
+            node.extend(vec![0; acct_pf_max_branch_bytes - node.len()]);
+            acct_pf_nodes.push(node);
+        }
+        let mut node_type = 0;
+        if idx < acct_pf.len() {
             let decode: Vec<Vec<u8>> = decode_list(&acct_pf[idx]);
             if decode.len() == 2 {
-                acct_pf_node_types.push(1);
+                if idx < acct_pf.len() - 1 {
+                    node_type = 1;
+                }
                 let hexs = decode[0]
                     .iter()
                     .map(|x| vec![x / 16, x % 16])
                     .collect::<Vec<Vec<u8>>>()
                     .concat();
                 if hexs[0] % 2 == 0 {
-                    let mut hex_push: Vec<u8> = hexs[2..].iter().map(|x| *x).collect();
+                    let mut hex_push: Vec<u8> = hexs[2..].to_vec();
                     hex_idx += hex_push.len();
                     hex_push.extend(vec![0; 64 - hex_push.len()]);
                     acct_pf_key_frag_hexs.push(hex_push);
                     acct_pf_key_frag_is_odd.push(0);
                 } else {
-                    let mut hex_push: Vec<u8> = hexs[1..].iter().map(|x| *x).collect();
+                    let mut hex_push: Vec<u8> = hexs[1..].to_vec();
                     hex_idx += hex_push.len();
                     hex_push.extend(vec![0; 64 - hex_push.len()]);
                     acct_pf_key_frag_hexs.push(hex_push);
@@ -166,7 +184,6 @@ pub fn get_block_acct_storage_input(
                 }
                 acct_pf_key_frag_byte_len.push(BigUint::from(decode[0].len()));
             } else {
-                acct_pf_node_types.push(0);
                 let mut hex_push: Vec<u8> = vec![key_hexs[hex_idx]];
                 hex_idx += 1;
                 hex_push.extend(vec![0; 63]);
@@ -175,38 +192,23 @@ pub fn get_block_acct_storage_input(
                 acct_pf_key_frag_byte_len.push(BigUint::from(1u64));
             }
         } else {
-            let dummy_branch_str =
-		"f1808080808080808080808080808080a0000000000000000000000000000000000000000000000000000000000000000080";
-            let node2 = Vec::from_hex(dummy_branch_str).unwrap().into_iter();
-            node.extend(node2);
-            node.extend(vec![0; acct_pf_max_branch_bytes - node.len()]);
-            acct_pf_node_types.push(0);
             acct_pf_key_frag_hexs.push(vec![0; 64]);
             acct_pf_key_frag_is_odd.push(0);
             acct_pf_key_frag_byte_len.push(BigUint::from(0u64));
         }
-        acct_pf_nodes.push(node);
+        if idx < acct_pf_max_depth - 1 {
+            acct_pf_node_types.push(node_type);
+        }
     }
-    let mut hexs = key_hexs[hex_idx..].to_vec();
-    hexs.extend(vec![0; 64 - hexs.len()]);
-    acct_pf_key_frag_hexs.push(hexs);
-    if (64 - hex_idx) % 2 == 0 {
-        acct_pf_key_frag_is_odd.push(0);
-    } else {
-        acct_pf_key_frag_is_odd.push(1);
-    }
-    acct_pf_key_frag_byte_len.push(BigUint::from((64 - hex_idx + 2) / 2));
     let acct_pf_depth = acct_pf.len();
 
-    let storage_pf = pf2.storage_proof[0].clone();
+    let storage_pf = pf.storage_proof[0].clone();
     let (_, storage_pf_max_leaf_bytes) =
         max_leaf_lens(storage_pf_key_byte_len, storage_pf_value_max_byte_len);
     let (_, storage_pf_max_branch_bytes) = max_branch_lens();
-    let storage_pf_key_bytes: Vec<u8> = keccak256(storage_pf.key).iter().map(|x| *x).collect();
-    let storage_pf_root_hash_bytes: Vec<u8> =
-        pf2.storage_hash.as_bytes().iter().map(|x| *x).collect();
-    let mut storage_pf_leaf_bytes: Vec<u8> =
-        storage_pf.proof[storage_pf.proof.len() - 1].iter().map(|x| *x).collect();
+    let storage_pf_key_bytes: Vec<u8> = keccak256(storage_pf.key).to_vec();
+    let storage_pf_root_hash_bytes: Vec<u8> = pf.storage_hash.as_bytes().to_vec();
+    let mut storage_pf_leaf_bytes: Vec<u8> = storage_pf.proof[storage_pf.proof.len() - 1].to_vec();
     let decode_leaf: Vec<Vec<u8>> = decode_list(&storage_pf_leaf_bytes);
     let mut storage_pf_value_bytes = decode_leaf[1].clone();
     let storage_pf_value_byte_len = storage_pf_value_bytes.len();
@@ -224,27 +226,38 @@ pub fn get_block_acct_storage_input(
         .collect::<Vec<Vec<u8>>>()
         .concat();
     let mut hex_idx = 0;
-    for idx in 0..storage_pf_max_depth - 1 {
-        let mut node: Vec<u8> = Vec::new();
+    for idx in 0..storage_pf_max_depth {
         if idx < storage_pf.proof.len() - 1 {
-            node.extend(storage_pf.proof[idx].iter().map(|x| *x).collect::<Vec<u8>>());
+            let mut node = storage_pf.proof[idx].to_vec();
             node.extend(vec![0; storage_pf_max_branch_bytes - node.len()]);
+            storage_pf_nodes.push(node);
+        } else if idx < storage_pf_max_depth - 1 {
+            let dummy_branch_str =
+		"f1808080808080808080808080808080a0000000000000000000000000000000000000000000000000000000000000000080";
+            let mut node = Vec::from_hex(dummy_branch_str).unwrap();
+            node.extend(vec![0; storage_pf_max_branch_bytes - node.len()]);
+            storage_pf_nodes.push(node);
+        }
+        let mut node_type = 0;
+        if idx < storage_pf.proof.len() {
             let decode: Vec<Vec<u8>> = decode_list(&storage_pf.proof[idx]);
             if decode.len() == 2 {
-                storage_pf_node_types.push(1);
+                if idx < storage_pf.proof.len() - 1 {
+                    node_type = 1;
+                }
                 let hexs = decode[0]
                     .iter()
                     .map(|x| vec![x / 16, x % 16])
                     .collect::<Vec<Vec<u8>>>()
                     .concat();
                 if hexs[0] % 2 == 0 {
-                    let mut hex_push: Vec<u8> = hexs[2..].iter().map(|x| *x).collect();
+                    let mut hex_push: Vec<u8> = hexs[2..].to_vec();
                     hex_idx += hex_push.len();
                     hex_push.extend(vec![0; 64 - hex_push.len()]);
                     storage_pf_key_frag_hexs.push(hex_push);
                     storage_pf_key_frag_is_odd.push(0);
                 } else {
-                    let mut hex_push: Vec<u8> = hexs[1..].iter().map(|x| *x).collect();
+                    let mut hex_push: Vec<u8> = hexs[1..].to_vec();
                     hex_idx += hex_push.len();
                     hex_push.extend(vec![0; 64 - hex_push.len()]);
                     storage_pf_key_frag_hexs.push(hex_push);
@@ -252,7 +265,6 @@ pub fn get_block_acct_storage_input(
                 }
                 storage_pf_key_frag_byte_len.push(BigUint::from(decode[0].len()));
             } else {
-                storage_pf_node_types.push(0);
                 let mut hex_push: Vec<u8> = vec![key_hexs[hex_idx]];
                 hex_idx += 1;
                 hex_push.extend(vec![0; 63]);
@@ -261,27 +273,14 @@ pub fn get_block_acct_storage_input(
                 storage_pf_key_frag_byte_len.push(BigUint::from(1u64));
             }
         } else {
-            let dummy_branch_str =
-		"f1808080808080808080808080808080a0000000000000000000000000000000000000000000000000000000000000000080";
-            let node2 = Vec::from_hex(dummy_branch_str).unwrap().into_iter();
-            node.extend(node2);
-            node.extend(vec![0; storage_pf_max_branch_bytes - node.len()]);
-            storage_pf_node_types.push(0);
             storage_pf_key_frag_hexs.push(vec![0; 64]);
             storage_pf_key_frag_is_odd.push(0);
             storage_pf_key_frag_byte_len.push(BigUint::from(0u64));
         }
-        storage_pf_nodes.push(node);
+        if idx < storage_pf_max_depth - 1 {
+            storage_pf_node_types.push(node_type);
+        }
     }
-    let mut hexs = key_hexs[hex_idx..].to_vec();
-    hexs.extend(vec![0; 64 - hexs.len()]);
-    storage_pf_key_frag_hexs.push(hexs);
-    if (64 - hex_idx) % 2 == 0 {
-        storage_pf_key_frag_is_odd.push(0);
-    } else {
-        storage_pf_key_frag_is_odd.push(1);
-    }
-    storage_pf_key_frag_byte_len.push(BigUint::from((64 - hex_idx + 2) / 2));
     let storage_pf_depth = storage_pf.proof.len();
 
     EthBlockAcctStorageInput {

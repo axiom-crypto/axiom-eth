@@ -47,9 +47,10 @@ use std::marker::PhantomData;
 use std::{cmp::max, fs};
 
 const MAINNET_EXTRA_DATA_RLP_MAX_BYTES: usize = 33;
-const MAINNET_BLOCK_HEADER_RLP_MAX_BYTES: usize = 1 + 2 + 520 + MAINNET_EXTRA_DATA_RLP_MAX_BYTES;
+pub const MAINNET_BLOCK_HEADER_RLP_MAX_BYTES: usize =
+    1 + 2 + 520 + MAINNET_EXTRA_DATA_RLP_MAX_BYTES;
 const GOERLI_EXTRA_DATA_RLP_MAX_BYTES: usize = 98;
-const GOERLI_BLOCK_HEADER_RLP_MAX_BYTES: usize = 1 + 2 + 520 + GOERLI_EXTRA_DATA_RLP_MAX_BYTES;
+pub const GOERLI_BLOCK_HEADER_RLP_MAX_BYTES: usize = 1 + 2 + 520 + GOERLI_EXTRA_DATA_RLP_MAX_BYTES;
 
 // parentHash	256 bits	32	33	264
 // ommersHash	256 bits	32	33	264
