@@ -37,12 +37,11 @@ use sha3::{Digest, Keccak256};
 use std::{cmp::max, io::Write, marker::PhantomData};
 
 use crate::{
-    eth::block_header::{EthBlockHeaderConfigParams, Strategy},
+    eth::{EthConfigParams, Strategy},
     keccak::{print_bytes, KeccakChip},
     rlp::rlc::{log2, RlcFixedTrace, RlcTrace},
     rlp::rlp::{max_rlp_len_len, RlpArrayChip, RlpArrayTrace},
 };
-
 #[derive(Clone, Debug)]
 pub struct LeafTrace<F: Field> {
     rlp_trace: RlcTrace<F>,
@@ -85,26 +84,26 @@ pub type AssignedNibbles<F> = Vec<AssignedValue<F>>;
 #[derive(Clone, Debug)]
 pub struct MPTFixedKeyProof<F: Field> {
     // claim specification
-    key_bytes: AssignedBytes<F>,
-    value_bytes: AssignedBytes<F>,
-    value_byte_len: AssignedValue<F>,
-    root_hash_bytes: AssignedBytes<F>,
+    pub key_bytes: AssignedBytes<F>,
+    pub value_bytes: AssignedBytes<F>,
+    pub value_byte_len: AssignedValue<F>,
+    pub root_hash_bytes: AssignedBytes<F>,
 
     // proof specification
-    leaf_bytes: AssignedBytes<F>,
-    nodes: Vec<Vec<AssignedValue<F>>>,
-    node_types: Vec<AssignedValue<F>>, // index 0 = root; 0 = branch, 1 = extension
-    depth: AssignedValue<F>,
+    pub leaf_bytes: AssignedBytes<F>,
+    pub nodes: Vec<Vec<AssignedValue<F>>>,
+    pub node_types: Vec<AssignedValue<F>>, // index 0 = root; 0 = branch, 1 = extension
+    pub depth: AssignedValue<F>,
 
-    key_frag_hexs: Vec<AssignedNibbles<F>>,
+    pub key_frag_hexs: Vec<AssignedNibbles<F>>,
     // hex_len = 2 * byte_len + is_odd - 2
     // if nibble for branch: byte_len = is_odd = 1
-    key_frag_is_odd: Vec<AssignedValue<F>>,
-    key_frag_byte_len: Vec<AssignedValue<F>>,
+    pub key_frag_is_odd: Vec<AssignedValue<F>>,
+    pub key_frag_byte_len: Vec<AssignedValue<F>>,
 
-    key_byte_len: usize,
-    value_max_byte_len: usize,
-    max_depth: usize,
+    pub key_byte_len: usize,
+    pub value_max_byte_len: usize,
+    pub max_depth: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -167,8 +166,8 @@ pub fn max_branch_lens() -> (Vec<usize>, usize) {
 
 #[derive(Clone, Debug)]
 pub struct MPTChip<F: Field> {
-    rlp: RlpArrayChip<F>,
-    keccak: KeccakChip<F>,
+    pub rlp: RlpArrayChip<F>,
+    pub keccak: KeccakChip<F>,
 }
 
 impl<F: Field> MPTChip<F> {
@@ -176,7 +175,7 @@ impl<F: Field> MPTChip<F> {
         meta: &mut ConstraintSystem<F>,
         challenge_id: String,
         context_id: String,
-        params: EthBlockHeaderConfigParams,
+        params: EthConfigParams,
     ) -> Self {
         let rlp = RlpArrayChip::configure(
             meta,
@@ -686,7 +685,6 @@ impl<F: Field> MPTChip<F> {
         let mut exts_parsed = Vec::with_capacity(max_depth - 1);
         let mut branches_parsed = Vec::with_capacity(max_depth - 1);
         for idx in 0..max_depth - 1 {
-            // println!("idx {:?}", idx);
             let mut ext_in = Vec::with_capacity(ext_max_byte_len);
             for byte_idx in 0..node_max_byte_len {
                 let ext_byte = range.gate.select(
@@ -782,7 +780,16 @@ impl<F: Field> MPTChip<F> {
                 &proof.key_frag_byte_len[idx],
                 &proof.key_frag_is_odd[idx],
             )?;
-            // let len = value_to_option(frag_len.value()).unwrap().get_lower_32();
+            /*dbg!(&proof.key_frag_byte_len[idx]);
+            let len = value_to_option(frag_len.value()).unwrap().get_lower_32() as usize;
+            print!("{}: ", len);
+            for j in 0..len {
+                print!(
+                    "{:02x} ",
+                    value_to_option(proof.key_frag_hexs[idx][j].value()).unwrap().get_lower_32()
+                );
+            }
+            println!("");*/
             let fragment_rlc = self.rlp.rlc.compute_rlc(
                 ctx,
                 range,
@@ -804,7 +811,7 @@ impl<F: Field> MPTChip<F> {
         self.rlp.rlc.constrain_rlc_concat_var(
             ctx,
             range,
-            &fragment_rlcs.iter().map(|f| (f.rlc_val.clone(), f.rlc_len.clone())).collect(),
+            &fragment_rlcs.into_iter().map(|f| (f.rlc_val, f.rlc_len)).collect(),
             &vec![2 * key_byte_len; max_depth],
             (key_hex_rlc.rlc_val.clone(), assigned_len[0].clone()),
             2 * key_byte_len,
@@ -823,15 +830,16 @@ impl<F: Field> MPTChip<F> {
             proof.value_byte_len.clone(),
             value_max_byte_len,
         )?;
+
         ctx.region
             .constrain_equal(value_rlc_trace.rlc_val.cell(), leaf_parsed.value.rlc_val.cell())?;
 
         /* Check hash chains
-         * hash(node_types[0]) = root_hash
-         * hash(node_types[idx + 1]) is in node_types[idx]
-         * hash(leaf_bytes) is in node_types[depth - 2]
+         * hash(node[0]) = root_hash
+         * hash(node[idx + 1]) is in node[idx]
+         * hash(leaf_bytes) is in node[depth - 2]
          */
-        let mut matches = Vec::new();
+        let mut matches = Vec::with_capacity(max_depth - 1);
         for idx in 0..max_depth {
             let mut node_hash_rlc = leaf_parsed.leaf_hash.rlc_val.clone();
             if idx < max_depth - 1 {
@@ -898,7 +906,7 @@ impl<F: Field> MPTChip<F> {
                     &Existing(&proof.node_types[idx - 1]),
                 )?;
                 /*println!(
-                    "idx {:?} match_hash_rlc {:?} node_hash_rlc {:?}",
+                    "idx {:?} match_hash_rlc {:#?} node_hash_rlc {:#?}",
                     idx,
                     match_hash_rlc.value(),
                     node_hash_rlc.value()
@@ -908,48 +916,44 @@ impl<F: Field> MPTChip<F> {
                     &Existing(&match_hash_rlc),
                     &Existing(&node_hash_rlc),
                 )?;
+                // dbg!(&is_match);
                 matches.push(is_match);
             }
         }
-
-        let mut match_sums = Vec::new();
+        let mut match_sums = Vec::with_capacity(3 * (max_depth - 2) + 1);
         let mut running_sum = Value::known(F::zero());
-        let mut gate_offsets = Vec::new();
-        for idx in 0..max_depth - 1 {
+        let mut gate_offsets = Vec::with_capacity(max_depth - 2);
+        for (idx, match_) in matches.iter().enumerate() {
             if idx == 0 {
-                match_sums.push(Existing(&matches[idx]));
-                running_sum = running_sum + matches[idx].value();
+                match_sums.push(Existing(match_));
+                running_sum = running_sum + match_.value();
             } else {
-                match_sums.push(Existing(&matches[idx]));
+                match_sums.push(Existing(match_));
                 match_sums.push(Constant(F::one()));
-                running_sum = running_sum + matches[idx].value();
+                running_sum = running_sum + match_.value();
                 match_sums.push(Witness(running_sum));
             }
             if idx < max_depth - 2 {
                 gate_offsets.push(3 * idx);
             }
         }
+
         let assigned =
             self.rlp.rlc.assign_region_rlc(ctx, &match_sums, vec![], gate_offsets, None)?;
         // println!("assigned sums {:?}", assigned);
+
+        let depth_minus_one =
+            self.rlp.range.gate.sub(ctx, &Existing(&proof.depth), &Constant(F::one()))?;
         let match_cnt = self.rlp.rlc.select_from_idx(
             ctx,
-            &(0..max_depth - 1).map(|idx| Existing(&assigned[3 * idx])).collect(),
-            &Existing(&proof.depth),
+            &[Constant(F::zero())]
+                .into_iter()
+                .chain((0..max_depth - 1).map(|idx| Existing(&assigned[3 * idx])).into_iter())
+                .collect(),
+            &Existing(&depth_minus_one),
         )?;
-        // println!("match_cnt {:?} depth {:?}", match_cnt, proof.depth);
-        let check_equal = self.rlp.rlc.assign_region_rlc(
-            ctx,
-            &vec![
-                Constant(F::one()),
-                Constant(F::one()),
-                Existing(&match_cnt),
-                Existing(&proof.depth),
-            ],
-            vec![],
-            vec![0],
-            None,
-        )?;
+        // println!("match_cnt {:#?} depth {:#?}", match_cnt, proof.depth);
+        ctx.region.constrain_equal(match_cnt.cell(), depth_minus_one.cell())?;
         Ok(())
     }
 
@@ -1030,8 +1034,7 @@ mod tests {
 
         fn configure(meta: &mut ConstraintSystem<F>) -> Self::Config {
             let params_str = fs::read_to_string("configs/mpt_circuit.config").unwrap();
-            let params: EthBlockHeaderConfigParams =
-                serde_json::from_str(params_str.as_str()).unwrap();
+            let params: EthConfigParams = serde_json::from_str(params_str.as_str()).unwrap();
 
             MPTChip::configure(meta, "gamma".to_string(), "rlc".to_string(), params)
         }
@@ -1429,7 +1432,7 @@ mod tests {
                         key_frag_hexs.push(frag);
                     } else {
                         let mut frag: Vec<Option<u8>> = vec![Some(key_byte_hexs[key_idx])];
-                        println!("frag {:?} key_idx {:?}", frag, key_idx);
+                        // println!("frag {:?} key_idx {:?}", frag, key_idx);
                         frag.append(&mut vec![Some(0u8); 64 - frag.len()]);
                         key_frag_hexs.push(frag);
                         key_frag_byte_len.push(Some(1usize));
@@ -1486,7 +1489,7 @@ mod tests {
     #[test]
     pub fn test_mock_mpt_inclusion_fixed() -> Result<(), Error> {
         let params_str = std::fs::read_to_string("configs/mpt_circuit.config").unwrap();
-        let params: EthBlockHeaderConfigParams = serde_json::from_str(params_str.as_str()).unwrap();
+        let params: EthConfigParams = serde_json::from_str(params_str.as_str()).unwrap();
         let k = params.degree;
 
         let mut circuit = MPTCircuit::<Fr>::default();
@@ -1523,7 +1526,7 @@ mod tests {
 
         let bench_params_reader = std::io::BufReader::new(bench_params_file);
         for line in bench_params_reader.lines() {
-            let bench_params: EthBlockHeaderConfigParams =
+            let bench_params: EthConfigParams =
                 serde_json::from_str(line.unwrap().as_str()).unwrap();
             println!(
                 "---------------------- degree = {} ------------------------------",

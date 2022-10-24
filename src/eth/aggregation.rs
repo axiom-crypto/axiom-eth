@@ -1,4 +1,5 @@
-use super::{EthBlockHeaderConfigParams, EthBlockHeaderHashCircuit};
+use super::{block_header::EthBlockHeaderHashCircuit, EthConfigParams, Network, NETWORK};
+use crate::input_gen::{GOERLI_PROVIDER_URL, MAINNET_PROVIDER_URL};
 use crate::keccak::merkle_root::MerkleRootCircuit;
 use ethers_providers::{Http, Provider};
 use halo2_base::utils::biguint_to_fe;
@@ -63,9 +64,6 @@ pub mod evm;
 
 const INITIAL_DEPTH: usize = 7;
 pub const FULL_DEPTH: usize = 10; // 13;
-
-const MAINNET_PROVIDER_URL: &'static str = "https://mainnet.infura.io/v3/";
-const GOERLI_PROVIDER_URL: &'static str = "https://goerli.infura.io/v3/";
 
 #[derive(Clone)]
 pub struct BlockAggregationCircuit {
@@ -272,13 +270,17 @@ pub fn create_initial_block_header_snarks(
     let mut block_number = last_block_number - (1 << FULL_DEPTH) + (1 << INITIAL_DEPTH);
 
     let infura_id = fs::read_to_string("scripts/input_gen/INFURA_ID").expect("Infura ID not found");
-    let provider =
-        Provider::<Http>::try_from(format!("{}{}", GOERLI_PROVIDER_URL, infura_id).as_str())
-            .expect("could not instantiate HTTP Provider");
+    let provider_url = match NETWORK {
+        Network::Mainnet => MAINNET_PROVIDER_URL,
+        Network::Goerli => GOERLI_PROVIDER_URL,
+    };
+    let provider = Provider::<Http>::try_from(format!("{}{}", provider_url, infura_id).as_str())
+        .expect("could not instantiate HTTP Provider");
 
     while block_number <= last_block_number {
         let circuit = EthBlockHeaderHashCircuit::<Fr>::from_provider(
             &provider,
+            NETWORK,
             block_number,
             1 << INITIAL_DEPTH,
         );
@@ -456,7 +458,7 @@ pub fn final_evm_verify(
 
 pub fn run(last_block_number: u64, deploy: bool) {
     let config_str = std::fs::read_to_string("configs/block_header.config").unwrap();
-    let config: EthBlockHeaderConfigParams = serde_json::from_str(config_str.as_str()).unwrap();
+    let config: EthConfigParams = serde_json::from_str(config_str.as_str()).unwrap();
     let mut params = gen_srs(config.degree);
     println!("{:?}", params.get_g()[0]);
     println!("{:?}\n", params.get_g()[1]);
@@ -492,7 +494,6 @@ mod tests {
     use std::io::BufReader;
 
     use super::*;
-    use crate::eth::block_header::EthBlockHeaderConfigParams;
     use ark_std::{end_timer, start_timer};
     use halo2_proofs::{
         dev::MockProver,

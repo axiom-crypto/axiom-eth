@@ -1,8 +1,19 @@
+use crate::eth::{
+    block_header::{GOERLI_BLOCK_HEADER_RLP_MAX_BYTES, MAINNET_BLOCK_HEADER_RLP_MAX_BYTES},
+    Network, NETWORK,
+};
+use crate::mpt::mpt::{max_branch_lens, max_leaf_lens};
 use eth_types::H256;
-use ethers_core::types::Block;
+use ethers_core::types::{
+    Address, Block, BlockId, BlockId::Number, BlockNumber, EIP1186ProofResponse, StorageProof, U256,
+};
+use ethers_core::utils::keccak256;
 use ethers_providers::{Http, Middleware, Provider};
+use hex::FromHex;
 use lazy_static::__Deref;
-use rlp::RlpStream;
+use num_bigint::BigUint;
+use rlp::{decode, decode_list, RlpStream};
+use serde::{Deserialize, Serialize};
 use sha3::{Digest, Keccak256};
 use std::{
     convert::TryFrom,
@@ -12,6 +23,324 @@ use std::{
     path::Path,
 };
 use tokio::runtime::Runtime;
+
+pub fn encode_hash(hash: &H256) -> (BigUint, BigUint) {
+    let bytes = hash.as_bytes();
+    let val1 = BigUint::from_bytes_be(&bytes[..16]);
+    let val2 = BigUint::from_bytes_be(&bytes[16..]);
+    (val1, val2)
+}
+
+pub fn encode_u256(input: &U256) -> (BigUint, BigUint) {
+    let mut bytes = vec![0; 32];
+    input.to_big_endian(&mut bytes);
+    let val1 = BigUint::from_bytes_be(&bytes[..16]);
+    let val2 = BigUint::from_bytes_be(&bytes[16..]);
+    (val1, val2)
+}
+
+pub fn encode_addr(input: &Address) -> BigUint {
+    let bytes = input.as_bytes();
+    BigUint::from_bytes_be(&bytes)
+}
+
+pub const MAINNET_PROVIDER_URL: &'static str = "https://mainnet.infura.io/v3/";
+pub const GOERLI_PROVIDER_URL: &'static str = "https://goerli.infura.io/v3/";
+
+#[derive(Clone, Debug, Default)]
+pub struct EthBlockAcctStorageInput {
+    pub block_hash: (Option<BigUint>, Option<BigUint>),
+    pub addr: Option<BigUint>,
+    pub slot: (Option<BigUint>, Option<BigUint>),
+    pub block_header: Vec<Option<u8>>,
+
+    pub acct_pf_key_bytes: Vec<Option<u8>>,
+    pub acct_pf_value_bytes: Vec<Option<u8>>,
+    pub acct_pf_value_byte_len: Option<BigUint>,
+    pub acct_pf_root_hash_bytes: Vec<Option<u8>>,
+    pub acct_pf_leaf_bytes: Vec<Option<u8>>,
+    pub acct_pf_nodes: Vec<Vec<Option<u8>>>,
+    pub acct_pf_node_types: Vec<Option<u8>>,
+    pub acct_pf_depth: Option<BigUint>,
+    pub acct_pf_key_frag_hexs: Vec<Vec<Option<u8>>>,
+    pub acct_pf_key_frag_is_odd: Vec<Option<u8>>,
+    pub acct_pf_key_frag_byte_len: Vec<Option<BigUint>>,
+    pub acct_pf_key_byte_len: usize,
+    pub acct_pf_value_max_byte_len: usize,
+    pub acct_pf_max_depth: usize,
+
+    pub storage_pf_key_bytes: Vec<Option<u8>>,
+    pub storage_pf_value_bytes: Vec<Option<u8>>,
+    pub storage_pf_value_byte_len: Option<BigUint>,
+    pub storage_pf_root_hash_bytes: Vec<Option<u8>>,
+    pub storage_pf_leaf_bytes: Vec<Option<u8>>,
+    pub storage_pf_nodes: Vec<Vec<Option<u8>>>,
+    pub storage_pf_node_types: Vec<Option<u8>>,
+    pub storage_pf_depth: Option<BigUint>,
+    pub storage_pf_key_frag_hexs: Vec<Vec<Option<u8>>>,
+    pub storage_pf_key_frag_is_odd: Vec<Option<u8>>,
+    pub storage_pf_key_frag_byte_len: Vec<Option<BigUint>>,
+    pub storage_pf_key_byte_len: usize,
+    pub storage_pf_value_max_byte_len: usize,
+    pub storage_pf_max_depth: usize,
+}
+
+pub fn get_block_acct_storage_input(
+    provider: &Provider<Http>,
+    block_number: u64,
+    addr: Address,
+    slot: U256,
+    acct_pf_max_depth: usize,
+    storage_pf_max_depth: usize,
+) -> EthBlockAcctStorageInput {
+    let acct_pf_key_byte_len = 32;
+    let acct_pf_value_max_byte_len = 114;
+    let storage_pf_key_byte_len = 32;
+    let storage_pf_value_max_byte_len = 33;
+
+    let rt = Runtime::new().unwrap();
+    let block = rt.block_on(provider.get_block(block_number)).unwrap().unwrap();
+    let block_hash_pre = block.hash.unwrap();
+    let mut block_rlp = get_block_rlp(block.clone());
+    let header_rlp_max_bytes = match NETWORK {
+        Network::Mainnet => MAINNET_BLOCK_HEADER_RLP_MAX_BYTES,
+        Network::Goerli => GOERLI_BLOCK_HEADER_RLP_MAX_BYTES,
+    };
+    block_rlp.extend(vec![0; header_rlp_max_bytes - block_rlp.len()]);
+
+    let mut slot_bytes = vec![0; 32];
+    slot.to_big_endian(&mut slot_bytes);
+    let slot_h256 = H256::from_slice(&slot_bytes);
+    let pf = rt
+        .block_on(provider.get_proof(
+            addr,
+            vec![slot_h256],
+            Some(Number(BlockNumber::from(block_number))),
+        ))
+        .unwrap();
+    //let serialized = serde_json::to_value(pf).unwrap();
+    //let pf2: EIP1186ProofResponse = serde_json::from_value(serialized).unwrap();
+
+    let block_hash = encode_hash(&block_hash_pre);
+    let addr_out = encode_addr(&addr);
+    let slot_out = encode_u256(&slot);
+    let block_header: Vec<Option<u8>> = block_rlp.into_iter().map(Some).collect();
+
+    let acct_pf = pf.account_proof.clone();
+    let (_, acct_pf_max_leaf_bytes) =
+        max_leaf_lens(acct_pf_key_byte_len, acct_pf_value_max_byte_len);
+    let (_, acct_pf_max_branch_bytes) = max_branch_lens();
+    let acct_pf_key_bytes: Vec<u8> = keccak256(addr).to_vec();
+    let mut acct_pf_value_bytes = get_acct_rlp(&pf);
+    let acct_pf_value_byte_len = acct_pf_value_bytes.len();
+    acct_pf_value_bytes.extend(vec![0; acct_pf_value_max_byte_len - acct_pf_value_byte_len]);
+    let acct_pf_root_hash_bytes: Vec<u8> = block.state_root.as_bytes().iter().map(|x| *x).collect();
+    let mut acct_pf_leaf_bytes: Vec<u8> = acct_pf[acct_pf.len() - 1].iter().map(|x| *x).collect();
+    acct_pf_leaf_bytes.extend(vec![0; acct_pf_max_leaf_bytes - acct_pf_leaf_bytes.len()]);
+    let mut acct_pf_nodes = Vec::new();
+    let mut acct_pf_node_types: Vec<u8> = Vec::new();
+    let mut acct_pf_key_frag_hexs: Vec<Vec<u8>> = Vec::new();
+    let mut acct_pf_key_frag_is_odd: Vec<u8> = Vec::new();
+    let mut acct_pf_key_frag_byte_len: Vec<BigUint> = Vec::new();
+    let key_hexs =
+        acct_pf_key_bytes.iter().map(|x| vec![x / 16, x % 16]).collect::<Vec<Vec<u8>>>().concat();
+    let mut hex_idx = 0;
+    for idx in 0..acct_pf_max_depth {
+        if idx < acct_pf.len() - 1 {
+            let mut node = acct_pf[idx].to_vec();
+            node.extend(vec![0; acct_pf_max_branch_bytes - node.len()]);
+            acct_pf_nodes.push(node);
+        } else if idx < acct_pf_max_depth - 1 {
+            let dummy_branch_str =
+		"f1808080808080808080808080808080a0000000000000000000000000000000000000000000000000000000000000000080";
+            let mut node = Vec::from_hex(dummy_branch_str).unwrap();
+            node.extend(vec![0; acct_pf_max_branch_bytes - node.len()]);
+            acct_pf_nodes.push(node);
+        }
+        let mut node_type = 0;
+        if idx < acct_pf.len() {
+            let decode: Vec<Vec<u8>> = decode_list(&acct_pf[idx]);
+            if decode.len() == 2 {
+                if idx < acct_pf.len() - 1 {
+                    node_type = 1;
+                }
+                let hexs = decode[0]
+                    .iter()
+                    .map(|x| vec![x / 16, x % 16])
+                    .collect::<Vec<Vec<u8>>>()
+                    .concat();
+                if hexs[0] % 2 == 0 {
+                    let mut hex_push: Vec<u8> = hexs[2..].to_vec();
+                    hex_idx += hex_push.len();
+                    hex_push.extend(vec![0; 64 - hex_push.len()]);
+                    acct_pf_key_frag_hexs.push(hex_push);
+                    acct_pf_key_frag_is_odd.push(0);
+                } else {
+                    let mut hex_push: Vec<u8> = hexs[1..].to_vec();
+                    hex_idx += hex_push.len();
+                    hex_push.extend(vec![0; 64 - hex_push.len()]);
+                    acct_pf_key_frag_hexs.push(hex_push);
+                    acct_pf_key_frag_is_odd.push(1);
+                }
+                acct_pf_key_frag_byte_len.push(BigUint::from(decode[0].len()));
+            } else {
+                let mut hex_push: Vec<u8> = vec![key_hexs[hex_idx]];
+                hex_idx += 1;
+                hex_push.extend(vec![0; 63]);
+                acct_pf_key_frag_hexs.push(hex_push);
+                acct_pf_key_frag_is_odd.push(1);
+                acct_pf_key_frag_byte_len.push(BigUint::from(1u64));
+            }
+        } else {
+            acct_pf_key_frag_hexs.push(vec![0; 64]);
+            acct_pf_key_frag_is_odd.push(0);
+            acct_pf_key_frag_byte_len.push(BigUint::from(0u64));
+        }
+        if idx < acct_pf_max_depth - 1 {
+            acct_pf_node_types.push(node_type);
+        }
+    }
+    let acct_pf_depth = acct_pf.len();
+
+    let storage_pf = pf.storage_proof[0].clone();
+    let (_, storage_pf_max_leaf_bytes) =
+        max_leaf_lens(storage_pf_key_byte_len, storage_pf_value_max_byte_len);
+    let (_, storage_pf_max_branch_bytes) = max_branch_lens();
+    let storage_pf_key_bytes: Vec<u8> = keccak256(storage_pf.key).to_vec();
+    let storage_pf_root_hash_bytes: Vec<u8> = pf.storage_hash.as_bytes().to_vec();
+    let mut storage_pf_leaf_bytes: Vec<u8> = storage_pf.proof[storage_pf.proof.len() - 1].to_vec();
+    let decode_leaf: Vec<Vec<u8>> = decode_list(&storage_pf_leaf_bytes);
+    let mut storage_pf_value_bytes = decode_leaf[1].clone();
+    let storage_pf_value_byte_len = storage_pf_value_bytes.len();
+    storage_pf_value_bytes
+        .extend(vec![0; storage_pf_value_max_byte_len - storage_pf_value_byte_len]);
+    storage_pf_leaf_bytes.extend(vec![0; storage_pf_max_leaf_bytes - storage_pf_leaf_bytes.len()]);
+    let mut storage_pf_nodes = Vec::new();
+    let mut storage_pf_node_types: Vec<u8> = Vec::new();
+    let mut storage_pf_key_frag_hexs: Vec<Vec<u8>> = Vec::new();
+    let mut storage_pf_key_frag_is_odd: Vec<u8> = Vec::new();
+    let mut storage_pf_key_frag_byte_len: Vec<BigUint> = Vec::new();
+    let key_hexs = storage_pf_key_bytes
+        .iter()
+        .map(|x| vec![x / 16, x % 16])
+        .collect::<Vec<Vec<u8>>>()
+        .concat();
+    let mut hex_idx = 0;
+    for idx in 0..storage_pf_max_depth {
+        if idx < storage_pf.proof.len() - 1 {
+            let mut node = storage_pf.proof[idx].to_vec();
+            node.extend(vec![0; storage_pf_max_branch_bytes - node.len()]);
+            storage_pf_nodes.push(node);
+        } else if idx < storage_pf_max_depth - 1 {
+            let dummy_branch_str =
+		"f1808080808080808080808080808080a0000000000000000000000000000000000000000000000000000000000000000080";
+            let mut node = Vec::from_hex(dummy_branch_str).unwrap();
+            node.extend(vec![0; storage_pf_max_branch_bytes - node.len()]);
+            storage_pf_nodes.push(node);
+        }
+        let mut node_type = 0;
+        if idx < storage_pf.proof.len() {
+            let decode: Vec<Vec<u8>> = decode_list(&storage_pf.proof[idx]);
+            if decode.len() == 2 {
+                if idx < storage_pf.proof.len() - 1 {
+                    node_type = 1;
+                }
+                let hexs = decode[0]
+                    .iter()
+                    .map(|x| vec![x / 16, x % 16])
+                    .collect::<Vec<Vec<u8>>>()
+                    .concat();
+                if hexs[0] % 2 == 0 {
+                    let mut hex_push: Vec<u8> = hexs[2..].to_vec();
+                    hex_idx += hex_push.len();
+                    hex_push.extend(vec![0; 64 - hex_push.len()]);
+                    storage_pf_key_frag_hexs.push(hex_push);
+                    storage_pf_key_frag_is_odd.push(0);
+                } else {
+                    let mut hex_push: Vec<u8> = hexs[1..].to_vec();
+                    hex_idx += hex_push.len();
+                    hex_push.extend(vec![0; 64 - hex_push.len()]);
+                    storage_pf_key_frag_hexs.push(hex_push);
+                    storage_pf_key_frag_is_odd.push(1);
+                }
+                storage_pf_key_frag_byte_len.push(BigUint::from(decode[0].len()));
+            } else {
+                let mut hex_push: Vec<u8> = vec![key_hexs[hex_idx]];
+                hex_idx += 1;
+                hex_push.extend(vec![0; 63]);
+                storage_pf_key_frag_hexs.push(hex_push);
+                storage_pf_key_frag_is_odd.push(1);
+                storage_pf_key_frag_byte_len.push(BigUint::from(1u64));
+            }
+        } else {
+            storage_pf_key_frag_hexs.push(vec![0; 64]);
+            storage_pf_key_frag_is_odd.push(0);
+            storage_pf_key_frag_byte_len.push(BigUint::from(0u64));
+        }
+        if idx < storage_pf_max_depth - 1 {
+            storage_pf_node_types.push(node_type);
+        }
+    }
+    let storage_pf_depth = storage_pf.proof.len();
+
+    EthBlockAcctStorageInput {
+        block_hash: (Some(block_hash.0.clone()), Some(block_hash.1.clone())),
+        addr: Some(addr_out),
+        slot: (Some(slot_out.0.clone()), Some(slot_out.1.clone())),
+        block_header,
+
+        acct_pf_key_bytes: acct_pf_key_bytes.into_iter().map(Some).collect(),
+        acct_pf_value_bytes: acct_pf_value_bytes.into_iter().map(Some).collect(),
+        acct_pf_value_byte_len: Some(BigUint::from(acct_pf_value_byte_len)),
+        acct_pf_root_hash_bytes: acct_pf_root_hash_bytes.into_iter().map(Some).collect(),
+        acct_pf_leaf_bytes: acct_pf_leaf_bytes.into_iter().map(Some).collect(),
+        acct_pf_nodes: acct_pf_nodes
+            .into_iter()
+            .map(|x| x.into_iter().map(Some).collect())
+            .collect(),
+        acct_pf_node_types: acct_pf_node_types.into_iter().map(Some).collect(),
+        acct_pf_depth: Some(BigUint::from(acct_pf_depth)),
+        acct_pf_key_frag_hexs: acct_pf_key_frag_hexs
+            .into_iter()
+            .map(|x| x.into_iter().map(Some).collect())
+            .collect(),
+        acct_pf_key_frag_is_odd: acct_pf_key_frag_is_odd.into_iter().map(Some).collect(),
+        acct_pf_key_frag_byte_len: acct_pf_key_frag_byte_len.into_iter().map(Some).collect(),
+        acct_pf_key_byte_len,
+        acct_pf_value_max_byte_len,
+        acct_pf_max_depth,
+
+        storage_pf_key_bytes: storage_pf_key_bytes.into_iter().map(Some).collect(),
+        storage_pf_value_bytes: storage_pf_value_bytes.into_iter().map(Some).collect(),
+        storage_pf_value_byte_len: Some(BigUint::from(storage_pf_value_byte_len)),
+        storage_pf_root_hash_bytes: storage_pf_root_hash_bytes.into_iter().map(Some).collect(),
+        storage_pf_leaf_bytes: storage_pf_leaf_bytes.into_iter().map(Some).collect(),
+        storage_pf_nodes: storage_pf_nodes
+            .into_iter()
+            .map(|x| x.into_iter().map(Some).collect())
+            .collect(),
+        storage_pf_node_types: storage_pf_node_types.into_iter().map(Some).collect(),
+        storage_pf_depth: Some(BigUint::from(storage_pf_depth)),
+        storage_pf_key_frag_hexs: storage_pf_key_frag_hexs
+            .into_iter()
+            .map(|x| x.into_iter().map(Some).collect())
+            .collect(),
+        storage_pf_key_frag_is_odd: storage_pf_key_frag_is_odd.into_iter().map(Some).collect(),
+        storage_pf_key_frag_byte_len: storage_pf_key_frag_byte_len.into_iter().map(Some).collect(),
+        storage_pf_key_byte_len,
+        storage_pf_value_max_byte_len,
+        storage_pf_max_depth,
+    }
+}
+
+pub fn get_acct_rlp(pf: &EIP1186ProofResponse) -> Vec<u8> {
+    let mut rlp: RlpStream = RlpStream::new_list(4);
+    rlp.append(&pf.nonce);
+    rlp.append(&pf.balance);
+    rlp.append(&pf.storage_hash);
+    rlp.append(&pf.code_hash);
+    rlp.out().into()
+}
 
 pub fn get_block_rlp(block: Block<H256>) -> Vec<u8> {
     let mut rlp = RlpStream::new_list(16);

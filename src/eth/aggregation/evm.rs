@@ -198,10 +198,11 @@ pub fn gen_evm_verifier(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::eth::block_header::{
-        aggregation::load_aggregation_circuit_degree, EthBlockHeaderHashCircuit,
+    use crate::eth::{
+        aggregation::load_aggregation_circuit_degree, block_header::EthBlockHeaderHashCircuit,
     };
+
+    use super::*;
     use ark_std::{end_timer, start_timer};
     use halo2_proofs::dev::MockProver;
 

@@ -124,10 +124,10 @@ pub struct RlpArrayPrefixParsed<F: Field> {
 
 #[derive(Clone, Debug)]
 pub struct RlpFieldTrace<F: Field> {
-    rlp_trace: RlcTrace<F>,
-    prefix: AssignedValue<F>,
-    len_trace: RlcTrace<F>,
-    field_trace: RlcTrace<F>,
+    pub rlp_trace: RlcTrace<F>,
+    pub prefix: AssignedValue<F>,
+    pub len_trace: RlcTrace<F>,
+    pub field_trace: RlcTrace<F>,
 
     max_field_len: usize,
 }

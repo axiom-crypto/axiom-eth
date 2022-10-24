@@ -1,3 +1,10 @@
+use super::{EthConfigParams as EthBlockHeaderConfigParams, Network, Strategy, NETWORK};
+use crate::{
+    keccak::{print_bytes, KeccakChip},
+    rlp::rlc::{RlcFixedTrace, RlcTrace},
+    rlp::rlp::{RlpArrayChip, RlpArrayTrace},
+};
+use eth_types::Field;
 #[cfg(feature = "input_gen")]
 use ethers_providers::{Http, Provider};
 use halo2_base::{
@@ -39,21 +46,11 @@ use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 use std::{cmp::max, fs};
 
-use eth_types::Field;
-
-use crate::{
-    keccak::{print_bytes, KeccakChip},
-    rlp::rlc::{RlcFixedTrace, RlcTrace},
-    rlp::rlp::{RlpArrayChip, RlpArrayTrace},
-};
-
-#[cfg(feature = "aggregation")]
-pub mod aggregation;
-
 const MAINNET_EXTRA_DATA_RLP_MAX_BYTES: usize = 33;
-const MAINNET_BLOCK_HEADER_RLP_MAX_BYTES: usize = 1 + 2 + 520 + MAINNET_EXTRA_DATA_RLP_MAX_BYTES;
+pub const MAINNET_BLOCK_HEADER_RLP_MAX_BYTES: usize =
+    1 + 2 + 520 + MAINNET_EXTRA_DATA_RLP_MAX_BYTES;
 const GOERLI_EXTRA_DATA_RLP_MAX_BYTES: usize = 98;
-const GOERLI_BLOCK_HEADER_RLP_MAX_BYTES: usize = 1 + 2 + 520 + GOERLI_EXTRA_DATA_RLP_MAX_BYTES;
+pub const GOERLI_BLOCK_HEADER_RLP_MAX_BYTES: usize = 1 + 2 + 520 + GOERLI_EXTRA_DATA_RLP_MAX_BYTES;
 
 // parentHash	256 bits	32	33	264
 // ommersHash	256 bits	32	33	264
@@ -74,55 +71,98 @@ const GOERLI_BLOCK_HEADER_RLP_MAX_BYTES: usize = 1 + 2 + 520 + GOERLI_EXTRA_DATA
 #[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub struct EthBlockHeaderTrace<F: Field> {
-    rlp_trace: RlcTrace<F>,
-    parent_hash: RlcTrace<F>,
-    ommers_hash: RlcTrace<F>,
-    beneficiary: RlcTrace<F>,
-    state_root: RlcTrace<F>,
-    transactions_root: RlcTrace<F>,
-    receipts_root: RlcTrace<F>,
-    logs_bloom: RlcTrace<F>,
-    difficulty: RlcTrace<F>,
-    number: RlcTrace<F>,
-    gas_limit: RlcTrace<F>,
-    gas_used: RlcTrace<F>,
-    timestamp: RlcTrace<F>,
-    extra_data: RlcTrace<F>,
-    mix_hash: RlcTrace<F>,
-    nonce: RlcTrace<F>,
-    basefee: RlcTrace<F>,
+    pub rlp_trace: RlcTrace<F>,
+    pub parent_hash: RlcTrace<F>,
+    pub ommers_hash: RlcTrace<F>,
+    pub beneficiary: RlcTrace<F>,
+    pub state_root: RlcTrace<F>,
+    pub transactions_root: RlcTrace<F>,
+    pub receipts_root: RlcTrace<F>,
 
-    block_hash: RlcFixedTrace<F>,
+    pub logs_bloom: RlcTrace<F>,
+    pub difficulty: RlcTrace<F>,
+    pub number: RlcTrace<F>,
+    pub gas_limit: RlcTrace<F>,
+    pub gas_used: RlcTrace<F>,
+    pub timestamp: RlcTrace<F>,
+    pub extra_data: RlcTrace<F>,
+    pub mix_hash: RlcTrace<F>,
+    pub nonce: RlcTrace<F>,
+    pub basefee: RlcTrace<F>,
 
-    block_hash_bytes: Vec<AssignedValue<F>>,
-    block_hash_hexes: Vec<AssignedValue<F>>,
+    pub block_hash: RlcFixedTrace<F>,
 
-    prefix: AssignedValue<F>,
-    len_trace: RlcTrace<F>,
-    field_prefixs: Vec<AssignedValue<F>>,
-    field_len_traces: Vec<RlcTrace<F>>,
+    pub block_hash_bytes: Vec<AssignedValue<F>>,
+    pub block_hash_hexes: Vec<AssignedValue<F>>,
+
+    pub prefix: AssignedValue<F>,
+    pub len_trace: RlcTrace<F>,
+    pub field_prefixs: Vec<AssignedValue<F>>,
+    pub field_len_traces: Vec<RlcTrace<F>>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum Strategy {
-    Simple,
-    SimplePlus,
-}
+pub fn decompose_eth_block_header<F: Field>(
+    ctx: &mut Context<'_, F>,
+    rlp: &RlpArrayChip<F>,
+    keccak: &KeccakChip<F>,
+    block_header: &Vec<AssignedValue<F>>,
+    network: Network,
+) -> Result<EthBlockHeaderTrace<F>, Error> {
+    let extra_data_rlp_max_bytes = match network {
+        Network::Mainnet => MAINNET_EXTRA_DATA_RLP_MAX_BYTES,
+        Network::Goerli => GOERLI_EXTRA_DATA_RLP_MAX_BYTES,
+    };
+    let max_len = 1 + 2 + 520 + extra_data_rlp_max_bytes;
+    let max_field_lens =
+        vec![33, 33, 21, 33, 33, 33, 259, 8, 4, 5, 5, 5, extra_data_rlp_max_bytes, 33, 9, 6];
+    let num_fields = 16;
+    let rlp_array_trace = rlp.decompose_rlp_array(
+        ctx,
+        &rlp.range,
+        block_header,
+        max_field_lens,
+        max_len,
+        num_fields,
+    )?;
+    let (hash_bytes, hash_hexes) = keccak.keccak_bytes_var_len(
+        ctx,
+        &rlp.range,
+        &block_header,
+        rlp_array_trace.array_trace.rlc_len.clone(),
+        479,
+        max_len,
+    )?;
+    let block_hash = rlp.rlc.compute_rlc_fixed_len(ctx, &rlp.range, &hash_bytes, 32)?;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct EthBlockHeaderConfigParams {
-    pub degree: u32,
-    pub num_basic_chips: usize,
-    pub range_strategy: Strategy,
-    pub num_advice: Vec<usize>,
-    pub num_lookup_advice: Vec<usize>,
-    pub num_fixed: usize,
-    pub lookup_bits: usize,
+    let block_header_trace = EthBlockHeaderTrace {
+        rlp_trace: rlp_array_trace.array_trace.clone(),
+        parent_hash: rlp_array_trace.field_traces[0].clone(),
+        ommers_hash: rlp_array_trace.field_traces[1].clone(),
+        beneficiary: rlp_array_trace.field_traces[2].clone(),
+        state_root: rlp_array_trace.field_traces[3].clone(),
+        transactions_root: rlp_array_trace.field_traces[4].clone(),
+        receipts_root: rlp_array_trace.field_traces[5].clone(),
+        logs_bloom: rlp_array_trace.field_traces[6].clone(),
+        difficulty: rlp_array_trace.field_traces[7].clone(),
+        number: rlp_array_trace.field_traces[8].clone(),
+        gas_limit: rlp_array_trace.field_traces[9].clone(),
+        gas_used: rlp_array_trace.field_traces[10].clone(),
+        timestamp: rlp_array_trace.field_traces[11].clone(),
+        extra_data: rlp_array_trace.field_traces[12].clone(),
+        mix_hash: rlp_array_trace.field_traces[13].clone(),
+        nonce: rlp_array_trace.field_traces[14].clone(),
+        basefee: rlp_array_trace.field_traces[15].clone(),
 
-    pub keccak_num_advice: usize,
-    pub keccak_num_xor: usize,
-    pub keccak_num_xorandn: usize,
-    // pub keccak_num_fixed: usize,
+        block_hash: block_hash,
+        block_hash_bytes: hash_bytes,
+        block_hash_hexes: hash_hexes,
+
+        prefix: rlp_array_trace.prefix.clone(),
+        len_trace: rlp_array_trace.len_trace.clone(),
+        field_prefixs: rlp_array_trace.field_prefixs.clone(),
+        field_len_traces: rlp_array_trace.field_len_traces.clone(),
+    };
+    Ok(block_header_trace)
 }
 
 #[derive(Clone, Debug)]
@@ -178,73 +218,7 @@ impl<F: Field> EthBlockHeaderChip<F> {
         range: &RangeConfig<F>,
         block_header: &Vec<AssignedValue<F>>,
     ) -> Result<EthBlockHeaderTrace<F>, Error> {
-        let max_len = 1 + 2 + 520 + GOERLI_EXTRA_DATA_RLP_MAX_BYTES;
-        let max_field_lens = vec![
-            33,
-            33,
-            21,
-            33,
-            33,
-            33,
-            259,
-            8,
-            4,
-            5,
-            5,
-            5,
-            GOERLI_EXTRA_DATA_RLP_MAX_BYTES,
-            33,
-            9,
-            6,
-        ];
-        let num_fields = 16;
-        let rlp_array_trace = self.rlp.decompose_rlp_array(
-            ctx,
-            range,
-            block_header,
-            max_field_lens,
-            max_len,
-            num_fields,
-        )?;
-        let (hash_bytes, hash_hexes) = self.keccak.keccak_bytes_var_len(
-            ctx,
-            range,
-            &block_header,
-            rlp_array_trace.array_trace.rlc_len.clone(),
-            479,
-            max_len,
-        )?;
-        let block_hash = self.rlp.rlc.compute_rlc_fixed_len(ctx, range, &hash_bytes, 32)?;
-
-        let block_header_trace = EthBlockHeaderTrace {
-            rlp_trace: rlp_array_trace.array_trace.clone(),
-            parent_hash: rlp_array_trace.field_traces[0].clone(),
-            ommers_hash: rlp_array_trace.field_traces[1].clone(),
-            beneficiary: rlp_array_trace.field_traces[2].clone(),
-            state_root: rlp_array_trace.field_traces[3].clone(),
-            transactions_root: rlp_array_trace.field_traces[4].clone(),
-            receipts_root: rlp_array_trace.field_traces[5].clone(),
-            logs_bloom: rlp_array_trace.field_traces[6].clone(),
-            difficulty: rlp_array_trace.field_traces[7].clone(),
-            number: rlp_array_trace.field_traces[8].clone(),
-            gas_limit: rlp_array_trace.field_traces[9].clone(),
-            gas_used: rlp_array_trace.field_traces[10].clone(),
-            timestamp: rlp_array_trace.field_traces[11].clone(),
-            extra_data: rlp_array_trace.field_traces[12].clone(),
-            mix_hash: rlp_array_trace.field_traces[13].clone(),
-            nonce: rlp_array_trace.field_traces[14].clone(),
-            basefee: rlp_array_trace.field_traces[15].clone(),
-
-            block_hash: block_hash,
-            block_hash_bytes: hash_bytes,
-            block_hash_hexes: hash_hexes,
-
-            prefix: rlp_array_trace.prefix.clone(),
-            len_trace: rlp_array_trace.len_trace.clone(),
-            field_prefixs: rlp_array_trace.field_prefixs.clone(),
-            field_len_traces: rlp_array_trace.field_len_traces.clone(),
-        };
-        Ok(block_header_trace)
+        decompose_eth_block_header(ctx, &self.rlp, &self.keccak, block_header, NETWORK)
     }
 
     // headers[0] is the earliest block
@@ -351,14 +325,17 @@ pub struct EthBlockHeaderHashCircuit<F> {
 
 impl<F> Default for EthBlockHeaderHashCircuit<F> {
     fn default() -> Self {
+        let header_rlp_max_bytes = match NETWORK {
+            Network::Mainnet => MAINNET_BLOCK_HEADER_RLP_MAX_BYTES,
+            Network::Goerli => GOERLI_BLOCK_HEADER_RLP_MAX_BYTES,
+        };
         let blocks_str = std::fs::read_to_string("data/headers/default_blocks.json").unwrap();
         let blocks: Vec<String> = serde_json::from_str(blocks_str.as_str()).unwrap();
         let mut input_bytes = Vec::new();
         for block_str in blocks.iter() {
             let mut block_vec: Vec<Option<u8>> =
                 Vec::from_hex(block_str).unwrap().iter().map(|y| Some(*y)).collect();
-            block_vec
-                .append(&mut vec![Some(0u8); MAINNET_BLOCK_HEADER_RLP_MAX_BYTES - block_vec.len()]);
+            block_vec.append(&mut vec![Some(0u8); header_rlp_max_bytes - block_vec.len()]);
             input_bytes.push(block_vec);
         }
 
@@ -387,7 +364,11 @@ impl<F: Field> EthBlockHeaderHashCircuit<F> {
 
     // this is read from file generated by python script
     // for testing purposes only; the production usage uses binary serialization
-    pub fn from_file(last_block_number: u64, num_blocks: u64) -> Self {
+    pub fn from_file(network: Network, last_block_number: u64, num_blocks: u64) -> Self {
+        let header_rlp_max_bytes = match network {
+            Network::Mainnet => MAINNET_BLOCK_HEADER_RLP_MAX_BYTES,
+            Network::Goerli => GOERLI_BLOCK_HEADER_RLP_MAX_BYTES,
+        };
         let path = format!("./data/headers/{:06x}_{}.json", last_block_number, num_blocks);
         let blocks_str = std::fs::read_to_string(path.as_str()).unwrap();
         let blocks: Vec<String> = serde_json::from_str(blocks_str.as_str()).unwrap();
@@ -395,8 +376,7 @@ impl<F: Field> EthBlockHeaderHashCircuit<F> {
         for block_str in blocks.iter() {
             let mut block_vec: Vec<Option<u8>> =
                 Vec::from_hex(block_str).unwrap().iter().map(|y| Some(*y)).collect();
-            block_vec
-                .append(&mut vec![Some(0u8); MAINNET_BLOCK_HEADER_RLP_MAX_BYTES - block_vec.len()]);
+            block_vec.append(&mut vec![Some(0u8); header_rlp_max_bytes - block_vec.len()]);
             input_bytes.push(block_vec);
         }
 
@@ -415,9 +395,14 @@ impl<F: Field> EthBlockHeaderHashCircuit<F> {
     #[cfg(feature = "input_gen")]
     pub fn from_provider(
         provider: &Provider<Http>,
+        network: Network,
         last_block_number: u64,
         num_blocks: u64,
     ) -> Self {
+        let header_rlp_max_bytes = match network {
+            Network::Mainnet => MAINNET_BLOCK_HEADER_RLP_MAX_BYTES,
+            Network::Goerli => GOERLI_BLOCK_HEADER_RLP_MAX_BYTES,
+        };
         let (block_rlps, instance) = crate::input_gen::get_blocks_input(
             provider,
             last_block_number - num_blocks + 1,
@@ -431,11 +416,7 @@ impl<F: Field> EthBlockHeaderHashCircuit<F> {
                     .into_iter()
                     .map(|y| Some(y))
                     .into_iter()
-                    .chain(
-                        (0..GOERLI_BLOCK_HEADER_RLP_MAX_BYTES - block_len)
-                            .map(|_| Some(0u8))
-                            .into_iter(),
-                    )
+                    .chain((0..header_rlp_max_bytes - block_len).map(|_| Some(0u8)).into_iter())
                     .collect_vec()
             })
             .collect_vec();
@@ -749,6 +730,7 @@ mod tests {
 
     #[test]
     pub fn test_mock_one_eth_header() {
+        assert_eq!(NETWORK, Network::Mainnet);
         let params_str = std::fs::read_to_string("configs/block_header.config").unwrap();
         let params: crate::keccak::KeccakCircuitParams =
             serde_json::from_str(params_str.as_str()).unwrap();
@@ -767,6 +749,7 @@ mod tests {
 
     #[test]
     pub fn test_eth_block_header() -> Result<(), Box<dyn std::error::Error>> {
+        assert_eq!(NETWORK, Network::Mainnet);
         let params_str = std::fs::read_to_string("configs/block_header.config").unwrap();
         let params: crate::keccak::KeccakCircuitParams =
             serde_json::from_str(params_str.as_str()).unwrap();
