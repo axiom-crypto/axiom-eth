@@ -1,5 +1,6 @@
 #![allow(unused_imports, dead_code, unused_variables)]
 #![feature(int_log)]
+#![feature(const_fmt_arguments_new)]
 // different memory allocator options:
 // empirically jemalloc still seems to give best speeds for witness generation
 #[cfg(feature = "jemalloc")]

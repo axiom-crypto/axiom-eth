@@ -302,10 +302,7 @@ pub fn get_block_acct_storage_input(
     slot_value.extend_from_slice(&decode_leaf[1][1..]);
     slot_value.extend(vec![0; 32 - slot_value.len()]);
     hash_inp.extend(slot_value);
-    /*for byte in &hash_inp {
-        print!("{:02x}", *byte);
-    }
-    println!("");*/
+    dbg!(hex::encode(&hash_inp));
     hasher.update(hash_inp);
     let pub_hash = hasher.finalize().to_vec();
     dbg!(BigUint::from_bytes_be(&pub_hash).to_str_radix(16));

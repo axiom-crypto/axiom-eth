@@ -210,9 +210,11 @@ mod tests {
 
     impl aggregation::TargetCircuit for EthMultiBlockHeaderCircuit {
         const N_PROOFS: usize = 1;
-        const NAME: &'static str = "eth_multi_block_header";
 
         type Circuit = EthBlockHeaderHashCircuit<Fr>;
+        fn name() -> String {
+            "eth_multi_block_header".to_string()
+        }
     }
 
     #[test]

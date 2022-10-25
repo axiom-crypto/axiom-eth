@@ -25,6 +25,7 @@ use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, Write};
 
+#[derive(Clone, Debug)]
 pub struct KeccakCircuit {
     input: Vec<Vec<u8>>,
     k: usize,
@@ -32,7 +33,7 @@ pub struct KeccakCircuit {
 
 impl Default for KeccakCircuit {
     fn default() -> Self {
-        Self { input: vec![vec![]], k: 20 }
+        Self { input: vec![vec![]], k: 0 }
     }
 }
 
@@ -339,4 +340,135 @@ fn plot_keccak() {
     halo2_proofs::dev::CircuitLayout::default()
         .render::<Fr, KeccakCircuit, _>(8, &circuit, &root)
         .unwrap();
+}
+
+#[cfg(feature = "aggregation")]
+mod aggregation {
+    use super::*;
+    #[cfg(feature = "evm")]
+    use crate::eth::aggregation::evm::evm_verify;
+    use crate::eth::aggregation::{
+        evm::{gen_aggregation_evm_verifier, gen_evm_verifier, gen_proof},
+        load_aggregation_circuit_degree,
+    };
+    use plonk_verifier::system::halo2::{
+        aggregation::{create_snark_shplonk, gen_pk, gen_srs, AggregationCircuit, TargetCircuit},
+        transcript::evm::EvmTranscript,
+    };
+    use std::fs::File;
+
+    struct MultiKeccakCircuit<const N_PROOFS: usize>;
+
+    impl<const N: usize> TargetCircuit for MultiKeccakCircuit<N> {
+        const N_PROOFS: usize = N;
+
+        type Circuit = KeccakCircuit;
+        fn name() -> String {
+            format!("keccak_{}", N)
+        }
+    }
+
+    #[test]
+    pub fn test_aggregate_single_keccak_snark() {
+        let config: KeccakCircuitParams =
+            serde_json::from_reader(File::open("configs/keccak.config").unwrap()).unwrap();
+        let k = config.degree;
+        let input = (0..config.num_keccak_f)
+            .map(|_| {
+                let input_bytes: Vec<u8> = (0..128).map(|_| rand::random::<u8>()).collect();
+                input_bytes.into_iter().flat_map(|x| [x % 16, x / 16].into_iter()).collect()
+            })
+            .collect();
+        let circuit = KeccakCircuit { input, k: k as usize };
+        let instances = vec![];
+
+        let params = gen_srs(k);
+        let snark = create_snark_shplonk::<MultiKeccakCircuit<1>>(
+            &params,
+            vec![circuit],
+            vec![instances],
+            None,
+        );
+        let snarks = vec![snark];
+
+        std::env::set_var("VERIFY_CONFIG", "./configs/keccak_agg_1.config");
+        let k = load_aggregation_circuit_degree();
+        let params = gen_srs(k);
+        let agg_circuit = AggregationCircuit::new(&params, snarks, true);
+        let pk = gen_pk(&params, &agg_circuit, "keccak_agg_1");
+
+        let deployment_code = gen_aggregation_evm_verifier(
+            &params,
+            pk.get_vk(),
+            agg_circuit.num_instance(),
+            AggregationCircuit::accumulator_indices(),
+        );
+        dbg!(deployment_code.len());
+
+        let proof_time = start_timer!(|| "create agg_circuit proof");
+        let proof = gen_proof::<
+            _,
+            _,
+            EvmTranscript<G1Affine, _, _, _>,
+            EvmTranscript<G1Affine, _, _, _>,
+        >(&params, &pk, agg_circuit.clone(), agg_circuit.instances());
+        end_timer!(proof_time);
+
+        #[cfg(feature = "evm")]
+        evm_verify(deployment_code, agg_circuit.instances(), proof);
+    }
+
+    #[test]
+    pub fn test_aggregate_multi_keccak_snark() {
+        const N_PROOFS: usize = 2;
+
+        let config: KeccakCircuitParams =
+            serde_json::from_reader(File::open("configs/keccak.config").unwrap()).unwrap();
+        let k = config.degree;
+        let input = (0..config.num_keccak_f)
+            .map(|_| {
+                let input_bytes: Vec<u8> = (0..128).map(|_| rand::random::<u8>()).collect();
+                input_bytes.into_iter().flat_map(|x| [x % 16, x / 16].into_iter()).collect()
+            })
+            .collect();
+        let circuit = KeccakCircuit { input, k: k as usize };
+        let instances = vec![];
+
+        let params = gen_srs(k);
+        let snarks = (0..N_PROOFS)
+            .map(|_| {
+                create_snark_shplonk::<MultiKeccakCircuit<1>>(
+                    &params,
+                    vec![circuit.clone()],
+                    vec![instances.clone()],
+                    None,
+                )
+            })
+            .collect_vec();
+
+        std::env::set_var("VERIFY_CONFIG", "./configs/keccak_agg_2.config");
+        let k = load_aggregation_circuit_degree();
+        let params = gen_srs(k);
+        let agg_circuit = AggregationCircuit::new(&params, snarks, true);
+        let pk = gen_pk(&params, &agg_circuit, "keccak_agg_2");
+
+        let deployment_code = gen_aggregation_evm_verifier(
+            &params,
+            pk.get_vk(),
+            agg_circuit.num_instance(),
+            AggregationCircuit::accumulator_indices(),
+        );
+
+        let proof_time = start_timer!(|| "create agg_circuit proof");
+        let proof = gen_proof::<
+            _,
+            _,
+            EvmTranscript<G1Affine, _, _, _>,
+            EvmTranscript<G1Affine, _, _, _>,
+        >(&params, &pk, agg_circuit.clone(), agg_circuit.instances());
+        end_timer!(proof_time);
+
+        #[cfg(feature = "evm")]
+        evm_verify(deployment_code, agg_circuit.instances(), proof);
+    }
 }

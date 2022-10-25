@@ -597,9 +597,11 @@ impl<F: Field> Circuit<F> for EthSingleAcctStorageProof<F> {
 
 impl TargetCircuit for EthSingleAcctStorageProof<Fr> {
     const N_PROOFS: usize = 1;
-    const NAME: &'static str = "storage_1";
 
     type Circuit = Self;
+    fn name() -> String {
+        "storage_1".to_string()
+    }
 }
 
 #[cfg(feature = "input_gen")]

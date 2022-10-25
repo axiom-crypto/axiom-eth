@@ -2,7 +2,6 @@ use clap::Parser;
 use eth_types::ToBigEndian;
 use ethers_core::types::{Address, U256};
 use ethers_providers::{Http, Provider};
-use halo2_base::utils::fe_to_biguint;
 use halo2_curves::bn256::{Fr, G1Affine};
 use halo2_mpt::{
     eth::{
@@ -111,8 +110,8 @@ fn main() {
             format!(
                 "./data/calldata_storage_{:x}_{}_{}.dat",
                 block_number,
-                hex::encode(address.as_bytes()),
-                hex::encode(&slot.to_be_bytes())
+                BigUint::from_bytes_be(address.as_bytes()).to_str_radix(16),
+                BigUint::from_bytes_be(&slot.to_be_bytes()).to_str_radix(16)
             )
             .as_str(),
         )

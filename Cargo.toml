@@ -35,7 +35,7 @@ ff = "0.12.0"
 group = "0.11"
 halo2_base = { git = "ssh://github.com/axiom-crypto/halo2-lib-working.git", package = "halo2_base", default-features = false }
 halo2_proofs = { git = "https://github.com/privacy-scaling-explorations/halo2.git", tag = "v2022_09_10" }
-halo2_curves = { git = "https://github.com/privacy-scaling-explorations/halo2curves", tag = "0.2.1", package = "halo2curves" }
+halo2_curves = { git = "https://github.com/privacy-scaling-explorations/halo2curves", tag = "0.3.0", package = "halo2curves" }
 
 # crypto
 rlp = "0.5.1"
