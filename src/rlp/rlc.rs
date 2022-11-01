@@ -186,6 +186,7 @@ impl<F: Field> RlcChip<F> {
                 let rlc_assigned = ctx.assign_cell(
                     rlc.clone(),
                     self.basic_chips[chip_idx].rlc,
+                    #[cfg(feature = "debug")]
                     &self.context_id.clone(),
                     chip_idx,
                     row_offset + idx,
@@ -201,6 +202,7 @@ impl<F: Field> RlcChip<F> {
                 let val_assigned = ctx.assign_cell(
                     val.clone(),
                     self.basic_chips[chip_idx].val,
+                    #[cfg(feature = "debug")]
                     &self.context_id.clone(),
                     chip_idx,
                     row_offset + idx,
@@ -457,7 +459,7 @@ impl<F: Field> RlcChip<F> {
         cells: &Vec<AssignedValue<F>>,
         idx: &AssignedValue<F>,
     ) -> Result<AssignedValue<F>, Error> {
-        let ind_vec = range.gate.idx_to_indicator(ctx, &Existing(&idx), cells.len())?;
+        let ind_vec = range.gate.idx_to_indicator(ctx, Existing(&idx), cells.len())?;
         let mut inputs = Vec::new();
         let mut gate_offsets = Vec::new();
         let mut running_sum = Value::known(F::from(0));
@@ -736,8 +738,8 @@ impl<F: Field> RlcChip<F> {
 
         let (_, _, len_sum) = range.gate.inner_product(
             ctx,
-            &rlc_and_len_inputs.iter().map(|(a, b)| Constant(F::from(1))).collect(),
-            &rlc_and_len_inputs.iter().map(|(a, b)| Existing(&b)).collect(),
+            rlc_and_len_inputs.iter().map(|(a, b)| Constant(F::one())),
+            rlc_and_len_inputs.iter().map(|(a, b)| Existing(&b)),
         )?;
         // println!("TEST {:?} {:?}", len_sum.value(), concat.1.value());
         range.gate.assert_equal(ctx, &Existing(&len_sum), &Existing(&concat.1))?;
@@ -824,7 +826,7 @@ impl<F: Field> RlcChip<F> {
         let total_len =
             range.gate.select_from_idx(
                 ctx,
-                &(0..max_num_frags + 1)
+                (0..max_num_frags + 1)
                     .map(|idx| {
                         if idx == 0 {
                             Constant(F::zero())
@@ -833,7 +835,7 @@ impl<F: Field> RlcChip<F> {
                         }
                     })
                     .collect(),
-                &Existing(&num_frags),
+                Existing(&num_frags),
             )?;
         // println!("TEST2 {:?} {:?}", total_len.value(), concat.1.value());
         range.gate.assert_equal(ctx, &Existing(&total_len), &Existing(&concat.1))?;
@@ -1104,33 +1106,25 @@ impl<F: Field> Circuit<F> for TestCircuit<F> {
                             ("default".to_string(), config.range.gate.num_advice),
                             ("rlc".to_string(), config.rlc.basic_chips.len()),
                         ],
+                        fixed_columns: config.range.gate.constants.clone(),
                     },
                 );
                 let ctx = &mut aux;
                 ctx.challenge.insert("gamma".to_string(), gamma);
 
-                let inputs_assigned = config.range.gate.assign_region_smart(
+                let inputs_assigned = config.range.gate.assign_witnesses(
                     ctx,
                     self.inputs
                         .iter()
                         .map(|x| {
-                            Witness(
-                                x.map(|v| Value::known(F::from(v as u64)))
-                                    .unwrap_or(Value::unknown()),
-                            )
+                            x.map(|v| Value::known(F::from(v as u64))).unwrap_or(Value::unknown())
                         })
                         .collect(),
-                    vec![],
-                    vec![],
-                    vec![],
                 )?;
-                let len_assigned = config.range.gate.assign_region_smart(
-                    ctx,
-                    vec![Witness(Value::known(F::from(self.len as u64)))],
-                    vec![],
-                    vec![],
-                    vec![],
-                )?;
+                let len_assigned = config
+                    .range
+                    .gate
+                    .assign_witnesses(ctx, vec![Value::known(F::from(self.len as u64))])?;
 
                 // println!("len_assigned {:?}", len_assigned[0]);
                 let rlc_trace = config.rlc.compute_rlc(

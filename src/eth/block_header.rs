@@ -239,8 +239,11 @@ impl<F: Field> EthBlockHeaderChip<F> {
                 traces[idx].block_hash.rlc_val.cell(),
                 traces[idx + 1].parent_hash.rlc_val.cell(),
             )?;
-            ctx.constants_to_assign
-                .push((F::from(32), Some(traces[idx + 1].parent_hash.rlc_len.cell())));
+            self.rlp.range.gate.assert_is_const(
+                ctx,
+                &traces[idx + 1].parent_hash.rlc_len,
+                F::from(32),
+            )?;
         }
         Ok(traces)
     }
@@ -260,13 +263,10 @@ pub fn limbs_be_to_u128<F: FieldExt>(
             let (_, _, word) = gate
                 .inner_product(
                     ctx,
-                    &(0..chunk_size).map(|idx| Existing(&limbs[i + idx])).collect_vec(),
-                    &(0..chunk_size)
-                        .rev()
-                        .map(|idx| {
-                            Constant(biguint_to_fe(&(BigUint::from(1u64) << (limb_bits * idx))))
-                        })
-                        .collect_vec(),
+                    (0..chunk_size).map(|idx| Existing(&limbs[i + idx])),
+                    (0..chunk_size).rev().map(|idx| {
+                        Constant(biguint_to_fe(&(BigUint::from(1u64) << (limb_bits * idx))))
+                    }),
                 )
                 .unwrap();
             word
@@ -296,18 +296,14 @@ pub(crate) fn hexes_to_u128<F: FieldExt>(
             let (_, _, word) = gate
                 .inner_product(
                     ctx,
-                    &(0..32).map(|idx| Existing(&hexes[i + idx])).collect_vec(),
-                    &(0..16)
-                        .rev()
-                        .flat_map(|idx| {
-                            [
-                                BigUint::from(1u64) << (4 * 2 * idx),
-                                BigUint::from(1u64) << (4 * (2 * idx + 1)),
-                            ]
-                            .map(|x| Constant(biguint_to_fe(&x)))
-                        })
-                        .into_iter()
-                        .collect_vec(),
+                    (0..32).map(|idx| Existing(&hexes[i + idx])),
+                    (0..16).rev().flat_map(|idx| {
+                        [
+                            BigUint::from(1u64) << (4 * 2 * idx),
+                            BigUint::from(1u64) << (4 * (2 * idx + 1)),
+                        ]
+                        .map(|x| Constant(biguint_to_fe(&x)))
+                    }),
                 )
                 .unwrap();
             word
@@ -484,6 +480,7 @@ impl<F: Field> Circuit<F> for EthBlockHeaderHashCircuit<F> {
                             ("keccak_xor".to_string(), config.keccak.xor_values.len() / 3),
                             ("keccak_xorandn".to_string(), config.keccak.xorandn_values.len() / 4),
                         ],
+                        fixed_columns: config.rlp.range.gate.constants.clone(),
                     },
                 );
                 let ctx = &mut aux;
@@ -493,15 +490,12 @@ impl<F: Field> Circuit<F> for EthBlockHeaderHashCircuit<F> {
                 for input in self.inputs.iter() {
                     let input_assigned = config.rlp.range.gate.assign_region_smart(
                         ctx,
-                        input
-                            .iter()
-                            .map(|x| {
-                                Witness(
-                                    x.map(|v| Value::known(F::from(v as u64)))
-                                        .unwrap_or(Value::unknown()),
-                                )
-                            })
-                            .collect(),
+                        input.iter().map(|x| {
+                            Witness(
+                                x.map(|v| Value::known(F::from(v as u64)))
+                                    .unwrap_or(Value::unknown()),
+                            )
+                        }),
                         vec![],
                         vec![],
                         vec![],
@@ -663,6 +657,7 @@ mod tests {
                                     config.keccak.xorandn_values.len() / 4,
                                 ),
                             ],
+                            fixed_columns: config.rlp.range.gate.constants.clone(),
                         },
                     );
                     let ctx = &mut aux;
@@ -672,15 +667,12 @@ mod tests {
                     for input in self.inputs.iter() {
                         let input_assigned = config.rlp.range.gate.assign_region_smart(
                             ctx,
-                            input
-                                .iter()
-                                .map(|x| {
-                                    Witness(
-                                        x.map(|v| Value::known(F::from(v as u64)))
-                                            .unwrap_or(Value::unknown()),
-                                    )
-                                })
-                                .collect(),
+                            input.iter().map(|x| {
+                                Witness(
+                                    x.map(|v| Value::known(F::from(v as u64)))
+                                        .unwrap_or(Value::unknown()),
+                                )
+                            }),
                             vec![],
                             vec![],
                             vec![],

@@ -373,8 +373,8 @@ impl<F: FieldExt> KeccakChip<F> {
         let len_minus_min_assigned = val[0].clone();
         let is_equal_sum = range.gate.select_from_idx(
             ctx,
-            &(0..in_max_len - in_min_len).map(|idx| Existing(&vals[3 * idx])).collect(),
-            &Existing(&len_minus_min_assigned),
+            (0..in_max_len - in_min_len).map(|idx| Existing(&vals[3 * idx])).collect(),
+            Existing(&len_minus_min_assigned),
         )?;
         // println!("TEST3 {:?} {:?}", is_equal_sum.value(), len_minus_min_assigned.value());
         range.gate.assert_equal(
@@ -386,8 +386,8 @@ impl<F: FieldExt> KeccakChip<F> {
         // check padding val at index `len`
         let idx_len_val = range.gate.select_from_idx(
             ctx,
-            &out_vec_pre[in_min_len..in_max_len + 1].iter().map(|v| Existing(v)).collect(),
-            &Existing(&len_minus_min_assigned),
+            out_vec_pre[in_min_len..in_max_len + 1].iter().map(|v| Existing(v)).collect(),
+            Existing(&len_minus_min_assigned),
         )?;
         range.gate.assert_equal(ctx, &Existing(&idx_len_val), &Constant(F::from(1u64)))?;
 
@@ -431,8 +431,8 @@ impl<F: FieldExt> KeccakChip<F> {
         let max_minus_len_assigned = val2[0].clone();
         let is_zero_sum = range.gate.select_from_idx(
             ctx,
-            &(0..in_max_len + 1 - in_min_len).map(|idx| Existing(&vals2[3 * idx])).collect(),
-            &Existing(&max_minus_len_assigned),
+            (0..in_max_len + 1 - in_min_len).map(|idx| Existing(&vals2[3 * idx])).collect(),
+            Existing(&max_minus_len_assigned),
         )?;
 
         // println!("TEST5 {:?} {:?}", is_zero_sum.value(), max_minus_len_assigned.value());
@@ -567,6 +567,7 @@ impl<F: FieldExt> KeccakChip<F> {
         ctx.assign_cell(
             inputs[0].clone(),
             self.xor_values[3 * id],
+            #[cfg(feature = "debug")]
             &self.xor_id,
             3 * id,
             row_offset,
@@ -575,6 +576,7 @@ impl<F: FieldExt> KeccakChip<F> {
         ctx.assign_cell(
             inputs[1].clone(),
             self.xor_values[3 * id + 1],
+            #[cfg(feature = "debug")]
             &self.xor_id,
             3 * id + 1,
             row_offset,
@@ -583,6 +585,7 @@ impl<F: FieldExt> KeccakChip<F> {
         let mut output = ctx.assign_cell(
             Witness(acc.map(F::from)),
             self.xor_values[3 * id + 2],
+            #[cfg(feature = "debug")]
             &self.xor_id,
             3 * id + 2,
             row_offset,
@@ -594,6 +597,7 @@ impl<F: FieldExt> KeccakChip<F> {
             ctx.assign_cell(
                 Existing(&output),
                 self.xor_values[3 * id],
+                #[cfg(feature = "debug")]
                 &self.xor_id,
                 3 * id,
                 row_offset + idx - 1,
@@ -602,6 +606,7 @@ impl<F: FieldExt> KeccakChip<F> {
             ctx.assign_cell(
                 inputs[idx].clone(),
                 self.xor_values[3 * id + 1],
+                #[cfg(feature = "debug")]
                 &self.xor_id,
                 3 * id + 1,
                 row_offset + idx - 1,
@@ -610,6 +615,7 @@ impl<F: FieldExt> KeccakChip<F> {
             output = ctx.assign_cell(
                 Witness(acc.map(F::from)),
                 self.xor_values[3 * id + 2],
+                #[cfg(feature = "debug")]
                 &self.xor_id,
                 3 * id + 2,
                 row_offset + idx - 1,
@@ -642,6 +648,7 @@ impl<F: FieldExt> KeccakChip<F> {
         ctx.assign_cell(
             Existing(x),
             self.xorandn_values[4 * id],
+            #[cfg(feature = "debug")]
             &self.xorandn_id,
             4 * id,
             row_offset,
@@ -650,6 +657,7 @@ impl<F: FieldExt> KeccakChip<F> {
         ctx.assign_cell(
             Existing(y),
             self.xorandn_values[4 * id + 1],
+            #[cfg(feature = "debug")]
             &self.xorandn_id,
             4 * id + 1,
             row_offset,
@@ -658,6 +666,7 @@ impl<F: FieldExt> KeccakChip<F> {
         ctx.assign_cell(
             Existing(z),
             self.xorandn_values[4 * id + 2],
+            #[cfg(feature = "debug")]
             &self.xorandn_id,
             4 * id + 2,
             row_offset,
@@ -666,6 +675,7 @@ impl<F: FieldExt> KeccakChip<F> {
         let output = ctx.assign_cell(
             Witness(v),
             self.xorandn_values[4 * id + 3],
+            #[cfg(feature = "debug")]
             &self.xorandn_id,
             4 * id + 3,
             row_offset,
@@ -707,6 +717,7 @@ impl<F: FieldExt> KeccakChip<F> {
         ctx.assign_cell(
             Existing(a),
             self.rotation[id].values[0],
+            #[cfg(feature = "debug")]
             &self.rot_id,
             3 * id,
             row_offset,
@@ -715,6 +726,7 @@ impl<F: FieldExt> KeccakChip<F> {
         ctx.assign_cell(
             Existing(b),
             self.rotation[id].values[1],
+            #[cfg(feature = "debug")]
             &self.rot_id,
             3 * id + 1,
             row_offset,
@@ -723,6 +735,7 @@ impl<F: FieldExt> KeccakChip<F> {
         let output = ctx.assign_cell(
             Witness(c_val),
             self.rotation[id].values[2],
+            #[cfg(feature = "debug")]
             &self.rot_id,
             3 * id + 2,
             row_offset,
@@ -965,8 +978,8 @@ impl<F: FieldExt> KeccakChip<F> {
         for idx in (0..64).step_by(2) {
             let (_, _, byte) = range.gate.inner_product(
                 ctx,
-                &hash_nibbles[idx..idx + 2].iter().map(|a| Existing(a)).collect(),
-                &[1, 16].map(|a| Constant(F::from(a))).into_iter().collect(),
+                hash_nibbles[idx..idx + 2].iter().map(|a| Existing(a)),
+                [1, 16].map(|a| Constant(F::from(a))),
             )?;
             hash_bytes.push(byte);
         }
@@ -1077,8 +1090,8 @@ impl<F: FieldExt> KeccakChip<F> {
         for idx in (0..64).step_by(2) {
             let (_, _, byte) = range.gate.inner_product(
                 ctx,
-                &out[idx..idx + 2].iter().map(|a| Existing(a)).collect(),
-                &[1, 16].map(|a| Constant(F::from(a))).into_iter().collect(),
+                out[idx..idx + 2].iter().map(|a| Existing(a)),
+                [1, 16].map(|a| Constant(F::from(a))),
             )?;
             // println!("CONCAT byte: {:?}", byte);
             hash_bytes.push(byte);

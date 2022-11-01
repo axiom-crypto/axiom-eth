@@ -243,7 +243,7 @@ impl<F: Field> MPTChip<F> {
         let (hash_bytes, _) =
             self.keccak.keccak_bytes_var_len(ctx, range, bytes, len.clone(), 0usize, max_len)?;
         let is_short =
-            range.is_less_than(ctx, &Existing(&len), &Constant(F::from(32)), log2(max_len))?;
+            range.is_less_than(ctx, Existing(&len), Constant(F::from(32)), log2(max_len))?;
         let mut mpt_hash_bytes = Vec::with_capacity(32);
         for idx in 0..32 {
             if idx < max_len {
@@ -440,8 +440,8 @@ impl<F: Field> MPTChip<F> {
                 if is_ext {
                     let (_, _, byte) = range.gate.inner_product(
                         ctx,
-                        &vec![Existing(&is_odd), Existing(&is_odd)],
-                        &vec![Constant(F::from(16)), Existing(&key_frag_hexs[0])],
+                        [Existing(&is_odd), Existing(&is_odd)],
+                        [Constant(F::from(16)), Existing(&key_frag_hexs[0])],
                     )?;
                     path_bytes.push(byte);
                 } else {
@@ -759,7 +759,7 @@ impl<F: Field> MPTChip<F> {
             node_key_is_equal =
                 self.rlp.rlc.or(ctx, &Existing(&node_key_is_equal), &Existing(&is_not_ext))?;
             // assuming node type is not extension if idx > pf.len() [we don't care what happens for these idx]
-            ctx.constants_to_assign.push((F::one(), Some(node_key_is_equal.cell())));
+            self.rlp.range.gate.assert_is_const(ctx, &node_key_is_equal, F::one())?;
         }
 
         /* Check key fragments concatenate to key using hex RLC
@@ -996,6 +996,7 @@ mod tests {
             Blake2bRead, Blake2bWrite, Challenge255, TranscriptReadBuffer, TranscriptWriterBuffer,
         },
     };
+    use itertools::Itertools;
 
     #[derive(Clone, Debug)]
     pub struct MPTCircuit<F> {
@@ -1076,188 +1077,136 @@ mod tests {
                                     config.keccak.xorandn_values.len() / 4,
                                 ),
                             ],
+                            fixed_columns: config.rlp.range.gate.constants.clone(),
                         },
                     );
                     let ctx = &mut aux;
                     ctx.challenge.insert("gamma".to_string(), gamma);
 
-                    let key_bytes = config.rlp.range.gate.assign_region_smart(
+                    let key_bytes = config.rlp.range.gate.assign_witnesses(
                         ctx,
                         self.key_bytes
                             .iter()
                             .map(|x| {
-                                Witness(
-                                    x.map(|v| Value::known(F::from(v as u64)))
-                                        .unwrap_or(Value::unknown()),
-                                )
+                                x.map(|v| Value::known(F::from(v as u64)))
+                                    .unwrap_or(Value::unknown())
                             })
-                            .collect(),
-                        vec![],
-                        vec![],
-                        vec![],
+                            .collect_vec(),
                     )?;
-                    let value_bytes = config.rlp.range.gate.assign_region_smart(
+                    let value_bytes = config.rlp.range.gate.assign_witnesses(
                         ctx,
                         self.value_bytes
                             .iter()
                             .map(|x| {
-                                Witness(
-                                    x.map(|v| Value::known(F::from(v as u64)))
-                                        .unwrap_or(Value::unknown()),
-                                )
+                                x.map(|v| Value::known(F::from(v as u64)))
+                                    .unwrap_or(Value::unknown())
                             })
-                            .collect(),
-                        vec![],
-                        vec![],
-                        vec![],
+                            .collect_vec(),
                     )?;
                     let value_byte_len = config
                         .rlp
                         .range
                         .gate
-                        .assign_region_smart(
+                        .assign_witnesses(
                             ctx,
-                            vec![Witness(
-                                self.value_byte_len
-                                    .map(|v| Value::known(F::from(v as u64)))
-                                    .unwrap_or(Value::unknown()),
-                            )],
-                            vec![],
-                            vec![],
-                            vec![],
+                            vec![self
+                                .value_byte_len
+                                .map(|v| Value::known(F::from(v as u64)))
+                                .unwrap_or(Value::unknown())],
                         )?
                         .into_iter()
                         .nth(0)
                         .unwrap();
-                    let root_hash_bytes = config.rlp.range.gate.assign_region_smart(
+                    let root_hash_bytes = config.rlp.range.gate.assign_witnesses(
                         ctx,
                         self.root_hash_bytes
                             .iter()
                             .map(|x| {
-                                Witness(
-                                    x.map(|v| Value::known(F::from(v as u64)))
-                                        .unwrap_or(Value::unknown()),
-                                )
+                                x.map(|v| Value::known(F::from(v as u64)))
+                                    .unwrap_or(Value::unknown())
                             })
                             .collect(),
-                        vec![],
-                        vec![],
-                        vec![],
                     )?;
-                    let leaf_bytes = config.rlp.range.gate.assign_region_smart(
+                    let leaf_bytes = config.rlp.range.gate.assign_witnesses(
                         ctx,
                         self.leaf_bytes
                             .iter()
                             .map(|x| {
-                                Witness(
-                                    x.map(|v| Value::known(F::from(v as u64)))
-                                        .unwrap_or(Value::unknown()),
-                                )
+                                x.map(|v| Value::known(F::from(v as u64)))
+                                    .unwrap_or(Value::unknown())
                             })
                             .collect(),
-                        vec![],
-                        vec![],
-                        vec![],
                     )?;
                     let mut nodes = Vec::new();
                     for node in self.nodes.iter() {
-                        let node_pre = config.rlp.range.gate.assign_region_smart(
+                        let node_pre = config.rlp.range.gate.assign_witnesses(
                             ctx,
                             node.iter()
                                 .map(|x| {
-                                    Witness(
-                                        x.map(|v| Value::known(F::from(v as u64)))
-                                            .unwrap_or(Value::unknown()),
-                                    )
+                                    x.map(|v| Value::known(F::from(v as u64)))
+                                        .unwrap_or(Value::unknown())
                                 })
                                 .collect(),
-                            vec![],
-                            vec![],
-                            vec![],
                         )?;
                         nodes.push(node_pre);
                     }
-                    let node_types = config.rlp.range.gate.assign_region_smart(
+                    let node_types = config.rlp.range.gate.assign_witnesses(
                         ctx,
                         self.node_types
                             .iter()
                             .map(|x| {
-                                Witness(
-                                    x.map(|v| Value::known(F::from(v as u64)))
-                                        .unwrap_or(Value::unknown()),
-                                )
+                                x.map(|v| Value::known(F::from(v as u64)))
+                                    .unwrap_or(Value::unknown())
                             })
                             .collect(),
-                        vec![],
-                        vec![],
-                        vec![],
                     )?;
                     let depth = config
                         .rlp
                         .range
                         .gate
-                        .assign_region_smart(
+                        .assign_witnesses(
                             ctx,
-                            vec![Witness(
-                                self.depth
-                                    .map(|v| Value::known(F::from(v as u64)))
-                                    .unwrap_or(Value::unknown()),
-                            )],
-                            vec![],
-                            vec![],
-                            vec![],
+                            vec![self
+                                .depth
+                                .map(|v| Value::known(F::from(v as u64)))
+                                .unwrap_or(Value::unknown())],
                         )?
                         .into_iter()
                         .nth(0)
                         .unwrap();
                     let mut key_frag_hexs = Vec::new();
                     for key_frag_hex in self.key_frag_hexs.iter() {
-                        let key_frag_hex_pre = config.rlp.range.gate.assign_region_smart(
+                        let key_frag_hex_pre = config.rlp.range.gate.assign_witnesses(
                             ctx,
                             key_frag_hex
                                 .iter()
                                 .map(|x| {
-                                    Witness(
-                                        x.map(|v| Value::known(F::from(v as u64)))
-                                            .unwrap_or(Value::unknown()),
-                                    )
+                                    x.map(|v| Value::known(F::from(v as u64)))
+                                        .unwrap_or(Value::unknown())
                                 })
                                 .collect(),
-                            vec![],
-                            vec![],
-                            vec![],
                         )?;
                         key_frag_hexs.push(key_frag_hex_pre);
                     }
-                    let key_frag_is_odd = config.rlp.range.gate.assign_region_smart(
+                    let key_frag_is_odd = config.rlp.range.gate.assign_witnesses(
                         ctx,
                         self.key_frag_is_odd
                             .iter()
                             .map(|x| {
-                                Witness(
-                                    x.map(|v| Value::known(F::from(v as u64)))
-                                        .unwrap_or(Value::unknown()),
-                                )
+                                x.map(|v| Value::known(F::from(v as u64)))
+                                    .unwrap_or(Value::unknown())
                             })
                             .collect(),
-                        vec![],
-                        vec![],
-                        vec![],
                     )?;
-                    let key_frag_byte_len = config.rlp.range.gate.assign_region_smart(
+                    let key_frag_byte_len = config.rlp.range.gate.assign_witnesses(
                         ctx,
                         self.key_frag_byte_len
                             .iter()
                             .map(|x| {
-                                Witness(
-                                    x.map(|v| Value::known(F::from(v as u64)))
-                                        .unwrap_or(Value::unknown()),
-                                )
+                                x.map(|v| Value::known(F::from(v as u64)))
+                                    .unwrap_or(Value::unknown())
                             })
                             .collect(),
-                        vec![],
-                        vec![],
-                        vec![],
                     )?;
 
                     let mpt_proof = MPTFixedKeyProof {
@@ -1288,7 +1237,7 @@ mod tests {
                     let stats = config.rlp.range.finalize(ctx)?;
                     #[cfg(feature = "display")]
                     {
-                        println!("[stats] {:?}", stats);
+                        println!("[lookup rows] {:?}", stats);
                         println!(
                             "[ctx.advice_rows sums] {:#?}",
                             ctx.advice_rows
@@ -1307,7 +1256,11 @@ mod tests {
                             "optimal lookup #: {}",
                             (ctx.cells_to_lookup.len() + (1 << self.k) - 1) >> self.k
                         );
-                        println!("optimal fixed #: {}", (stats.1 + (1 << self.k) - 1) >> self.k);
+                        let (_, total_fixed) = ctx.fixed_stats();
+                        println!(
+                            "optimal fixed #: {}",
+                            (total_fixed + (1 << self.k) - 1) >> self.k
+                        );
                         let total_rot = ctx.advice_rows["keccak_rot"].iter().sum::<usize>();
                         println!("optimal rot #: {}", (total_rot + (1 << self.k) - 1) >> self.k);
                         let total_xor = ctx.advice_rows["keccak_xor"].iter().sum::<usize>();

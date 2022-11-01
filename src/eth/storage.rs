@@ -520,6 +520,7 @@ impl<F: Field> Circuit<F> for EthSingleAcctStorageProof<F> {
                                 config.mpt.keccak.xorandn_values.len() / 4,
                             ),
                         ],
+                        fixed_columns: config.mpt.rlp.range.gate.constants.clone(),
                     },
                 );
                 let ctx = &mut aux;
@@ -574,7 +575,8 @@ impl<F: Field> Circuit<F> for EthSingleAcctStorageProof<F> {
                         "optimal lookup #: {}",
                         (ctx.cells_to_lookup.len() + (1 << self.k) - 1) >> self.k
                     );
-                    println!("optimal fixed #: {}", (stats.1 + (1 << self.k) - 1) >> self.k);
+                    let (_, total_fixed) = ctx.fixed_stats();
+                    println!("optimal fixed #: {}", (total_fixed + (1 << self.k) - 1) >> self.k);
                     let total_rot = ctx.advice_rows["keccak_rot"].iter().sum::<usize>();
                     println!("optimal rot #: {}", (total_rot + (1 << self.k) - 1) >> self.k);
                     let total_xor = ctx.advice_rows["keccak_xor"].iter().sum::<usize>();

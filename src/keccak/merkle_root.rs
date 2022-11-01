@@ -88,8 +88,8 @@ impl<F: FieldExt> MerkleChip<F> {
         let hex_vals = decompose_option::<F>(&Value::known(a), 32, 4);
         let (hex_assigned, _, a_assigned) = self.gate.inner_product(
             ctx,
-            &hex_vals.into_iter().map(|v| Witness(v)).collect(),
-            &(0..32).map(|i| Constant(biguint_to_fe(&(BigUint::from(1u64) << (4 * i))))).collect(),
+            hex_vals.into_iter().map(|v| Witness(v)),
+            (0..32).map(|i| Constant(biguint_to_fe(&(BigUint::from(1u64) << (4 * i))))),
         )?;
         let mut hex_assigned = hex_assigned.unwrap();
         for i in (0..32).step_by(2) {
@@ -249,6 +249,7 @@ impl<F: FieldExt> Circuit<F> for MerkleRootCircuit<F> {
                             ("keccak_xor".to_string(), config.keccak.xor_values.len() / 3),
                             ("keccak_xorandn".to_string(), config.keccak.xorandn_values.len() / 4),
                         ],
+                        fixed_columns: config.gate.constants.clone(),
                     },
                 );
                 let ctx = &mut aux;
@@ -274,9 +275,9 @@ impl<F: FieldExt> Circuit<F> for MerkleRootCircuit<F> {
                 leaves.extend_from_slice(&root_u128);
                 instance = Some(leaves);
 
-                let stats = config.gate.finalize(ctx)?;
                 #[cfg(feature = "display")]
                 {
+                    let stats = ctx.fixed_stats();
                     println!("stats (fixed rows, total fixed) {:?}", stats);
                     println!(
                         "ctx.advice_rows sums: {:#?}",

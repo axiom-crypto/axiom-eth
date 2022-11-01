@@ -91,6 +91,7 @@ impl<F: FieldExt> Circuit<F> for KeccakCircuit {
                             ("keccak_xor".to_string(), config.xor_values.len() / 3),
                             ("keccak_xorandn".to_string(), config.xorandn_values.len() / 4),
                         ],
+                        fixed_columns: config.constants.clone(),
                     },
                 );
                 let ctx = &mut aux;
@@ -123,10 +124,9 @@ impl<F: FieldExt> Circuit<F> for KeccakCircuit {
                         );
                     }*/
                 }
-                let (_fixed_rows, total_fixed) =
-                    ctx.assign_and_constrain_constants(&config.constants)?;
                 #[cfg(feature = "display")]
                 {
+                    let (_fixed_rows, total_fixed) = ctx.fixed_stats();
                     println!(
                         "{:#?}",
                         ctx.advice_rows

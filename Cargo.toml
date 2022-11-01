@@ -92,6 +92,7 @@ dev-graph = ["halo2_proofs/dev-graph", "plotters"]
 jemalloc = ["dep:jemallocator"]
 display = ["halo2_base/display", "plonk_verifier/display"]
 serialize = ["plonk_verifier/serialize"]
+debug = ["halo2_base/debug"]
 
 [profile.release]
 debug = true

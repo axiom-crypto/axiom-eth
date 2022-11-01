@@ -164,8 +164,7 @@ impl<F: Field> EthChip<F> {
                 traces[idx].block_hash.rlc_val.cell(),
                 traces[idx + 1].parent_hash.rlc_val.cell(),
             )?;
-            ctx.constants_to_assign
-                .push((F::from(32), Some(traces[idx + 1].parent_hash.rlc_len.cell())));
+            range.gate.assert_is_const(ctx, &traces[idx + 1].parent_hash.rlc_len, F::from(32))?;
         }
         Ok(traces)
     }
@@ -306,22 +305,17 @@ impl<F: Field> EthChip<F> {
         num_bytes: usize,
     ) -> Result<Vec<AssignedValue<F>>, Error> {
         let mask = BigUint::from(255u64);
-        let coeffs = (0..num_bytes)
-            .map(|idx| {
-                Witness(input.value().map(|x| {
-                    F::from(
-                        ((fe_to_biguint(x) >> (8 * (num_bytes - 1 - idx))) & &mask)
-                            .to_u64()
-                            .unwrap(),
-                    )
-                }))
-            })
-            .collect();
+        let coeffs = (0..num_bytes).map(|idx| {
+            Witness(input.value().map(|x| {
+                F::from(
+                    ((fe_to_biguint(x) >> (8 * (num_bytes - 1 - idx))) & &mask).to_u64().unwrap(),
+                )
+            }))
+        });
         let weights = (0..num_bytes)
             .map(|idx| Constant(biguint_to_fe(&(BigUint::from(1u64) << (8 * idx)))))
-            .rev()
-            .collect();
-        let (coeffs_assigned, _, val) = range.gate.inner_product(ctx, &coeffs, &weights)?;
+            .rev();
+        let (coeffs_assigned, _, val) = range.gate.inner_product(ctx, coeffs, weights)?;
 
         ctx.region.constrain_equal(input.cell(), val.cell())?;
         for coeff in coeffs_assigned.clone().unwrap().iter() {
@@ -338,18 +332,16 @@ impl<F: Field> EthChip<F> {
         num_bytes: usize,
     ) -> Result<Vec<AssignedValue<F>>, Error> {
         let mask = BigUint::from(255u64);
-        let coeffs =
-            (0..num_bytes)
-                .map(|idx| {
-                    Witness(input.value().map(|x| {
-                        F::from(((fe_to_biguint(x) >> (8 * idx)) & &mask).to_u64().unwrap())
-                    }))
-                })
-                .collect();
-        let weights = (0..num_bytes)
-            .map(|idx| Constant(biguint_to_fe(&(BigUint::from(1u64) << (8 * idx)))))
-            .collect();
-        let (coeffs_assigned, _, val) = range.gate.inner_product(ctx, &coeffs, &weights)?;
+        let coeffs = (0..num_bytes).map(|idx| {
+            Witness(
+                input
+                    .value()
+                    .map(|x| F::from(((fe_to_biguint(x) >> (8 * idx)) & &mask).to_u64().unwrap())),
+            )
+        });
+        let weights =
+            (0..num_bytes).map(|idx| Constant(biguint_to_fe(&(BigUint::from(1u64) << (8 * idx)))));
+        let (coeffs_assigned, _, val) = range.gate.inner_product(ctx, coeffs, weights)?;
 
         ctx.region.constrain_equal(input.cell(), val.cell())?;
         for coeff in coeffs_assigned.clone().unwrap().iter() {
@@ -367,11 +359,10 @@ impl<F: Field> EthChip<F> {
     ) -> Result<AssignedValue<F>, Error> {
         let (_, _, val) = range.gate.inner_product(
             ctx,
-            &input[..num_bytes].iter().map(|x| Existing(x)).collect(),
-            &(0..num_bytes)
+            input[..num_bytes].iter().map(|x| Existing(x)),
+            (0..num_bytes)
                 .map(|idx| Constant(biguint_to_fe(&(BigUint::from(1u64) << (8 * idx)))))
-                .rev()
-                .collect(),
+                .rev(),
         )?;
         Ok(val)
     }

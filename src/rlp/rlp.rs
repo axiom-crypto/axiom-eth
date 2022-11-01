@@ -62,7 +62,7 @@ pub fn witness_subarray_from_idxs<'a, F: Field>(
         }
         ret_vals
     });
-    let ret_val_witnesses = ret_vals.transpose_vec(max_len).iter().map(|v| Witness(*v)).collect();
+    let ret_val_witnesses = ret_vals.transpose_vec(max_len).into_iter().map(|v| Witness(v));
     let ret = range.gate.assign_region_smart(ctx, ret_val_witnesses, vec![], vec![], vec![])?;
     Ok(ret)
 }
@@ -84,8 +84,8 @@ pub fn array_to_byte_val<'a, F: Field>(
             byte_val_vec.insert(0, byte_val_vec[0].clone());
             let out = range.gate.select_from_idx(
                 ctx,
-                &byte_val_vec.iter().map(|c| Existing(&c)).collect(),
-                &Existing(&len),
+                byte_val_vec.iter().map(|c| Existing(&c)).collect(),
+                Existing(&len),
             )?;
             out
         } else {
@@ -185,10 +185,9 @@ impl<F: Field> RlpArrayChip<F> {
         range: &RangeConfig<F>,
         prefix: &AssignedValue<F>,
     ) -> Result<RlpFieldPrefixParsed<F>, Error> {
-        let is_literal =
-            range.is_less_than(ctx, &Existing(prefix), &Constant(F::from(128u64)), 8)?;
+        let is_literal = range.is_less_than(ctx, Existing(prefix), Constant(F::from(128u64)), 8)?;
         let is_len_or_literal =
-            range.is_less_than(ctx, &Existing(prefix), &Constant(F::from(184u64)), 8)?;
+            range.is_less_than(ctx, Existing(prefix), Constant(F::from(184u64)), 8)?;
         let is_valid =
             range.check_less_than(ctx, &Existing(prefix), &Constant(F::from(192u64)), 8)?;
 
@@ -256,7 +255,7 @@ impl<F: Field> RlpArrayChip<F> {
             range.check_less_than(ctx, &Constant(F::from(191u64)), &Existing(prefix), 8)?;
 
         let is_empty = range.is_equal(ctx, &Existing(prefix), &Constant(F::from(192u64)))?;
-        let is_big = range.is_less_than(ctx, &Constant(F::from(247u64)), &Existing(prefix), 8)?;
+        let is_big = range.is_less_than(ctx, Constant(F::from(247u64)), Existing(prefix), 8)?;
 
         let array_len = range.gate.sub(ctx, &Existing(prefix), &Constant(F::from(192u64)))?;
         let len_len = range.gate.sub(ctx, &Existing(prefix), &Constant(F::from(247u64)))?;
@@ -361,8 +360,8 @@ impl<F: Field> RlpArrayChip<F> {
 
         let (_, _, rlp_len) = range.gate.inner_product(
             ctx,
-            &vec![Constant(F::from(1)), Constant(F::from(1)), Constant(F::from(1))],
-            &vec![Constant(F::from(1)), Existing(&len_len), Existing(&field_len)],
+            [Constant(F::one()), Constant(F::one()), Constant(F::one())],
+            [Constant(F::one()), Existing(&len_len), Existing(&field_len)],
         )?;
 
         let len_rlc = self.rlc.compute_rlc(ctx, range, &len_cells, len_len, max_len_len)?;
@@ -438,8 +437,8 @@ impl<F: Field> RlpArrayChip<F> {
 
         let (_, _, rlp_len) = range.gate.inner_product(
             ctx,
-            &vec![Constant(F::from(1)), Constant(F::from(1)), Constant(F::from(1))],
-            &vec![Constant(F::from(1)), Existing(&len_len), Existing(&field_len)],
+            [Constant(F::one()), Constant(F::one()), Constant(F::one())],
+            [Constant(F::one()), Existing(&len_len), Existing(&field_len)],
         )?;
 
         let len_rlc = self.rlc.compute_rlc(ctx, range, &len_cells, len_len, max_len_len)?;
@@ -525,8 +524,8 @@ impl<F: Field> RlpArrayChip<F> {
 
         let (_, _, rlp_len) = range.gate.inner_product(
             ctx,
-            &vec![Constant(F::from(1)), Constant(F::from(1)), Constant(F::from(1))],
-            &vec![Constant(F::from(1)), Existing(&len_len), Existing(&all_fields_len)],
+            [Constant(F::one()), Constant(F::one()), Constant(F::one())],
+            [Constant(F::one()), Existing(&len_len), Existing(&all_fields_len)],
         )?;
 
         let mut prefix_vec = Vec::new();
@@ -543,8 +542,8 @@ impl<F: Field> RlpArrayChip<F> {
         for idx in 0..num_fields {
             let prefix = range.gate.select_from_idx(
                 ctx,
-                &rlp_array.iter().map(|x| Existing(&x)).collect(),
-                &Existing(&prefix_idxs[idx]),
+                rlp_array.iter().map(|x| Existing(&x)).collect(),
+                Existing(&prefix_idxs[idx]),
             )?;
             prefix_vec.push(prefix.clone());
             let prefix_parsed = self.parse_rlp_field_prefix(ctx, range, &prefix)?;
@@ -605,17 +604,12 @@ impl<F: Field> RlpArrayChip<F> {
 
             let (_, _, next_prefix_idx) = range.gate.inner_product(
                 ctx,
-                &vec![
-                    Constant(F::from(1)),
-                    Constant(F::from(1)),
-                    Constant(F::from(1)),
-                    Constant(F::from(1)),
-                ],
-                &vec![
+                vec![Constant(F::one()); 4],
+                vec![
                     Existing(&prefix_idxs[idx]),
                     Existing(&len_len),
                     Existing(&field_len),
-                    Constant(F::from(1)),
+                    Constant(F::one()),
                 ],
             )?;
             prefix_idxs.push(next_prefix_idx);
@@ -782,17 +776,15 @@ impl<F: Field> Circuit<F> for RlpTestCircuit<F> {
                             ("default".to_string(), config.range.gate.num_advice),
                             ("rlc".to_string(), config.rlc.basic_chips.len()),
                         ],
+                        fixed_columns: config.range.gate.constants.clone(),
                     },
                 );
                 let ctx = &mut aux;
                 ctx.challenge.insert("gamma".to_string(), gamma);
 
-                let inputs_assigned = config.range.gate.assign_region_smart(
+                let inputs_assigned = config.range.gate.assign_witnesses(
                     ctx,
-                    self.inputs.iter().map(|x| Witness(Value::known(F::from(*x as u64)))).collect(),
-                    vec![],
-                    vec![],
-                    vec![],
+                    self.inputs.iter().map(|x| Value::known(F::from(*x as u64))).collect(),
                 )?;
 
                 if self.is_array {
