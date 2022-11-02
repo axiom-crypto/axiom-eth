@@ -1,0 +1,6 @@
+degree,total_advice,num_rlc_chip,num_default,num_lookup,num_fixed,num_keccak,num_xor,num_xorandn,proof_time,proof_size,verify_time
+17,74,1,12,1,1,4,9, 5, 13.71857041s,19872,16.145417ms
+18,42,1,6,1,1,2,5, 3, 15.646741602s,11488,19.440568ms
+19,26,1,3,1,1,1,3, 2, 11.008935456s,7168,43.550901ms
+20,18,1,2,1,1,1,2, 1, 14.727645584s,5504,8.370173ms
+21,14,1,1,1,1,1,1, 1, 23.910699491s,4416,7.717882ms
