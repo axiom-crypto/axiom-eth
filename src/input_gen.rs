@@ -3,9 +3,9 @@ use crate::eth::{
     Network, NETWORK,
 };
 use crate::mpt::mpt::{max_branch_lens, max_leaf_lens};
-use eth_types::H256;
 use ethers_core::types::{
-    Address, Block, BlockId, BlockId::Number, BlockNumber, EIP1186ProofResponse, StorageProof, U256,
+    Address, Block, BlockId, BlockId::Number, BlockNumber, EIP1186ProofResponse, StorageProof,
+    H256, U256,
 };
 use ethers_core::utils::keccak256;
 use ethers_providers::{Http, Middleware, Provider};

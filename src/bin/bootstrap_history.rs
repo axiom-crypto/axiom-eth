@@ -1,3 +1,4 @@
+#![cfg(feature = "aggregation")]
 use ark_std::{end_timer, start_timer};
 use clap::Parser;
 use halo2_mpt::eth::aggregation::{self, FULL_DEPTH};

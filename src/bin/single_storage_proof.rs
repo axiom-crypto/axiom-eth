@@ -1,5 +1,5 @@
+#![cfg(feature = "aggregation")]
 use clap::Parser;
-use eth_types::ToBigEndian;
 use ethers_core::types::{Address, U256};
 use ethers_providers::{Http, Provider};
 use halo2_curves::bn256::{Fr, G1Affine};
