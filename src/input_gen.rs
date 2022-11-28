@@ -395,6 +395,7 @@ pub fn get_blocks_input(
     start_block_number: u64,
     num_blocks: u64,
 ) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
+    std::fs::create_dir_all("./data/headers").unwrap_or_else(|err| panic!("{err:?}"));
     let path =
         format!("./data/headers/{:06x}_{}.dat", start_block_number + num_blocks - 1, num_blocks);
     let instance_path = format!(
