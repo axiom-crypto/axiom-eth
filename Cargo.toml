@@ -83,7 +83,7 @@ jemallocator = { version = "0.3.2", optional = true }
 [dev-dependencies]
 
 [features]
-default = ["display", "aggregation", "clap", "jemalloc", "serialize"]
+default = ["aggregation", "clap", "jemalloc", "serialize"]
 zkevm = ["dep:ecdsa", "dep:ecc", "dep:keccak256", "dep:maingate", "dep:integer", "dep:zkevm-circuits"]
 aggregation = ["plonk_verifier", "input_gen"]
 evm = ["dep:ethereum_types", "dep:foundry_evm"]
@@ -95,4 +95,11 @@ serialize = ["plonk_verifier/serialize"]
 debug = ["halo2_base/debug"]
 
 [profile.release]
-debug = true
+debug = false
+debug-assertions = false
+overflow-checks = false
+lto = true
+incremental = false
+panic = "abort"
+# codegen-units = 1 is not optimal on my machine; always profile locally to determine best preferences
+# codegen-units = 1

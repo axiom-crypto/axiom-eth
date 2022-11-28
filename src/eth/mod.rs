@@ -60,7 +60,7 @@ pub enum Network {
     Mainnet,
     Goerli,
 }
-pub const NETWORK: Network = Network::Mainnet;
+pub const NETWORK: Network = Network::Goerli;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Strategy {
