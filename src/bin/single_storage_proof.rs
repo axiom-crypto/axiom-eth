@@ -105,13 +105,16 @@ fn main() {
 
     let calldata = encode_calldata(&agg_instances, &proof);
 
+    let mut slot_bytes = vec![0u8; 32];
+    slot.to_big_endian(&mut slot_bytes);
+
     let mut writer = BufWriter::new(
         File::create(
             format!(
                 "./data/calldata_storage_{:x}_{}_{}.dat",
                 block_number,
                 BigUint::from_bytes_be(address.as_bytes()).to_str_radix(16),
-                BigUint::from_bytes_be(&slot.to_be_bytes()).to_str_radix(16)
+                BigUint::from_bytes_be(&slot_bytes).to_str_radix(16)
             )
             .as_str(),
         )
