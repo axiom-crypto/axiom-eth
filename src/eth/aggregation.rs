@@ -62,7 +62,7 @@ use std::{
 
 pub mod evm;
 
-const INITIAL_DEPTH: usize = 7;
+const INITIAL_DEPTH: usize = 6; // 7;
 pub const FULL_DEPTH: usize = 10; // 13;
 
 #[derive(Clone)]
