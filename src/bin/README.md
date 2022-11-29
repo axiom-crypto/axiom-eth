@@ -27,3 +27,5 @@ Or alternatively to run on any arbitrary block chunk:
 ```
 cargo run --bin bootstrap_history --release -- --last-block <LAST BLOCK>
 ```
+
+For example try `765bb3` or `7657b3` (the test default was `765fb3`).
