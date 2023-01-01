@@ -1,0 +1,60 @@
+[package]
+name = "axiom-eth"
+version = "0.0.1"
+edition = "2021"
+autobins = false
+
+[[bin]]
+name = "header_chain"
+required-features = ["aggregation", "clap"]
+
+[dependencies]
+itertools = "0.10"
+lazy_static = "1.4.0"
+# num-bigint = { version = "0.4", features = ["rand"] }
+# num-integer = "0.1"
+# num-traits = "0.2"
+serde = { version = "1.0", default-features = false, features = ["derive"] }
+serde_json = { version = "1.0", default-features = false }
+
+# misc
+ark-std = { version = "0.3.0", features = ["print-trace"], optional = true }
+clap = { version = "4.0.13", features = ["derive"], optional = true }
+clap-num = { version = "1.0.2", optional = true }
+bincode = { version = "1.3.3", optional = true }
+
+# halo2
+halo2-base = { path = "../halo2-lib/halo2-base", default-features = false }
+halo2-mpt = { path = "../halo2-lib/halo2-mpt", default-features = false }
+
+# crypto
+rlp = "0.5.1"
+ethers-core = { version = "1.0.2" } # used by halo2-mpt already
+rand_core = { version = "0.6", default-features = false, features = ["getrandom"] }
+rand = "0.8"
+rand_chacha = "0.3.1"
+
+# aggregation 
+snark-verifier = { git = "https://github.com/axiom-crypto/snark-verifier.git", default-features = false, features = ["loader_halo2"], optional = true }
+snark-verifier-sdk = { git = "https://github.com/axiom-crypto/snark-verifier.git", default-features = false, features = ["loader_halo2"], optional = true }
+
+# evm verifier 
+
+# generating circuit inputs from blockchain
+ethers-providers = { version = "1.0.2", optional = true }  
+tokio = { version = "1.23.0", default-features = false, features = ["rt", "rt-multi-thread"], optional = true }
+
+[dev-dependencies]
+hex = "0.4.3"
+ark-std = { version = "0.3.0", features = ["print-trace"] }
+
+[features]
+default = ["evm", "aggregation", "clap", "halo2-axiom", "halo2-base/jemallocator", "display"]
+aggregation = ["dep:snark-verifier", "snark-verifier-sdk", "providers"]
+evm = ["snark-verifier-sdk?/loader_evm", "aggregation"]
+providers = ["dep:ethers-providers", "dep:tokio", "dep:bincode"]
+display = ["halo2-mpt/display", "snark-verifier-sdk?/display", "dep:ark-std"]
+clap = ["dep:clap", "dep:clap-num"]
+# EXACTLY one of halo2-pse / halo2-axiom should always be turned on
+halo2-pse = ["halo2-mpt/halo2-pse", "snark-verifier-sdk?/halo2-pse"]
+halo2-axiom = ["halo2-mpt/halo2-axiom", "snark-verifier-sdk?/halo2-axiom"]

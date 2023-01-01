@@ -1,0 +1,14 @@
+{
+  "aggregation": {
+    "strategy": "Simple",
+    "degree": 21,
+    "num_advice": 33,
+    "num_lookup_advice": 4,
+    "num_fixed": 1,
+    "lookup_bits": 20,
+    "limb_bits": 88,
+    "num_limbs": 3
+  },
+  "unusable_rows": 109,
+  "keccak_rows_per_round": 100 
+}
