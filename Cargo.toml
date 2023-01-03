@@ -48,7 +48,7 @@ log = "0.4"
 env_logger = "0.10"
 
 [features]
-default = ["evm", "aggregation", "clap", "halo2-axiom", "halo2-base/jemallocator", "display"]
+default = ["evm", "aggregation", "clap", "halo2-axiom", "halo2-base/jemallocator"]
 aggregation = ["dep:snark-verifier", "snark-verifier-sdk", "providers"]
 evm = ["snark-verifier-sdk?/loader_evm", "aggregation"]
 providers = ["dep:ethers-providers", "dep:tokio", "dep:bincode"]
