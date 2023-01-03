@@ -1,4 +1,5 @@
 use super::EthBlockHeaderChainInstance;
+use crate::Field;
 #[cfg(feature = "display")]
 use ark_std::{end_timer, start_timer};
 use halo2_base::{
@@ -13,7 +14,6 @@ use halo2_base::{
     AssignedValue, Context, ContextParams,
     QuantumCell::{Constant, Existing, Witness},
 };
-use halo2_mpt::keccak::zkevm::util::eth_types::Field;
 use itertools::Itertools;
 use rand::Rng;
 use snark_verifier::pcs::kzg::{Bdfg21, Kzg, KzgAccumulator};
@@ -205,10 +205,10 @@ impl Circuit<Fr> for EthBlockHeaderChainAggregationCircuit {
                         self.aggregate_and_join_instances(&config, region);
                     instances.extend(new_instances.iter().map(|assigned| assigned.cell()).cloned());
                     let ctx = &mut loader.ctx_mut();
-                    let _num_lookup_cells = config.base_field_config.finalize(ctx);
+                    config.base_field_config.finalize(ctx);
 
                     #[cfg(feature = "display")]
-                    ctx.print_stats(&["Range"], _num_lookup_cells);
+                    ctx.print_stats(&["Range"]);
                     Ok(())
                 },
             )

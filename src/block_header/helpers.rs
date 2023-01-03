@@ -5,25 +5,23 @@ use super::{
     },
     EthBlockHeaderChainCircuit, EthBlockHeaderChainInstance,
 };
-use crate::{util::EthConfigParams, Network};
+use crate::{util::EthConfigParams, Field, Network};
 use core::cmp::min;
 use ethers_providers::{Http, Provider};
 use halo2_base::{
     halo2_proofs::{
         halo2curves::bn256::{Bn256, Fr, G1Affine},
         plonk::ProvingKey,
-        poly::{commitment::Params, kzg::commitment::ParamsKZG},
+        poly::kzg::commitment::ParamsKZG,
     },
     utils::{fs::gen_srs, PrimeField},
 };
-use halo2_mpt::keccak::zkevm::util::eth_types::Field;
 use itertools::Itertools;
 use rand::Rng;
 use snark_verifier_sdk::{
     gen_pk,
     halo2::{
-        aggregation::load_verify_circuit_degree, gen_snark_gwc, gen_snark_shplonk, read_snark,
-        PoseidonTranscript,
+        aggregation::load_verify_circuit_degree, gen_snark_shplonk, read_snark, PoseidonTranscript,
     },
     CircuitExt, NativeLoader, Snark, LIMBS,
 };

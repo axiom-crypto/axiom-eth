@@ -354,7 +354,8 @@ pub fn get_acct_rlp(pf: &EIP1186ProofResponse) -> Vec<u8> {
 */
 
 pub fn get_block_rlp(block: Block<H256>) -> Vec<u8> {
-    let mut rlp = RlpStream::new_list(16);
+    let base_fee = block.base_fee_per_gas;
+    let mut rlp = RlpStream::new_list(15 + usize::from(base_fee.is_some()));
     rlp.append(&block.parent_hash);
     rlp.append(&block.uncles_hash);
     rlp.append(&block.author.unwrap());
@@ -370,7 +371,7 @@ pub fn get_block_rlp(block: Block<H256>) -> Vec<u8> {
     rlp.append(&block.extra_data.to_vec());
     rlp.append(&block.mix_hash.unwrap());
     rlp.append(&block.nonce.unwrap());
-    rlp.append(&block.base_fee_per_gas.unwrap());
+    base_fee.map(|base_fee| rlp.append(&base_fee));
     rlp.out().into()
 }
 

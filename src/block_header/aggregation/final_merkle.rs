@@ -10,7 +10,13 @@ use halo2_base::{
     },
     QuantumCell::{Constant, Existing},
 };
-use halo2_mpt::keccak::{zkevm::keccak_packed_multi::KeccakPackedConfig, KeccakChip};
+
+use crate::{
+    block_header::EthBlockHeaderChainInstance,
+    keccak::{KeccakChip, KeccakConfig},
+    rlp::rlc::{RlcChip, RlcConfig},
+    util::{bytes_be_to_u128, get_merkle_mountain_range, num_to_bytes_be, NUM_BYTES_IN_U128},
+};
 use itertools::Itertools;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -26,16 +32,12 @@ use std::{
     fs::File,
 };
 
-use crate::{
-    block_header::EthBlockHeaderChainInstance,
-    util::{bytes_be_to_u128, get_merkle_mountain_range, num_to_bytes_be, NUM_BYTES_IN_U128},
-};
-
 use super::EthBlockHeaderChainAggregationCircuit;
 
 #[derive(Serialize, Deserialize)]
 pub struct AggregationWithKeccakConfigParams {
     pub aggregation: AggregationConfigParams,
+    pub num_rlc_columns: usize,
     pub unusable_rows: usize,
     pub keccak_rows_per_round: usize,
 }
@@ -51,7 +53,8 @@ impl AggregationWithKeccakConfigParams {
 
 #[derive(Clone, Debug)]
 pub struct AggregationWithKeccakConfig {
-    pub keccak: KeccakPackedConfig<Fr>,
+    pub keccak: KeccakConfig<Fr>,
+    pub rlc: RlcConfig<Fr>,
     pub aggregation: AggregationConfig,
 }
 
@@ -65,12 +68,13 @@ impl AggregationWithKeccakConfig {
         set_var("KECCAK_DEGREE", degree.to_string());
         set_var("KECCAK_ROWS", params.keccak_rows_per_round.to_string());
         set_var("UNUSABLE_ROWS", params.unusable_rows.to_string());
-        let keccak = KeccakPackedConfig::configure(meta);
+        let rlc = RlcConfig::configure(meta, params.num_rlc_columns, 1);
+        let keccak = KeccakConfig::new(meta, rlc.gamma);
         #[cfg(feature = "display")]
         println!("Unusable rows: {}", meta.minimum_rows());
 
         aggregation.base_field_config.range.gate.max_rows = (1 << degree) - meta.minimum_rows();
-        Self { keccak, aggregation }
+        Self { keccak, aggregation, rlc }
     }
 
     pub fn gate(&self) -> &FlexGateConfig<Fr> {
@@ -157,7 +161,8 @@ impl Circuit<Fr> for EthBlockHeaderChainFinalAggregationCircuit {
             self.0.initial_depth
         ));
         config.range().load_lookup_table(&mut layouter).expect("load range lookup table");
-        config.keccak.load(&mut layouter).expect("load keccak lookup table");
+        config.keccak.load_aux_tables(&mut layouter).expect("load keccak lookup table");
+        let gamma = layouter.get_challenge(config.rlc.gamma);
         let mut first_pass = halo2_base::SKIP_FIRST_PASS;
         let mut instances = Vec::new();
         layouter
@@ -171,6 +176,8 @@ impl Circuit<Fr> for EthBlockHeaderChainFinalAggregationCircuit {
                     let (mut pre_instances, num_blocks_minus_one, loader) =
                         self.0.aggregate_and_join_instances(&config.aggregation, region);
                     let ctx = &mut loader.ctx_mut();
+                    // add RLC context
+                    ctx.advice_alloc.push((0, 0));
 
                     // compute the keccaks that were delayed, to get the `max_depth - initial_depth + 1` biggest merkle mountain ranges
                     let num_blocks = config.gate().add(
@@ -201,11 +208,12 @@ impl Circuit<Fr> for EthBlockHeaderChainFinalAggregationCircuit {
                         })
                         .collect_vec();
 
+                    let mut rlc_chip = RlcChip::new(config.rlc.clone(), gamma);
                     let mut keccak_chip = KeccakChip::new(config.keccak.clone());
                     let new_mmr = keccak_chip.merkle_mountain_range(
                         ctx,
                         config.gate(),
-                        &leaves.iter().map(|bytes| &bytes[..]).collect_vec(),
+                        leaves,
                         num_leaves_bits,
                     );
                     let new_mmr_len = new_mmr.len();
@@ -228,12 +236,26 @@ impl Circuit<Fr> for EthBlockHeaderChainFinalAggregationCircuit {
                             .drain(start_idx + 2 * new_mmr_len..start_idx + 2 * num_leaves),
                     );
                     instances.extend(pre_instances.iter().map(|assigned| assigned.cell()).cloned());
-                    let num_lookup_advice_cells = config.range().finalize(ctx);
+                    keccak_chip.assign_phase0(&mut ctx.region);
+                    config.range().finalize(ctx);
+                    ctx.next_phase();
+
+                    // ============ SECOND PHASE ============
+                    rlc_chip.get_challenge(ctx);
+                    let (fixed_len_rlcs, var_len_rlcs) =
+                        keccak_chip.compute_all_rlcs(ctx, &mut rlc_chip, config.gate());
+                    keccak_chip.assign_phase1(
+                        ctx,
+                        config.range(),
+                        rlc_chip.gamma,
+                        &fixed_len_rlcs,
+                        &var_len_rlcs,
+                    );
+                    config.range().finalize(ctx);
 
                     #[cfg(feature = "display")]
                     {
-                        ctx.print_stats(&["Range", "RLC"], num_lookup_advice_cells);
-                        keccak_chip.print_stats(ctx);
+                        ctx.print_stats(&["Range", "RLC"]);
                     }
                     Ok(())
                 },

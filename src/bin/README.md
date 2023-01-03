@@ -13,7 +13,7 @@ cargo update
 
 Place your Infura ID in a file named `axiom-eth/scripts/input_gen/INFURA_ID`
 
-To create a single snark without aggregation for `2^7` block headers:
+To create a single snark without aggregation for `2^7` block headers on mainnet:
 ```
 cargo run --bin header_chain --release -- --start 0x765fb3 --end 0x766031 --max-depth 7 
 ```

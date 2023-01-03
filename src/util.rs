@@ -23,8 +23,8 @@ pub struct EthConfigParams {
     pub num_rlc_columns: usize,
     // the number of advice columns in phase _ without lookup enabled that RangeConfig uses
     pub num_range_advice: Vec<usize>,
-    // the number of FirstPhase advice columns with lookup enabled that RangeConfig uses
-    pub num_lookup_advice: usize,
+    // the number of advice columns in phase _ with lookup enabled that RangeConfig uses
+    pub num_lookup_advice: Vec<usize>,
     pub num_fixed: usize,
     // for keccak chip you should know the number of unusable rows beforehand
     pub unusable_rows: usize,

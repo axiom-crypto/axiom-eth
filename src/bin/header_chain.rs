@@ -24,7 +24,7 @@ use std::{fmt::Display, fs::read_to_string};
 /// Generates multiple SNARKS for chains of block header hashes.
 /// Optionally does final processing to get merkle mountain range and/or produce EVM verifier contract code and calldata.
 struct Cli {
-    #[arg(long, default_value_t = Network::Goerli)]
+    #[arg(long, default_value_t = Network::Mainnet)]
     network: Network,
     #[arg(short, long = "start", value_parser=maybe_hex::<u32>)]
     start_block_number: u32,

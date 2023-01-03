@@ -3,14 +3,15 @@
 #![feature(arc_unwrap_or_clone)]
 
 pub mod block_header;
+pub mod keccak;
+pub mod rlp;
 pub mod util;
 
 #[cfg(feature = "providers")]
 pub mod providers;
 
-use std::fmt::Display;
-
-pub use halo2_mpt::keccak::zkevm::util::eth_types::Field;
+use halo2_base::halo2_proofs;
+pub use zkevm_keccak::util::eth_types::Field;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
@@ -19,7 +20,7 @@ pub enum Network {
     Goerli,
 }
 
-impl Display for Network {
+impl std::fmt::Display for Network {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Network::Mainnet => write!(f, "mainnet"),
