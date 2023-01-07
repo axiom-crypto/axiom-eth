@@ -1,10 +1,10 @@
 #[cfg(feature = "display")]
 use ark_std::{end_timer, start_timer};
+#[cfg(feature = "evm")]
+use axiom_eth::block_header::helpers::evm::autogen_final_block_header_chain_snark_for_evm;
 use axiom_eth::{
     block_header::helpers::{
-        autogen_final_block_header_chain_snark,
-        evm::autogen_final_block_header_chain_snark_for_evm, gen_final_block_header_chain_snark,
-        gen_multiple_block_header_chain_snarks,
+        autogen_final_block_header_chain_snark, gen_multiple_block_header_chain_snarks,
     },
     providers::{GOERLI_PROVIDER_URL, MAINNET_PROVIDER_URL},
     Network,

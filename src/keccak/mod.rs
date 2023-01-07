@@ -52,8 +52,12 @@ pub struct KeccakVarLenQuery<'v, F: Field> {
 pub struct KeccakChip<'v, F: Field> {
     pub config: KeccakConfig<F>,
     num_rows_per_round: usize,
+    // available only in `FirstPhase`
     pub var_len_queries: Vec<KeccakVarLenQuery<'v, F>>,
     pub fixed_len_queries: Vec<KeccakFixedLenQuery<'v, F>>,
+    // available only in `SecondPhase`
+    pub fixed_len_rlcs: Vec<(RlcFixedTrace<'v, F>, RlcFixedTrace<'v, F>)>,
+    pub var_len_rlcs: Vec<(RlcTrace<'v, F>, RlcFixedTrace<'v, F>)>,
     squeeze_digests: Vec<[F; NUM_WORDS_TO_SQUEEZE]>,
 }
 
@@ -65,6 +69,8 @@ impl<'v, F: Field> KeccakChip<'v, F> {
             num_rows_per_round,
             var_len_queries: vec![],
             fixed_len_queries: vec![],
+            fixed_len_rlcs: vec![],
+            var_len_rlcs: vec![],
             squeeze_digests: vec![],
         }
     }
@@ -352,11 +358,10 @@ impl<'v, F: Field> KeccakChip<'v, F> {
     pub fn assign_phase1(
         &mut self,
         ctx: &mut Context<'v, F>,
+        rlc: &mut RlcChip<'v, F>,
         range: &impl RangeInstructions<F>,
-        challenge: Value<F>,
-        fixed_len_rlcs: &[(RlcFixedTrace<'v, F>, RlcFixedTrace<'v, F>)],
-        var_len_rlcs: &[(RlcTrace<'v, F>, RlcFixedTrace<'v, F>)],
     ) {
+        self.compute_all_rlcs(ctx, rlc, range.gate());
         let gate = range.gate();
         let keccak_table = &self.config.keccak_table;
         // the input and output rlcs in the keccak table
@@ -367,13 +372,13 @@ impl<'v, F: Field> KeccakChip<'v, F> {
                 .iter()
                 .map(|q| &q.input_bytes[..])
                 .chain(self.var_len_queries.iter().map(|q| &q.input_bytes[..q.num_bytes])),
-            challenge,
+            rlc.gamma,
             self.squeeze_digests.drain(..).collect(),
         );
 
         let mut min_keccak_f = 0;
         let mut max_keccak_f = 0;
-        for (input_rlc, output_rlc) in fixed_len_rlcs.iter() {
+        for (input_rlc, output_rlc) in self.fixed_len_rlcs.iter() {
             min_keccak_f += get_num_keccak_f(input_rlc.len);
             max_keccak_f += get_num_keccak_f(input_rlc.len);
 
@@ -383,8 +388,9 @@ impl<'v, F: Field> KeccakChip<'v, F> {
         let mut running_num_squeezed =
             gate.load_constant(ctx, gate.get_field_element(min_keccak_f as u64));
 
-        assert_eq!(self.var_len_queries.len(), var_len_rlcs.len());
-        for (query, (input_rlc, output_rlc)) in self.var_len_queries.iter().zip(var_len_rlcs.iter())
+        assert_eq!(self.var_len_queries.len(), self.var_len_rlcs.len());
+        for (query, (input_rlc, output_rlc)) in
+            self.var_len_queries.iter().zip(self.var_len_rlcs.iter())
         {
             min_keccak_f += get_num_keccak_f(query.min_bytes);
             max_keccak_f += get_num_keccak_f(query.max_bytes);
@@ -431,12 +437,9 @@ impl<'v, F: Field> KeccakChip<'v, F> {
         ctx: &mut Context<'v, F>,
         rlc: &mut RlcChip<'v, F>,
         gate: &impl GateInstructions<F>,
-    ) -> (
-        Vec<(RlcFixedTrace<'v, F>, RlcFixedTrace<'v, F>)>,
-        Vec<(RlcTrace<'v, F>, RlcFixedTrace<'v, F>)>,
     ) {
         // TODO: not very efficient, using drain to remove vectors without moving `self`
-        let fixed_len_rlcs = self
+        self.fixed_len_rlcs = self
             .fixed_len_queries
             .iter_mut()
             .map(|q| {
@@ -448,7 +451,7 @@ impl<'v, F: Field> KeccakChip<'v, F> {
             })
             .collect::<Vec<_>>();
 
-        let var_len_rlcs = self
+        self.var_len_rlcs = self
             .var_len_queries
             .iter_mut()
             .map(|q| {
@@ -463,7 +466,6 @@ impl<'v, F: Field> KeccakChip<'v, F> {
                 (input_rlc, output_rlc)
             })
             .collect::<Vec<_>>();
-        (fixed_len_rlcs, var_len_rlcs)
     }
 
     #[cfg(feature = "display")]

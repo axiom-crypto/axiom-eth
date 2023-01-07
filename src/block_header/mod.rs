@@ -1,13 +1,14 @@
 use super::{
-    util::{bytes_be_to_u128, encode_h256_to_field, EthConfigParams as EthBlockHeaderConfigParams},
+    util::{bytes_be_to_u128, encode_h256_to_field, EthConfigParams},
     Field, Network,
 };
 use crate::{
-    keccak::{KeccakChip, KeccakConfig},
     rlp::{
         rlc::{RlcFixedTrace, RlcTrace, RLC_PHASE},
-        RlpArrayTraceWitness, RlpChip, RlpConfig, RlpFieldTrace,
+        RlpArrayTraceWitness, RlpFieldTrace,
     },
+    util::bytes_be_var_to_fixed,
+    EthChip, EthConfig,
 };
 #[cfg(feature = "display")]
 use ark_std::{end_timer, start_timer};
@@ -19,19 +20,18 @@ use ethers_core::types::H256;
 #[cfg(feature = "providers")]
 use ethers_providers::{Http, Provider};
 use halo2_base::{
-    gates::{flex_gate::FlexGateConfig, range::RangeConfig, GateInstructions, RangeInstructions},
+    gates::GateInstructions,
     halo2_proofs::{
         circuit::{Layouter, SimpleFloorPlanner, Value},
-        plonk::{Circuit, Column, ConstraintSystem, Error, Instance},
+        plonk::{Circuit, ConstraintSystem, Error},
     },
-    utils::{bit_length, PrimeField, ScalarField},
+    utils::PrimeField,
     AssignedValue, Context, ContextParams,
     QuantumCell::{Constant, Existing},
     SKIP_FIRST_PASS,
 };
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
-use std::env::set_var;
 
 #[cfg(feature = "aggregation")]
 pub mod aggregation;
@@ -50,11 +50,11 @@ pub const GOERLI_BLOCK_HEADER_RLP_MAX_BYTES: usize = 1 + 2 + 521 + GOERLI_EXTRA_
 const BLOCK_HEADER_RLP_MIN_BYTES: usize = 479;
 
 const NUM_BLOCK_HEADER_FIELDS: usize = 16;
-const BLOCK_NUMBER_MAX_BYTES: usize = 4;
 const MAINNET_HEADER_FIELDS_MAX_BYTES: [usize; NUM_BLOCK_HEADER_FIELDS] =
     [32, 32, 20, 32, 32, 32, 256, 7, 4, 4, 4, 4, MAINNET_EXTRA_DATA_MAX_BYTES, 32, 8, 6];
 const GOERLI_HEADER_FIELDS_MAX_BYTES: [usize; NUM_BLOCK_HEADER_FIELDS] =
     [32, 32, 20, 32, 32, 32, 256, 7, 4, 4, 4, 4, GOERLI_EXTRA_DATA_MAX_BYTES, 32, 8, 6];
+pub const BLOCK_NUMBER_MAX_BYTES: usize = MAINNET_HEADER_FIELDS_MAX_BYTES[8];
 
 // Field        Type        Size (bytes) RLP size (bytes) RLP size (bits)
 // parentHash	256 bits	32	33	264
@@ -107,69 +107,7 @@ pub struct EthBlockHeaderTraceWitness<'v, F: Field> {
     pub block_hash_query_idx: usize,
 }
 
-#[derive(Clone, Debug)]
-pub struct EthBlockHeaderConfig<F: Field> {
-    pub rlp: RlpConfig<F>,
-    pub keccak: KeccakConfig<F>,
-    // TODO: describe instances
-    pub instance: Column<Instance>,
-}
-
-impl<F: Field> EthBlockHeaderConfig<F> {
-    pub fn configure(
-        meta: &mut ConstraintSystem<F>,
-        params: EthBlockHeaderConfigParams,
-        context_id: usize,
-    ) -> Self {
-        let mut rlp = RlpConfig::configure(
-            meta,
-            params.num_rlc_columns,
-            &params.num_range_advice,
-            &params.num_lookup_advice,
-            params.num_fixed,
-            8, // set this to 8 for now since it coincides with bytes
-            context_id,
-            params.degree as usize,
-        );
-        set_var("KECCAK_DEGREE", params.degree.to_string());
-        set_var("KECCAK_ROWS", params.keccak_rows_per_round.to_string());
-        set_var("UNUSABLE_ROWS", params.unusable_rows.to_string());
-        let keccak = KeccakConfig::new(meta, rlp.rlc.gamma);
-        #[cfg(feature = "display")]
-        println!("Unusable rows: {}", meta.minimum_rows());
-
-        let instance = meta.instance_column();
-        meta.enable_equality(instance);
-        rlp.range.gate.max_rows = (1 << params.degree) - meta.minimum_rows();
-        Self { rlp, keccak, instance }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct EthBlockHeaderChip<'v, F: Field> {
-    pub rlp: RlpChip<'v, F>,
-    pub keccak: KeccakChip<'v, F>,
-    pub instance: Column<Instance>,
-}
-
-impl<'v, F: Field> EthBlockHeaderChip<'v, F> {
-    pub fn new(config: EthBlockHeaderConfig<F>, gamma: Value<F>) -> Self {
-        let rlp = RlpChip::new(config.rlp, gamma);
-        let keccak = KeccakChip::new(config.keccak);
-        Self { rlp, keccak, instance: config.instance }
-    }
-
-    pub fn range(&self) -> &RangeConfig<F> {
-        &self.rlp.range
-    }
-
-    pub fn gate(&self) -> &FlexGateConfig<F> {
-        self.rlp.range.gate()
-    }
-
-    pub fn get_challenge(&mut self, ctx: &mut Context<'_, F>) {
-        self.rlp.get_challenge(ctx);
-    }
+pub trait EthBlockHeaderChip<'v, F: Field> {
     /// Takes the variable length RLP encoded block header, padded with 0s to the maximum possible block header RLP length, and outputs the decomposition into block header fields.
     ///
     /// In addition, the keccak block hash of the block is calculated.
@@ -178,7 +116,73 @@ impl<'v, F: Field> EthBlockHeaderChip<'v, F> {
     ///
     /// This is the preparation step that computes the witnesses. This MUST be done in `FirstPhase`.
     /// The accompanying `decompose_block_header_finalize` must be called in `SecondPhase` to constrain the RLCs associated to the RLP decoding.
-    pub fn decompose_block_header_phase0(
+    fn decompose_block_header_phase0(
+        &mut self,
+        ctx: &mut Context<'v, F>,
+        block_header: &[u8],
+        network: Network,
+    ) -> EthBlockHeaderTraceWitness<'v, F>;
+
+    /// Takes the variable length RLP encoded block header, padded with 0s to the maximum possible block header RLP length, and outputs the decomposition into block header fields.
+    ///
+    /// In addition, the keccak block hash of the block is calculated.
+    ///
+    /// Assumes `block_header` and `block_header_assigned` have the same values as bytes. The former is only used for faster witness generation.
+    ///
+    /// This is the finalization step that constrains RLC concatenations.
+    /// This should be called after `decompose_block_header_phase0`.
+    /// This MUST be done in `SecondPhase`.
+    fn decompose_block_header_phase1(
+        &mut self,
+        ctx: &mut Context<'v, F>,
+        witness: EthBlockHeaderTraceWitness<'v, F>,
+    ) -> EthBlockHeaderTrace<'v, F>;
+
+    /// Takes a list of (purported) RLP encoded block headers and
+    /// decomposes each header into it's fields.
+    /// `headers[0]` is the earliest block.
+    ///
+    /// - If `num_blocks` is not None, then the circuit checks that the first `num_blocks` block headers form a chain: meaning that the parent hash of block i + 1 equals the hash of block i.
+    /// - Otherwise if `num_blocks` is None, the circuit checks that all `headers` form a hash chain.
+    ///
+    /// This is the preparation step that computes the witnesses. This MUST be done in `FirstPhase`.
+    /// The accompanying `decompose_block_header_chain_finalize` must be called in `SecondPhase` to constrain the RLCs associated to the RLP decoding.
+    fn decompose_block_header_chain_phase0(
+        &mut self,
+        ctx: &mut Context<'v, F>,
+        headers: &[Vec<u8>],
+        network: Network,
+    ) -> Vec<EthBlockHeaderTraceWitness<'v, F>> {
+        debug_assert_eq!(ctx.current_phase(), 0);
+        headers
+            .iter()
+            .map(|header| self.decompose_block_header_phase0(ctx, header, network))
+            .collect()
+    }
+
+    /// Takes a list of `2^max_depth` (purported) RLP encoded block headers.
+    /// Decomposes each header into it's fields.
+    /// `headers[0]` is the earliest block
+    ///
+    /// If `num_blocks_minus_one` is not None, then the circuit checks that the first `num_blocks := num_blocks_minus_one + 1` block headers form a chain: meaning that the parent hash of block i + 1 equals the hash of block i.
+    ///
+    /// Otherwise if `num_blocks` is None, the circuit checks that all `headers` form a hash chain.
+    ///
+    /// Assumes that `0 <= num_blocks_minus_one < 2^max_depth`.
+    ///
+    /// This is the finalization step that constrains RLC concatenations. In this step the hash chain is actually constrained.
+    /// This should be called after `decompose_block_header_chain_phase0`.
+    /// This MUST be done in `SecondPhase`.
+    fn decompose_block_header_chain_phase1(
+        &mut self,
+        ctx: &mut Context<'v, F>,
+        witnesses: Vec<EthBlockHeaderTraceWitness<'v, F>>,
+        num_blocks_minus_one: Option<&AssignedValue<'v, F>>,
+    ) -> Vec<EthBlockHeaderTrace<'v, F>>;
+}
+
+impl<'v, F: Field> EthBlockHeaderChip<'v, F> for EthChip<'v, F> {
+    fn decompose_block_header_phase0(
         &mut self,
         ctx: &mut Context<'v, F>,
         block_header: &[u8],
@@ -197,11 +201,11 @@ impl<'v, F: Field> EthBlockHeaderChip<'v, F> {
             block_header.iter().map(|byte| Value::known(F::from(*byte as u64))),
         );
         let rlp_witness =
-            self.rlp.decompose_rlp_array_phase0(ctx, block_header_assigned, max_field_lens, true); // `is_variable_len = true` because RLP can have either 15 or 16 fields, depending on whether block is pre-London or not
+            self.rlp().decompose_rlp_array_phase0(ctx, block_header_assigned, max_field_lens, true); // `is_variable_len = true` because RLP can have either 15 or 16 fields, depending on whether block is pre-London or not
 
-        let block_hash_query_idx = self.keccak.keccak_var_len(
+        let block_hash_query_idx = self.mpt.keccak.keccak_var_len(
             ctx,
-            &self.rlp.range,
+            &self.mpt.rlp.range,
             rlp_witness.rlp_array.clone(), // this is `block_header_assigned`
             Some(block_header.to_vec()),
             rlp_witness.rlp_len.clone(),
@@ -210,24 +214,14 @@ impl<'v, F: Field> EthBlockHeaderChip<'v, F> {
         EthBlockHeaderTraceWitness { rlp_witness, block_hash_query_idx }
     }
 
-    /// Takes the variable length RLP encoded block header, padded with 0s to the maximum possible block header RLP length, and outputs the decomposition into block header fields.
-    ///
-    /// In addition, the keccak block hash of the block is calculated.
-    ///
-    /// Assumes `block_header` and `block_header_assigned` have the same values as bytes. The former is only used for faster witness generation.
-    ///
-    /// This is the finalization step that constrains RLC concatenations.
-    /// This should be called after `decompose_block_header_phase0`.
-    /// This MUST be done in `SecondPhase`.
-    pub fn decompose_block_header_phase1(
+    fn decompose_block_header_phase1(
         &mut self,
         ctx: &mut Context<'v, F>,
         witness: EthBlockHeaderTraceWitness<'v, F>,
-        keccak_var_len_rlcs: &[(RlcTrace<'v, F>, RlcFixedTrace<'v, F>)],
     ) -> EthBlockHeaderTrace<'v, F> {
         debug_assert_eq!(ctx.current_phase(), RLC_PHASE);
-        let mut trace = self.rlp.decompose_rlp_array_phase1(ctx, witness.rlp_witness, true);
-        let block_hash = keccak_var_len_rlcs[witness.block_hash_query_idx].1.clone();
+        let mut trace = self.mpt.rlp.decompose_rlp_array_phase1(ctx, witness.rlp_witness, true);
+        let block_hash = self.keccak().var_len_rlcs[witness.block_hash_query_idx].1.clone();
 
         // Base fee per unit gas only after London
         let basefee = trace.field_trace.pop();
@@ -257,52 +251,16 @@ impl<'v, F: Field> EthBlockHeaderChip<'v, F> {
         }
     }
 
-    /// Takes a list of (purported) RLP encoded block headers and
-    /// decomposes each header into it's fields.
-    /// `headers[0]` is the earliest block.
-    ///
-    /// - If `num_blocks` is not None, then the circuit checks that the first `num_blocks` block headers form a chain: meaning that the parent hash of block i + 1 equals the hash of block i.
-    /// - Otherwise if `num_blocks` is None, the circuit checks that all `headers` form a hash chain.
-    ///
-    /// This is the preparation step that computes the witnesses. This MUST be done in `FirstPhase`.
-    /// The accompanying `decompose_block_header_chain_finalize` must be called in `SecondPhase` to constrain the RLCs associated to the RLP decoding.
-    pub fn decompose_block_header_chain_phase0(
-        &mut self,
-        ctx: &mut Context<'v, F>,
-        headers: &[Vec<u8>],
-        network: Network,
-    ) -> Vec<EthBlockHeaderTraceWitness<'v, F>> {
-        debug_assert_eq!(ctx.current_phase(), 0);
-        headers
-            .iter()
-            .map(|header| self.decompose_block_header_phase0(ctx, header, network))
-            .collect()
-    }
-
-    /// Takes a list of `2^max_depth` (purported) RLP encoded block headers.
-    /// Decomposes each header into it's fields.
-    /// `headers[0]` is the earliest block
-    ///
-    /// If `num_blocks_minus_one` is not None, then the circuit checks that the first `num_blocks := num_blocks_minus_one + 1` block headers form a chain: meaning that the parent hash of block i + 1 equals the hash of block i.
-    ///
-    /// Otherwise if `num_blocks` is None, the circuit checks that all `headers` form a hash chain.
-    ///
-    /// Assumes that `0 <= num_blocks_minus_one < 2^max_depth`.
-    ///
-    /// This is the finalization step that constrains RLC concatenations. In this step the hash chain is actually constrained.
-    /// This should be called after `decompose_block_header_chain_phase0`.
-    /// This MUST be done in `SecondPhase`.
-    pub fn decompose_block_header_chain_phase1(
+    fn decompose_block_header_chain_phase1(
         &mut self,
         ctx: &mut Context<'v, F>,
         witnesses: Vec<EthBlockHeaderTraceWitness<'v, F>>,
         num_blocks_minus_one: Option<&AssignedValue<'v, F>>,
-        keccak_var_len_rlcs: &[(RlcTrace<'v, F>, RlcFixedTrace<'v, F>)],
     ) -> Vec<EthBlockHeaderTrace<'v, F>> {
         debug_assert_eq!(ctx.current_phase(), RLC_PHASE);
         let traces = witnesses
             .into_iter()
-            .map(|witness| self.decompose_block_header_phase1(ctx, witness, keccak_var_len_rlcs))
+            .map(|witness| self.decompose_block_header_phase1(ctx, witness))
             .collect_vec();
 
         // record for each idx whether hash of headers[idx] is in headers[idx + 1]
@@ -422,35 +380,6 @@ pub fn get_boundary_block_data<'v, F: Field + PrimeField>(
     (prev_block_hash, end_block_hash, block_numbers)
 }
 
-/// Takes a fixed length array `bytes` and returns a length `out_len` array equal to
-/// `[[0; out_len - len], bytes[..len]].concat()`, i.e., we take `bytes[..len]` and
-/// zero pad it on the left.
-///
-/// Assumes `0 < len <= max_len <= out_len`.
-pub fn bytes_be_var_to_fixed<'v, F: ScalarField>(
-    ctx: &mut Context<'_, F>,
-    gate: &impl GateInstructions<F>,
-    bytes: &[AssignedValue<'v, F>],
-    len: &AssignedValue<'v, F>,
-    out_len: usize,
-) -> Vec<AssignedValue<'v, F>> {
-    debug_assert!(bytes.len() <= out_len);
-    debug_assert!(bit_length(out_len as u64) < F::CAPACITY as usize);
-
-    // If `bytes` is an RLP field, then `len <= bytes.len()` was already checked during `decompose_rlp_array_phase0` so we don't need to do it again:
-    // range.range_check(ctx, len, bit_length(bytes.len() as u64));
-
-    // out[idx] = 1{ len >= out_len - idx } * bytes[idx + len - out_len]
-    (0..out_len)
-        .map(|idx| {
-            let byte_idx = gate.sub(ctx, Existing(len), Constant(F::from((out_len - idx) as u64)));
-            // If `len - (out_len - idx) < 0` then the `F` value will be >= `bytes.len()` provided that `out_len` is not too big -- namely `bit_length(out_len) <= F::CAPACITY - 1`
-            // Thus select_from_idx at idx < 0 will return 0
-            gate.select_from_idx(ctx, bytes.iter().map(|x| Existing(x)), Existing(&byte_idx))
-        })
-        .collect()
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct EthBlockHeaderChainInstance {
     prev_hash: H256,
@@ -502,7 +431,7 @@ pub struct EthBlockHeaderChainCircuit<F> {
 }
 
 impl<F: Field + PrimeField> Circuit<F> for EthBlockHeaderChainCircuit<F> {
-    type Config = EthBlockHeaderConfig<F>;
+    type Config = EthConfig<F>;
     type FloorPlanner = SimpleFloorPlanner;
 
     fn without_witnesses(&self) -> Self {
@@ -523,21 +452,21 @@ impl<F: Field + PrimeField> Circuit<F> for EthBlockHeaderChainCircuit<F> {
     }
 
     fn configure(meta: &mut ConstraintSystem<F>) -> Self::Config {
-        let params = EthBlockHeaderConfigParams::get();
-        EthBlockHeaderConfig::configure(meta, params, 0)
+        let params = EthConfigParams::get_header();
+        EthConfig::configure(meta, params, 0)
     }
 
     fn synthesize(
         &self,
-        config: Self::Config,
+        config: EthConfig<F>,
         mut layouter: impl Layouter<F>,
     ) -> Result<(), Error> {
         #[cfg(feature = "display")]
         let witness_gen = start_timer!(|| "synthesize");
 
-        let gamma = layouter.get_challenge(config.rlp.rlc.gamma);
-        config.rlp.range.load_lookup_table(&mut layouter).expect("load range lookup table");
-        config.keccak.load_aux_tables(&mut layouter).expect("load keccak lookup tables");
+        let gamma = layouter.get_challenge(config.rlc().gamma);
+        config.range().load_lookup_table(&mut layouter).expect("load range lookup table");
+        config.keccak().load_aux_tables(&mut layouter).expect("load keccak lookup tables");
         let instance_column = config.instance;
 
         let mut first_pass = SKIP_FIRST_PASS;
@@ -550,7 +479,7 @@ impl<F: Field + PrimeField> Circuit<F> for EthBlockHeaderChainCircuit<F> {
                         first_pass = false;
                         return Ok(());
                     }
-                    let mut chip = EthBlockHeaderChip::new(config.clone(), gamma);
+                    let mut chip = EthChip::new(config.clone(), gamma);
                     let mut aux = Context::new(
                         region,
                         ContextParams {
@@ -580,15 +509,15 @@ impl<F: Field + PrimeField> Circuit<F> for EthBlockHeaderChainCircuit<F> {
                     let block_hashes = block_chain_witness
                         .iter()
                         .map(|witness| {
-                            chip.keccak.var_len_queries[witness.block_hash_query_idx]
+                            chip.keccak().var_len_queries[witness.block_hash_query_idx]
                                 .output_assigned
                                 .clone()
                         })
                         .collect_vec();
                     // mountain range in bytes
-                    let mountain_range = chip.keccak.merkle_mountain_range(
+                    let mountain_range = chip.mpt.keccak.merkle_mountain_range(
                         ctx,
-                        chip.rlp.gate(),
+                        chip.mpt.rlp.gate(),
                         &block_hashes,
                         &num_leaves_bits,
                     );
@@ -606,31 +535,19 @@ impl<F: Field + PrimeField> Circuit<F> for EthBlockHeaderChainCircuit<F> {
                         })
                         .collect_vec();
 
-                    // Generate and assign witnesses for keccak
-                    chip.keccak.assign_phase0(&mut ctx.region);
-                    // assign cells to range check to special advice columns with lookup enabled
-                    chip.range().finalize(ctx);
+                    chip.assign_phase0(ctx);
                     ctx.next_phase();
 
                     // ======== SECOND PHASE ========
                     // get challenge now that it has been squeezed
                     chip.get_challenge(ctx);
                     // Generate and constrain RLCs for keccak table
-                    let (keccak_fixed_len_rlcs, keccak_var_len_rlcs) =
-                        chip.keccak.compute_all_rlcs(ctx, &mut chip.rlp.rlc, &chip.rlp.range.gate);
-                    chip.keccak.assign_phase1(
-                        ctx,
-                        &chip.rlp.range,
-                        chip.rlp.rlc.gamma,
-                        &keccak_fixed_len_rlcs,
-                        &keccak_var_len_rlcs,
-                    );
+                    chip.keccak_assign_phase1(ctx);
 
                     let block_chain_trace = chip.decompose_block_header_chain_phase1(
                         ctx,
                         block_chain_witness,
                         Some(&num_blocks_minus_one),
-                        &keccak_var_len_rlcs,
                     );
 
                     // It's better to do more computations in SecondPhase because that means less commitments for the Challenge to hash, although the difference is probably marginal.

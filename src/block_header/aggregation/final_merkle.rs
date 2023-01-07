@@ -72,7 +72,6 @@ impl AggregationWithKeccakConfig {
         let keccak = KeccakConfig::new(meta, rlc.gamma);
         #[cfg(feature = "display")]
         println!("Unusable rows: {}", meta.minimum_rows());
-
         aggregation.base_field_config.range.gate.max_rows = (1 << degree) - meta.minimum_rows();
         Self { keccak, aggregation, rlc }
     }
@@ -242,15 +241,7 @@ impl Circuit<Fr> for EthBlockHeaderChainFinalAggregationCircuit {
 
                     // ============ SECOND PHASE ============
                     rlc_chip.get_challenge(ctx);
-                    let (fixed_len_rlcs, var_len_rlcs) =
-                        keccak_chip.compute_all_rlcs(ctx, &mut rlc_chip, config.gate());
-                    keccak_chip.assign_phase1(
-                        ctx,
-                        config.range(),
-                        rlc_chip.gamma,
-                        &fixed_len_rlcs,
-                        &var_len_rlcs,
-                    );
+                    keccak_chip.assign_phase1(ctx, &mut rlc_chip, config.range());
                     config.range().finalize(ctx);
 
                     #[cfg(feature = "display")]

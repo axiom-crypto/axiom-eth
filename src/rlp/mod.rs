@@ -115,17 +115,17 @@ pub struct RlpFieldWitness<'v, F: ScalarField> {
     len_cells: Vec<AssignedValue<'v, F>>,
     max_len_len: usize,
 
-    field_len: AssignedValue<'v, F>,
-    field_cells: Vec<AssignedValue<'v, F>>,
+    pub field_len: AssignedValue<'v, F>,
+    pub field_cells: Vec<AssignedValue<'v, F>>,
     max_field_len: usize,
 }
 
 #[derive(Clone, Debug)]
 pub struct RlpFieldTraceWitness<'v, F: ScalarField> {
-    witness: RlpFieldWitness<'v, F>,
+    pub witness: RlpFieldWitness<'v, F>,
 
-    rlp_len: AssignedValue<'v, F>,
-    rlp_field: Vec<AssignedValue<'v, F>>,
+    pub rlp_len: AssignedValue<'v, F>,
+    pub rlp_field: Vec<AssignedValue<'v, F>>,
 }
 
 #[derive(Clone, Debug)]
@@ -214,7 +214,6 @@ impl<'g, F: ScalarField> RlpChip<'g, F> {
         &self.rlc
     }
 
-    #[cfg(feature = "halo2-axiom")]
     pub fn get_challenge(&mut self, ctx: &mut Context<F>) {
         self.rlc.get_challenge(ctx);
     }

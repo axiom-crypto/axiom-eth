@@ -36,9 +36,9 @@ pub struct EthBlockHeaderChainAggregationCircuit {
     num_blocks: u32,
     // because the aggregation circuit doesn't have a keccak chip, in the mountain range
     // vector we will store the `2^{max_depth - initial_depth}` "new roots" as well as the length `initial_depth` mountain range tail, which determines the smallest entries in the mountain range.
-    pub(crate) chain_instance: EthBlockHeaderChainInstance,
-    pub(crate) max_depth: usize,
-    pub(crate) initial_depth: usize,
+    pub chain_instance: EthBlockHeaderChainInstance,
+    pub max_depth: usize,
+    pub initial_depth: usize,
 }
 
 impl EthBlockHeaderChainAggregationCircuit {

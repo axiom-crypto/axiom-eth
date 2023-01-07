@@ -1,10 +1,10 @@
 {
   "strategy": "Simple",
-  "degree": 22,
-  "num_advice": [16],
-  "num_lookup_advice": [2],
+  "degree": 21,
+  "num_advice": [33],
+  "num_lookup_advice": [4],
   "num_fixed": 1,
-  "lookup_bits": 21,
+  "lookup_bits": 20,
   "limb_bits": 88,
   "num_limbs": 3
 }

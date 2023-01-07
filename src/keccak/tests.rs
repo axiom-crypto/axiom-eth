@@ -32,7 +32,8 @@ use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
 use std::{
     env::{set_var, var},
-    io::{BufRead, Write},
+    fs::File,
+    io::{BufRead, BufReader, Write},
 };
 use zkevm_keccak::keccak_packed_multi::get_keccak_capacity;
 
@@ -149,15 +150,7 @@ impl<F: Field> Circuit<F> for KeccakCircuit {
 
                     // SECOND PHASE
                     rlc_chip.get_challenge(ctx);
-                    let (fixed_len_rlcs, var_len_rlcs) =
-                        keccak_chip.compute_all_rlcs(ctx, &mut rlc_chip, config.range.gate());
-                    keccak_chip.assign_phase1(
-                        ctx,
-                        &config.range,
-                        rlc_chip.gamma,
-                        &fixed_len_rlcs,
-                        &var_len_rlcs,
-                    );
+                    keccak_chip.assign_phase1(ctx, &mut rlc_chip, &config.range);
                     config.range.finalize(ctx);
 
                     #[cfg(feature = "display")]
@@ -198,7 +191,6 @@ pub struct KeccakBenchConfig {
     degree: usize,
     range_advice: Vec<usize>,
     num_rlc: usize,
-    keccak_advice: usize, // this is hand recorded from log::info
     unusable_rows: usize,
     rows_per_round: usize,
 }
@@ -206,27 +198,19 @@ pub struct KeccakBenchConfig {
 #[test]
 fn bench_keccak() {
     let _ = env_logger::builder().is_test(true).try_init();
-
-    let mut folder = std::path::PathBuf::new();
-    folder.push("configs/bench_keccak.config");
-    let bench_params_file = std::fs::File::open(folder.as_path()).unwrap();
-    folder.pop();
-    folder.pop();
-
-    folder.push("data");
-    folder.push("keccak_bench.csv");
-    dbg!(&folder);
-    let mut fs_results = std::fs::File::create(folder.as_path()).unwrap();
-    folder.pop();
+    let bench_params_file = File::open("configs/bench/keccak.json").unwrap();
+    std::fs::create_dir_all("data/bench").unwrap();
+    let mut fs_results = File::create("data/bench/keccak.csv").unwrap();
     writeln!(
             fs_results,
             "degree,advice_columns,unusable_rows,rows_per_round,keccak_f/s,num_keccak_f,proof_time,proof_size,verify_time"
         )
         .unwrap();
 
-    let bench_params_reader = std::io::BufReader::new(bench_params_file);
-    for line in bench_params_reader.lines() {
-        let bench_params: KeccakBenchConfig = serde_json::from_str(line.unwrap().as_str()).unwrap();
+    let bench_params_reader = BufReader::new(bench_params_file);
+    let bench_params: Vec<KeccakBenchConfig> =
+        serde_json::from_reader(bench_params_reader).unwrap();
+    for bench_params in bench_params {
         println!(
             "---------------------- degree = {} ------------------------------",
             bench_params.degree
@@ -287,25 +271,20 @@ fn bench_keccak() {
         .unwrap();
         end_timer!(verify_time);
 
-        let proof_size = {
-            folder.push("keccak_circuit_proof.data");
-            let mut fd = std::fs::File::create(folder.as_path()).unwrap();
-            folder.pop();
-            fd.write_all(&proof).unwrap();
-            fd.metadata().unwrap().len()
-        };
-
+        let keccak_advice = std::env::var("KECCAK_ADVICE_COLUMNS")
+            .unwrap_or_else(|_| "0".to_string())
+            .parse::<usize>()
+            .unwrap();
         writeln!(
             fs_results,
-            "{},{},{},{},{:.2},{},{:.2}s,{},{:?}",
+            "{},{},{},{},{:.2},{},{:.2}s,{:?}",
             bench_params.degree,
-            bench_params.range_advice.iter().sum::<usize>() + bench_params.keccak_advice + 2,
+            bench_params.range_advice.iter().sum::<usize>() + keccak_advice + 2,
             bench_params.unusable_rows,
             bench_params.rows_per_round,
             f64::from(capacity as u32) / proof_time.time.elapsed().as_secs_f64(),
             capacity,
             proof_time.time.elapsed().as_secs_f64(),
-            proof_size,
             verify_time.time.elapsed()
         )
         .unwrap();

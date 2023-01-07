@@ -6,7 +6,10 @@ use ethers_core::{
 use halo2_base::{
     gates::{range::RangeConfig, GateInstructions, RangeInstructions},
     halo2_proofs::circuit::Value,
-    utils::{decompose_fe_to_u64_limbs, value_to_option, PrimeField, ScalarField},
+    utils::{
+        bit_length, decompose, decompose_fe_to_u64_limbs, value_to_option, BigPrimeField,
+        PrimeField, ScalarField,
+    },
     AssignedValue, Context,
     QuantumCell::{Constant, Existing, Witness},
 };
@@ -32,15 +35,24 @@ pub struct EthConfigParams {
 }
 
 impl EthConfigParams {
-    pub fn get() -> Self {
-        let path = var("BLOCK_HEADER_CONFIG")
-            .unwrap_or_else(|_| "configs/block_header.config".to_string());
+    pub fn get_header() -> Self {
+        let path =
+            var("BLOCK_HEADER_CONFIG").unwrap_or_else(|_| "configs/block_header.json".to_string());
+        serde_json::from_reader(
+            File::open(&path).unwrap_or_else(|e| panic!("{path} does not exist. {e:?}")),
+        )
+        .unwrap()
+    }
+    pub fn get_storage() -> Self {
+        let path = var("STORAGE_CONFIG").unwrap_or_else(|_| "configs/storage.json".to_string());
         serde_json::from_reader(
             File::open(&path).unwrap_or_else(|e| panic!("{path} does not exist. {e:?}")),
         )
         .unwrap()
     }
 }
+
+pub(crate) type AssignedH256<'v, F> = [AssignedValue<'v, F>; 2]; // H256 as hi-lo (u128, u128)
 
 pub fn get_merkle_mountain_range(leaves: &[H256], max_depth: usize) -> Vec<H256> {
     let num_leaves = leaves.len();
@@ -74,6 +86,12 @@ pub fn hash_tree_root(leaves: &[H256]) -> H256 {
         }
     }
     H256::from_slice(&hash_bytes[0])
+}
+
+pub fn u256_to_bytes32_be(input: &U256) -> Vec<u8> {
+    let mut bytes = vec![0; 32];
+    input.to_big_endian(&mut bytes);
+    bytes
 }
 
 // Field is has PrimeField<Repr = [u8; 32]>
@@ -113,6 +131,8 @@ pub fn encode_addr_to_field<F: Field>(input: &Address) -> F {
     F::from_repr(repr).unwrap()
 }
 
+// circuit utils:
+
 /// Assumes that `bytes` have witnesses that are bytes.
 pub fn bytes_be_to_u128<'v, F: PrimeField>(
     ctx: &mut Context<'_, F>,
@@ -141,6 +161,7 @@ pub(crate) fn limbs_be_to_u128<'v, F: PrimeField>(
         .collect_vec()
 }
 
+// `num` in u64
 pub fn num_to_bytes_be<'v, F: ScalarField>(
     ctx: &mut Context<'v, F>,
     range: &RangeConfig<F>,
@@ -169,4 +190,85 @@ pub fn num_to_bytes_be<'v, F: ScalarField>(
     }
     bytes.reverse();
     bytes
+}
+
+/// Takes a fixed length array `bytes` and returns a length `out_len` array equal to
+/// `[[0; out_len - len], bytes[..len]].concat()`, i.e., we take `bytes[..len]` and
+/// zero pad it on the left.
+///
+/// Assumes `0 < len <= max_len <= out_len`.
+pub fn bytes_be_var_to_fixed<'v, F: ScalarField>(
+    ctx: &mut Context<'_, F>,
+    gate: &impl GateInstructions<F>,
+    bytes: &[AssignedValue<'v, F>],
+    len: &AssignedValue<'v, F>,
+    out_len: usize,
+) -> Vec<AssignedValue<'v, F>> {
+    debug_assert!(bytes.len() <= out_len);
+    debug_assert!(bit_length(out_len as u64) < F::CAPACITY as usize);
+
+    // If `bytes` is an RLP field, then `len <= bytes.len()` was already checked during `decompose_rlp_array_phase0` so we don't need to do it again:
+    // range.range_check(ctx, len, bit_length(bytes.len() as u64));
+
+    // out[idx] = 1{ len >= out_len - idx } * bytes[idx + len - out_len]
+    (0..out_len)
+        .map(|idx| {
+            let byte_idx = gate.sub(ctx, Existing(len), Constant(F::from((out_len - idx) as u64)));
+            // If `len - (out_len - idx) < 0` then the `F` value will be >= `bytes.len()` provided that `out_len` is not too big -- namely `bit_length(out_len) <= F::CAPACITY - 1`
+            // Thus select_from_idx at idx < 0 will return 0
+            gate.select_from_idx(ctx, bytes.iter().map(|x| Existing(x)), Existing(&byte_idx))
+        })
+        .collect()
+}
+
+pub fn uint_to_bytes_be<'v, F: BigPrimeField>(
+    ctx: &mut Context<'v, F>,
+    range: &RangeConfig<F>,
+    uint: &AssignedValue<'v, F>,
+    num_bytes: usize,
+) -> Vec<AssignedValue<'v, F>> {
+    let mut bytes_le = uint_to_bytes_le(ctx, range, uint, num_bytes);
+    bytes_le.reverse();
+    bytes_le
+}
+
+pub fn uint_to_bytes_le<'v, F: BigPrimeField>(
+    ctx: &mut Context<'v, F>,
+    range: &RangeConfig<F>,
+    uint: &AssignedValue<'v, F>,
+    num_bytes: usize,
+) -> Vec<AssignedValue<'v, F>> {
+    let mut bytes = Vec::with_capacity(num_bytes);
+    let pows = range.gate().pow_of_two().iter().step_by(8).take(num_bytes).map(|x| Constant(*x));
+    let acc = match value_to_option(uint.value()) {
+        Some(uint) => {
+            let byte_vals =
+                decompose(uint, num_bytes, 8).into_iter().map(|x| Witness(Value::known(x)));
+            range.gate.inner_product_left(ctx, byte_vals, pows, &mut bytes)
+        }
+        _ => range.gate.inner_product_left(
+            ctx,
+            vec![Witness(Value::unknown()); num_bytes],
+            pows,
+            &mut bytes,
+        ),
+    };
+    ctx.constrain_equal(&acc, uint);
+    for byte in &bytes {
+        range.range_check(ctx, byte, 8);
+    }
+    bytes
+}
+
+pub fn bytes_be_to_uint<'v, F: ScalarField>(
+    ctx: &mut Context<'_, F>,
+    gate: &impl GateInstructions<F>,
+    input: &[AssignedValue<'v, F>],
+    num_bytes: usize,
+) -> AssignedValue<'v, F> {
+    gate.inner_product(
+        ctx,
+        input[..num_bytes].iter().rev().map(Existing),
+        (0..num_bytes).map(|idx| Constant(gate.pow_of_two()[8 * idx])),
+    )
 }

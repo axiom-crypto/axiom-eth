@@ -94,6 +94,7 @@ pub fn read_block_header_chain_snark(
     end_block_number: u32,
     max_depth: usize,
     initial_depth: usize,
+    is_final: bool,
 ) -> Result<(Snark, EthBlockHeaderChainInstance), bincode::Error> {
     assert!(end_block_number - start_block_number < 1 << max_depth);
     let name = if max_depth == initial_depth {
@@ -101,8 +102,9 @@ pub fn read_block_header_chain_snark(
             "data/headers/{network}_{max_depth}_{start_block_number:06x}_{end_block_number:06x}"
         )
     } else {
+        let suffix = if is_final { "_final" } else { "" };
         format!(
-        "data/headers/{network}_{max_depth}_{initial_depth}_{start_block_number:06x}_{end_block_number:06x}")
+        "data/headers/{network}_{max_depth}_{initial_depth}_{start_block_number:06x}_{end_block_number:06x}{suffix}")
     };
     let instance_path = format!("{name}.in");
     let snark_path = format!("{name}.snark");
@@ -112,13 +114,8 @@ pub fn read_block_header_chain_snark(
 }
 
 impl<F: Field + PrimeField> CircuitExt<F> for EthBlockHeaderChainCircuit<F> {
-    type ExtraCircuitParams = usize;
-    fn extra_params(&self) -> Self::ExtraCircuitParams {
-        self.max_depth
-    }
-
-    fn num_instance(max_depth: &usize) -> Vec<usize> {
-        vec![Self::get_num_instance(*max_depth)]
+    fn num_instance(&self) -> Vec<usize> {
+        vec![Self::get_num_instance(self.max_depth)]
     }
 
     fn instances(&self) -> Vec<Vec<F>> {
@@ -127,6 +124,7 @@ impl<F: Field + PrimeField> CircuitExt<F> for EthBlockHeaderChainCircuit<F> {
 }
 
 // To keep srs and pk in memory, we use this function to generate multiple instances of the same snark
+// Uses "top-down" memoization approach
 pub fn gen_multiple_block_header_chain_snarks(
     provider: &Provider<Http>,
     network: Network,
@@ -142,7 +140,7 @@ pub fn gen_multiple_block_header_chain_snarks(
         .step_by(1 << max_depth)
         .map(|start| {
             let end = min(start + (1 << max_depth) - 1, end_block_number);
-            read_block_header_chain_snark(network, start, end, max_depth, initial_depth).ok()
+            read_block_header_chain_snark(network, start, end, max_depth, initial_depth, false).ok()
         })
         .collect_vec();
     if snarks.iter().all(|snark| snark.is_some()) {
@@ -152,7 +150,7 @@ pub fn gen_multiple_block_header_chain_snarks(
     // otherwise create srs and pk in order to generate missing snarks
     let k = if max_depth == initial_depth {
         set_var("BLOCK_HEADER_CONFIG", format!("configs/headers/{network}_{max_depth}.json"));
-        EthConfigParams::get().degree
+        EthConfigParams::get_header().degree
     } else {
         set_var(
             "VERIFY_CONFIG",
@@ -284,13 +282,8 @@ pub fn gen_block_header_chain_snark_with_aggregation<'pk>(
 }
 
 impl CircuitExt<Fr> for EthBlockHeaderChainAggregationCircuit {
-    type ExtraCircuitParams = (usize, usize);
-    fn extra_params(&self) -> Self::ExtraCircuitParams {
-        (self.max_depth, self.initial_depth)
-    }
-
-    fn num_instance((max_depth, initial_depth): &(usize, usize)) -> Vec<usize> {
-        vec![4 * LIMBS + Self::get_num_instance(*max_depth, *initial_depth)]
+    fn num_instance(&self) -> Vec<usize> {
+        vec![4 * LIMBS + Self::get_num_instance(self.max_depth, self.initial_depth)]
     }
 
     fn instances(&self) -> Vec<Vec<Fr>> {
@@ -393,13 +386,8 @@ pub fn gen_final_block_header_chain_snark<'pk>(
 }
 
 impl CircuitExt<Fr> for EthBlockHeaderChainFinalAggregationCircuit {
-    type ExtraCircuitParams = usize;
-    fn extra_params(&self) -> Self::ExtraCircuitParams {
-        self.0.max_depth
-    }
-
-    fn num_instance(max_depth: &usize) -> Vec<usize> {
-        vec![4 * LIMBS + Self::get_num_instance(*max_depth)]
+    fn num_instance(&self) -> Vec<usize> {
+        vec![4 * LIMBS + Self::get_num_instance(self.0.max_depth)]
     }
 
     fn instances(&self) -> Vec<Vec<Fr>> {
@@ -449,7 +437,7 @@ pub mod evm {
     use snark_verifier_sdk::{
         evm::{evm_verify, gen_evm_proof_shplonk, gen_evm_verifier_shplonk, write_calldata},
         gen_pk,
-        halo2::aggregation::EvmVerifierAfterAggregationCircuit,
+        halo2::aggregation::PublicAggregationCircuit,
     };
 
     pub fn autogen_final_block_header_chain_snark_for_evm(
@@ -484,7 +472,7 @@ pub mod evm {
         let k = load_verify_circuit_degree();
         let params = gen_srs(k);
 
-        let circuit = EvmVerifierAfterAggregationCircuit::new(&params, snark, transcript, rng);
+        let circuit = PublicAggregationCircuit::new(&params, vec![snark], true, transcript, rng);
 
         let pk = gen_pk(
             &params,
@@ -502,10 +490,10 @@ pub mod evm {
         ))).expect("writing proof calldata should not fail");
 
         if generate_smart_contract {
-            let deployment_code = gen_evm_verifier_shplonk::<EvmVerifierAfterAggregationCircuit>(
+            let deployment_code = gen_evm_verifier_shplonk::<PublicAggregationCircuit>(
                 &params,
                 pk.get_vk(),
-                &num_instances,
+                vec![num_instances],
                 Some(Path::new(&format!("data/headers/{network}_{max_depth}_{initial_depth}.yul"))),
             );
 
