@@ -29,7 +29,7 @@ use snark_verifier_sdk::{
 };
 use std::{
     cmp::min,
-    env::set_var,
+    env::{set_var, var},
     fs::{read_to_string, File},
     path::Path,
 };
@@ -210,7 +210,7 @@ fn main() {
         Cli::parse();
     let initial_depth = initial_depth.unwrap_or(max_depth);
 
-    let infura_id = read_to_string("scripts/input_gen/INFURA_ID").expect("Infura ID not found");
+    let infura_id = var("INFURA_ID").expect("Infura ID not found");
     let provider_url = match network {
         Network::Mainnet => MAINNET_PROVIDER_URL,
         Network::Goerli => GOERLI_PROVIDER_URL,

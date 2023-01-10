@@ -20,7 +20,6 @@ use ark_std::{end_timer, start_timer};
 use halo2_base::utils::fs::gen_srs;
 use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
-use snark_verifier_sdk::halo2::gen_proof_shplonk;
 use std::{
     env::set_var,
     fs::{self, File},
