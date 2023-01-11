@@ -263,6 +263,7 @@ impl<'v, F: Field> EthBlockHeaderChip<'v, F> for EthChip<'v, F> {
             .map(|witness| self.decompose_block_header_phase1(ctx, witness))
             .collect_vec();
 
+        let thirty_two = self.gate().get_field_element(32);
         // record for each idx whether hash of headers[idx] is in headers[idx + 1]
         if let Some(num_blocks_minus_one) = num_blocks_minus_one {
             let mut hash_checks = Vec::with_capacity(traces.len() - 1);
@@ -273,14 +274,11 @@ impl<'v, F: Field> EthBlockHeaderChip<'v, F> for EthChip<'v, F> {
                     Existing(&traces[idx + 1].parent_hash.field_trace.rlc_val),
                 );
                 hash_checks.push(hash_check);
-                /*
-                // RLC equality with block_hash already ensures this:
                 self.gate().assert_is_const(
                     ctx,
                     &traces[idx + 1].parent_hash.field_trace.len,
-                    self.f_32,
+                    thirty_two,
                 );
-                */
             }
             let hash_check_sums =
                 self.gate().sum_with_assignments(ctx, hash_checks.iter().map(Existing));
@@ -289,12 +287,17 @@ impl<'v, F: Field> EthBlockHeaderChip<'v, F> for EthChip<'v, F> {
                 once(Constant(F::zero())).chain(hash_check_sums.iter().step_by(3).map(Existing)),
                 Existing(num_blocks_minus_one),
             );
-            ctx.region.constrain_equal(hash_check_sum.cell(), num_blocks_minus_one.cell());
+            ctx.constrain_equal(&hash_check_sum, num_blocks_minus_one);
         } else {
             for idx in 0..traces.len() - 1 {
-                ctx.region.constrain_equal(
-                    traces[idx].block_hash.rlc_val.cell(),
-                    traces[idx + 1].parent_hash.field_trace.rlc_val.cell(),
+                ctx.constrain_equal(
+                    &traces[idx].block_hash.rlc_val,
+                    &traces[idx + 1].parent_hash.field_trace.rlc_val,
+                );
+                self.gate().assert_is_const(
+                    ctx,
+                    &traces[idx + 1].parent_hash.field_trace.len,
+                    thirty_two,
                 );
             }
         }
@@ -550,7 +553,8 @@ impl<F: Field + PrimeField> Circuit<F> for EthBlockHeaderChainCircuit<F> {
                         Some(&num_blocks_minus_one),
                     );
 
-                    // It's better to do more computations in SecondPhase because that means less commitments for the Challenge to hash, although the difference is probably marginal.
+                    // This processing can be done in FirstPhase or SecondPhase. The choice would only make a difference
+                    // if it meant less advice columns are needed in one of the phases.
                     let (prev_block_hash, end_block_hash, block_numbers) = get_boundary_block_data(
                         ctx,
                         chip.gate(),

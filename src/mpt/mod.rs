@@ -1,7 +1,13 @@
 use crate::{
     halo2_proofs::{circuit::Value, plonk::ConstraintSystem},
     keccak::{KeccakChip, KeccakConfig},
-    rlp::{max_rlp_len_len, RlpChip, RlpConfig, RlpFieldTrace},
+    rlp::{
+        max_rlp_len_len,
+        rlc::{
+            rlc_constrain_equal, rlc_is_equal, rlc_select, rlc_select_from_idx, RlcTrace, RlcVarLen,
+        },
+        RlpChip, RlpConfig, RlpFieldTrace,
+    },
     rlp::{rlc::RlcChip, RlpArrayTraceWitness},
     util::EthConfigParams,
     Field,
@@ -25,7 +31,7 @@ mod tests;
 pub struct LeafTrace<'v, F: Field> {
     key_path: RlpFieldTrace<'v, F>,
     value: RlpFieldTrace<'v, F>,
-    leaf_hash_rlc: AssignedValue<'v, F>,
+    leaf_hash_rlc: RlcVarLen<'v, F>,
 }
 
 #[derive(Clone, Debug)]
@@ -39,7 +45,7 @@ pub struct LeafTraceWitness<'v, F: Field> {
 pub struct ExtensionTrace<'v, F: Field> {
     key_path: RlpFieldTrace<'v, F>,
     node_ref: RlpFieldTrace<'v, F>,
-    ext_hash_rlc: AssignedValue<'v, F>,
+    ext_hash_rlc: RlcVarLen<'v, F>,
 }
 
 #[derive(Clone, Debug)]
@@ -52,7 +58,7 @@ pub struct ExtensionTraceWitness<'v, F: Field> {
 #[derive(Clone, Debug)]
 pub struct BranchTrace<'v, F: Field> {
     node_refs: [RlpFieldTrace<'v, F>; 17],
-    branch_hash_rlc: AssignedValue<'v, F>,
+    branch_hash_rlc: RlcVarLen<'v, F>,
 }
 
 #[derive(Clone, Debug)]
@@ -274,7 +280,6 @@ impl<'v, F: Field> MPTChip<'v, F> {
     }
 
     // When one node is referenced inside another node, what is included is H(rlp.encode(x)), where H(x) = keccak256(x) if len(x) >= 32 else x and rlp.encode is the RLP encoding function.
-    /// We assume that the leaves of trie have len >=32 for optimization purposes
     pub fn mpt_hash_phase0(
         &mut self,
         ctx: &mut Context<'v, F>,
@@ -282,30 +287,19 @@ impl<'v, F: Field> MPTChip<'v, F> {
         len: AssignedValue<'v, F>,
     ) -> usize {
         debug_assert_ne!(bytes.len(), 0);
-        #[cfg(debug_assertions)]
-        len.value().map(|len| {
-            if len.get_lower_32() < 32 {
-                panic!("MPT node len < 32")
-            }
-        });
         self.keccak.keccak_var_len(ctx, &self.rlp.range, bytes, None, len, 0usize)
     }
 
     // When one node is referenced inside another node, what is included is H(rlp.encode(x)), where H(x) = keccak256(x) if len(x) >= 32 else x and rlp.encode is the RLP encoding function.
     // We only return the RLC value of the MPT hash
-    /// We assume that the leaves of trie have len >=32 for optimization purposes
     pub fn mpt_hash_phase1(
         &mut self,
         ctx: &mut Context<'v, F>,
         hash_query_idx: usize,
-        min_len: usize,
         max_len: usize,
-    ) -> AssignedValue<'v, F> {
+    ) -> RlcVarLen<'v, F> {
         let keccak_query = &self.keccak.var_len_rlcs[hash_query_idx];
         let hash_rlc = &keccak_query.1.rlc_val;
-        if min_len >= 32 {
-            return hash_rlc.clone();
-        }
         let bytes = keccak_query.0.values[..32].to_vec();
         let len = keccak_query.0.len.clone();
         let thirty_two = self.gate().get_field_element(32);
@@ -315,8 +309,12 @@ impl<'v, F: Field> MPTChip<'v, F> {
             Constant(thirty_two),
             bit_length(max_len as u64),
         );
+        let mpt_hash_len =
+            self.gate().select(ctx, Existing(&len), Constant(thirty_two), Existing(&is_short));
         let short_rlc = self.rlc().compute_rlc(ctx, self.gate(), bytes, len).rlc_val;
-        self.gate().select(ctx, Existing(&short_rlc), Existing(hash_rlc), Existing(&is_short))
+        let mpt_hash_rlc =
+            self.gate().select(ctx, Existing(&short_rlc), Existing(hash_rlc), Existing(&is_short));
+        RlcVarLen { rlc_val: mpt_hash_rlc, len: mpt_hash_len }
     }
 
     pub fn parse_leaf_phase0(
@@ -345,7 +343,7 @@ impl<'v, F: Field> MPTChip<'v, F> {
         let rlp_trace = self.rlp.decompose_rlp_array_phase1(ctx, witness.rlp_witness, false);
         let [key_path, value]: [RlpFieldTrace<F>; 2] = rlp_trace.field_trace.try_into().unwrap();
         let leaf_hash_rlc =
-            self.mpt_hash_phase1(ctx, witness.leaf_hash_query_idx, 0, witness.max_leaf_bytes);
+            self.mpt_hash_phase1(ctx, witness.leaf_hash_query_idx, witness.max_leaf_bytes);
         LeafTrace { key_path, value, leaf_hash_rlc }
     }
 
@@ -376,7 +374,7 @@ impl<'v, F: Field> MPTChip<'v, F> {
         let rlp_trace = self.rlp.decompose_rlp_array_phase1(ctx, witness.rlp_witness, false);
         let [key_path, node_ref]: [RlpFieldTrace<F>; 2] = rlp_trace.field_trace.try_into().unwrap();
         let ext_hash_rlc =
-            self.mpt_hash_phase1(ctx, witness.ext_hash_query_idx, 32, witness.max_ext_bytes);
+            self.mpt_hash_phase1(ctx, witness.ext_hash_query_idx, witness.max_ext_bytes);
         ExtensionTrace { key_path, node_ref, ext_hash_rlc }
     }
 
@@ -405,17 +403,17 @@ impl<'v, F: Field> MPTChip<'v, F> {
         let rlp_trace = self.rlp.decompose_rlp_array_phase1(ctx, witness.rlp_witness, false);
         let node_refs: [RlpFieldTrace<F>; 17] = rlp_trace.field_trace.try_into().unwrap();
         let branch_hash_rlc =
-            self.mpt_hash_phase1(ctx, witness.branch_hash_query_idx, 32, witness.max_branch_bytes);
+            self.mpt_hash_phase1(ctx, witness.branch_hash_query_idx, witness.max_branch_bytes);
         BranchTrace { node_refs, branch_hash_rlc }
     }
 
-    pub fn compute_rlc_value(
+    pub fn compute_rlc_trace(
         &self,
         ctx: &mut Context<'v, F>,
         inputs: Vec<AssignedValue<'v, F>>,
         len: AssignedValue<'v, F>,
-    ) -> AssignedValue<'v, F> {
-        self.rlp.rlc.compute_rlc(ctx, self.rlp.range.gate(), inputs, len).rlc_val
+    ) -> RlcTrace<'v, F> {
+        self.rlp.rlc.compute_rlc(ctx, self.rlp.range.gate(), inputs, len)
     }
 
     pub fn parse_mpt_inclusion_fixed_key_phase0(
@@ -614,17 +612,17 @@ impl<'v, F: Field> MPTChip<'v, F> {
             .into_iter()
             .map(|x| self.parse_nonterminal_branch_phase1(ctx, x))
             .collect();
-        let key_frag_ext_byte_rlcs: Vec<AssignedValue<'_, F>> = witness
+        let key_frag_ext_byte_rlcs: Vec<_> = witness
             .key_frag_ext_bytes
             .into_iter()
             .zip(key_frag.iter())
-            .map(|(bytes, frag)| self.compute_rlc_value(ctx, bytes, frag.byte_len.clone()))
+            .map(|(bytes, frag)| self.compute_rlc_trace(ctx, bytes, frag.byte_len.clone()))
             .collect();
-        let key_frag_leaf_byte_rlcs: Vec<AssignedValue<'_, F>> = witness
+        let key_frag_leaf_byte_rlcs: Vec<_> = witness
             .key_frag_leaf_bytes
             .into_iter()
             .zip(key_frag.iter())
-            .map(|(bytes, frag)| self.compute_rlc_value(ctx, bytes, frag.byte_len.clone()))
+            .map(|(bytes, frag)| self.compute_rlc_trace(ctx, bytes, frag.byte_len.clone()))
             .collect();
         let key_hexs = witness.key_hexs;
 
@@ -633,10 +631,11 @@ impl<'v, F: Field> MPTChip<'v, F> {
             exts_parsed.iter().zip(key_frag_ext_byte_rlcs.iter()).zip(nodes.iter())
         {
             // When node is extension, check node key RLC equals key frag RLC
-            let mut node_key_is_equal = self.gate().is_equal(
+            let mut node_key_is_equal = rlc_is_equal(
                 ctx,
-                Existing(&ext_parsed.key_path.field_trace.rlc_val),
-                Existing(key_frag_ext_byte_rlc),
+                self.gate(),
+                &ext_parsed.key_path.field_trace,
+                key_frag_ext_byte_rlc,
             );
             // is equal or node not extension
             let is_not_ext = self.gate().not(ctx, Existing(&node.node_type));
@@ -648,12 +647,13 @@ impl<'v, F: Field> MPTChip<'v, F> {
         let depth_minus_one = self.gate().sub(ctx, Existing(&depth), Constant(F::one()));
         // Quiz for auditers: is the following necessary?
         // match hex-prefix encoding of leaf path to the parsed leaf encoded path
-        let key_frag_leaf_byte_rlc = self.gate().select_from_idx(
+        let key_frag_leaf_bytes_rlc = rlc_select_from_idx(
             ctx,
-            key_frag_leaf_byte_rlcs.iter().map(Existing),
-            Existing(&depth_minus_one),
+            self.gate(),
+            key_frag_leaf_byte_rlcs.iter().map(|trace| trace.into()).collect(),
+            &depth_minus_one,
         );
-        ctx.constrain_equal(&key_frag_leaf_byte_rlc, &leaf_parsed.key_path.field_trace.rlc_val);
+        rlc_constrain_equal(ctx, &key_frag_leaf_bytes_rlc, &leaf_parsed.key_path.field_trace);
 
         // Check key fragments concatenate to key using hex RLC
         let key_hex_rlc = self.rlp.rlc.compute_rlc_fixed_len(ctx, self.gate(), key_hexs);
@@ -689,7 +689,7 @@ impl<'v, F: Field> MPTChip<'v, F> {
         let value_rlc_trace =
             self.rlp.rlc.compute_rlc(ctx, self.gate(), value_bytes, value_byte_len.clone());
 
-        ctx.constrain_equal(&value_rlc_trace.rlc_val, &leaf_parsed.value.field_trace.rlc_val);
+        rlc_constrain_equal(ctx, &value_rlc_trace, &leaf_parsed.value.field_trace);
 
         /* Check hash chains
          * hash(node[0]) = root_hash
@@ -702,48 +702,60 @@ impl<'v, F: Field> MPTChip<'v, F> {
         assert_eq!(branches_parsed.len(), max_depth - 1);
         assert_eq!(nodes.len(), max_depth - 1);
         for idx in 0..max_depth {
+            // `node_hash_rlc` can be viewed as a fixed length RLC
             let mut node_hash_rlc = leaf_parsed.leaf_hash_rlc.clone();
             if idx < max_depth - 1 {
-                node_hash_rlc = self.gate().select(
+                node_hash_rlc = rlc_select(
                     ctx,
-                    Existing(&exts_parsed[idx].ext_hash_rlc),
-                    Existing(&branches_parsed[idx].branch_hash_rlc),
-                    Existing(&nodes[idx].node_type),
+                    self.gate(),
+                    &exts_parsed[idx].ext_hash_rlc,
+                    &branches_parsed[idx].branch_hash_rlc,
+                    &nodes[idx].node_type,
                 );
                 let is_leaf = self.gate().is_equal(
                     ctx,
                     Existing(&depth),
                     Constant(self.gate().get_field_element((idx + 1) as u64)),
                 );
-                node_hash_rlc = self.gate().select(
+                node_hash_rlc = rlc_select(
                     ctx,
-                    Existing(&leaf_parsed.leaf_hash_rlc),
-                    Existing(&node_hash_rlc),
-                    Existing(&is_leaf),
+                    self.gate(),
+                    &leaf_parsed.leaf_hash_rlc,
+                    &node_hash_rlc,
+                    &is_leaf,
                 );
             }
             if idx == 0 {
                 let root_hash_rlc =
                     self.rlc().compute_rlc_fixed_len(ctx, self.gate(), root_hash_bytes.clone());
-                ctx.constrain_equal(&root_hash_rlc.rlc_val, &node_hash_rlc);
-            } else {
-                let ext_ref_rlc = &exts_parsed[idx - 1].node_ref.field_trace.rlc_val;
-                let branch_ref_rlc = self.gate().select_from_idx(
+                ctx.constrain_equal(&root_hash_rlc.rlc_val, &node_hash_rlc.rlc_val);
+                self.gate().assert_is_const(
                     ctx,
+                    &node_hash_rlc.len,
+                    self.gate().get_field_element(32),
+                );
+            } else {
+                let ext_ref_rlc = &exts_parsed[idx - 1].node_ref.field_trace;
+                let branch_ref_rlc = rlc_select_from_idx(
+                    ctx,
+                    self.gate(),
                     branches_parsed[idx - 1]
                         .node_refs
                         .iter()
-                        .map(|node| Existing(&node.field_trace.rlc_val)),
-                    Existing(&fragment_rlcs[idx - 1].values[0]),
+                        .map(|node| (&node.field_trace).into())
+                        .collect(),
+                    &fragment_rlcs[idx - 1].values[0],
                 );
-                let match_hash_rlc = self.gate().select(
+                let match_hash_rlc = rlc_select(
                     ctx,
-                    Existing(ext_ref_rlc),
-                    Existing(&branch_ref_rlc),
-                    Existing(&nodes[idx - 1].node_type),
+                    self.gate(),
+                    ext_ref_rlc,
+                    &branch_ref_rlc,
+                    &nodes[idx - 1].node_type,
                 );
-                let is_match =
-                    self.gate().is_equal(ctx, Existing(&match_hash_rlc), Existing(&node_hash_rlc));
+                // as long as one of the RLCs is fixed len (in this case `node_hash_rlc`), we don't need to check
+                // whether lengths are equal
+                let is_match = rlc_is_equal(ctx, self.gate(), &match_hash_rlc, &node_hash_rlc);
                 matches.push(is_match);
             }
         }

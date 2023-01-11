@@ -423,6 +423,10 @@ impl<'v, F: Field> KeccakChip<'v, F> {
                 );
                 (input_rlc, output_rlc)
             };
+            // Define the dynamic RLC: RLC(a, l) = \sum_{i = 0}^{l - 1} a_i r^{l - 1 - i}
+            // For a variable length RLC, we only have a1 = a2 if RLC(a1, l1) = RLC(a2, l2) AND l1 = l2. 
+            // The length constraint is necessary because a1, a2 can have leading zeros. 
+            ctx.constrain_equal(&input_rlc.len, &query.length);
             ctx.constrain_equal(&input_rlc.rlc_val, &table_input_rlc);
             ctx.constrain_equal(&output_rlc.rlc_val, &table_output_rlc);
         }

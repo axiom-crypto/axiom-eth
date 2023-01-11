@@ -15,6 +15,30 @@ use std::{iter, marker::PhantomData};
 pub const RLC_PHASE: usize = 1;
 
 #[derive(Clone, Debug)]
+pub struct RlcVarLen<'v, F: ScalarField> {
+    pub rlc_val: AssignedValue<'v, F>, // in SecondPhase
+    pub len: AssignedValue<'v, F>,     // everything else in FirstPhase
+}
+
+#[derive(Clone, Debug)]
+pub struct RlcVarRef<'a, 'v: 'a, F: ScalarField> {
+    pub rlc_val: &'a AssignedValue<'v, F>, // in SecondPhase
+    pub len: &'a AssignedValue<'v, F>,     // everything else in FirstPhase
+}
+
+impl<'a, 'v, F: ScalarField> From<&'a RlcTrace<'v, F>> for RlcVarRef<'a, 'v, F> {
+    fn from(trace: &'a RlcTrace<'v, F>) -> Self {
+        RlcVarRef { rlc_val: &trace.rlc_val, len: &trace.len }
+    }
+}
+
+impl<'a, 'v, F: ScalarField> From<&'a RlcVarLen<'v, F>> for RlcVarRef<'a, 'v, F> {
+    fn from(trace: &'a RlcVarLen<'v, F>) -> RlcVarRef<'a, 'v, F> {
+        RlcVarRef { rlc_val: &trace.rlc_val, len: &trace.len }
+    }
+}
+
+#[derive(Clone, Debug)]
 /// RLC of a trace of variable length but known maximum length
 pub struct RlcTrace<'v, F: ScalarField> {
     pub rlc_val: AssignedValue<'v, F>, // in SecondPhase
@@ -342,7 +366,8 @@ impl<'g, F: ScalarField> RlcChip<'g, F> {
         ctx.region.constrain_equal(running_len.cell(), concat.1.cell());
     }
 
-    /// Same as `constrain_rlc_concat` but now the actual length of `rlc_inputs` to use is variable: these are referred to as "fragments".
+    /// Same as `constrain_rlc_concat` but now the actual length of `inputs` to use is variable:
+    /// these are referred to as "fragments".
     ///
     /// Assumes 0 < num_frags <= max_num_frags.
     pub fn constrain_rlc_concat_var<'a, 'v: 'a>(
@@ -396,7 +421,6 @@ impl<'g, F: ScalarField> RlcChip<'g, F> {
             partial_len.iter().map(Existing),
             Existing(&num_frags_minus_1),
         );
-        // println!("TEST2 {:?} {:?}", total_len.value(), concat.1.value());
         ctx.region.constrain_equal(total_len.cell(), concat.1.cell());
 
         let concat_select = gate.select_from_idx(
@@ -465,4 +489,58 @@ impl<'g, F: ScalarField> RlcChip<'g, F> {
         }
         out.unwrap()
     }
+}
+
+/// Define the dynamic RLC: `RLC(a, l) = \sum_{i = 0}^{l - 1} a_i r^{l - 1 - i}`
+/// where `a` is a variable length vector of length `l`.
+///
+/// We have `a == b` iff `RLC(a, l_a) == RLC(b, l_b)` AND `l_a == l_b`.
+/// The length equality constraint is necessary because `a` and `b` can have leading zeros.
+pub fn rlc_is_equal<'a, 'v: 'a, F: ScalarField>(
+    ctx: &mut Context<'_, F>,
+    gate: &impl GateInstructions<F>,
+    a: impl Into<RlcVarRef<'a, 'v, F>>,
+    b: impl Into<RlcVarRef<'a, 'v, F>>,
+) -> AssignedValue<'v, F> {
+    let a: RlcVarRef<F> = a.into();
+    let b: RlcVarRef<F> = b.into();
+    let len_is_equal = gate.is_equal(ctx, Existing(a.len), Existing(b.len));
+    let rlc_is_equal = gate.is_equal(ctx, Existing(a.rlc_val), Existing(b.rlc_val));
+    gate.and(ctx, Existing(&len_is_equal), Existing(&rlc_is_equal))
+}
+
+pub fn rlc_constrain_equal<'a, 'v: 'a, F: ScalarField>(
+    ctx: &mut Context<'_, F>,
+    a: impl Into<RlcVarRef<'a, 'v, F>>,
+    b: impl Into<RlcVarRef<'a, 'v, F>>,
+) {
+    let a: RlcVarRef<F> = a.into();
+    let b: RlcVarRef<F> = b.into();
+    ctx.constrain_equal(a.len, b.len);
+    ctx.constrain_equal(a.rlc_val, b.rlc_val);
+}
+
+pub fn rlc_select<'a, 'v: 'a, F: ScalarField>(
+    ctx: &mut Context<'_, F>,
+    gate: &impl GateInstructions<F>,
+    a: impl Into<RlcVarRef<'a, 'v, F>>,
+    b: impl Into<RlcVarRef<'a, 'v, F>>,
+    condition: &AssignedValue<'v, F>,
+) -> RlcVarLen<'v, F> {
+    let a: RlcVarRef<F> = a.into();
+    let b: RlcVarRef<F> = b.into();
+    let len = gate.select(ctx, Existing(a.len), Existing(b.len), Existing(condition));
+    let rlc_val = gate.select(ctx, Existing(a.rlc_val), Existing(b.rlc_val), Existing(condition));
+    RlcVarLen { len, rlc_val }
+}
+
+pub fn rlc_select_from_idx<'a, 'v: 'a, F: ScalarField>(
+    ctx: &mut Context<'_, F>,
+    gate: &impl GateInstructions<F>,
+    a: Vec<RlcVarRef<'a, 'v, F>>,
+    idx: &AssignedValue<'v, F>,
+) -> RlcVarLen<'v, F> {
+    let len = gate.select_from_idx(ctx, a.iter().map(|a| Existing(a.len)), Existing(idx));
+    let rlc_val = gate.select_from_idx(ctx, a.iter().map(|a| Existing(a.rlc_val)), Existing(idx));
+    RlcVarLen { len, rlc_val }
 }
