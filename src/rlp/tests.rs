@@ -314,17 +314,16 @@ mod rlp {
                         self.inputs.iter().map(|x| Value::known(F::from(*x as u64))),
                     );
 
-                    let _lookup_cells;
                     if self.is_array {
                         // FirstPhase
                         let witness = chip.decompose_rlp_array_phase0(
                             ctx,
                             inputs_assigned,
                             &self.max_field_lens,
-                            self.is_variable_len
+                            self.is_variable_len,
                         );
 
-                        _lookup_cells = chip.range.finalize(ctx);
+                        chip.range.finalize(ctx);
                         ctx.next_phase();
 
                         // SecondPhase
@@ -336,7 +335,7 @@ mod rlp {
                         let witness =
                             chip.decompose_rlp_field_phase0(ctx, inputs_assigned, self.max_len);
 
-                        _lookup_cells = chip.range.finalize(ctx);
+                        chip.range.finalize(ctx);
                         ctx.next_phase();
 
                         // SecondPhase
@@ -348,18 +347,8 @@ mod rlp {
                     assert!(ctx.current_phase() <= 1);
                     #[cfg(feature = "display")]
                     {
-                        let context_names = ["Range", "RLC"]; 
-                        ctx.advice_alloc_cache[RLC_PHASE] = ctx.advice_alloc.clone();
-                        for phase in 0..=RLC_PHASE {
-                            for (context_id, alloc) in ctx.advice_alloc_cache[phase].iter().enumerate() {
-                                if phase != 0 || context_id != 1 {
-                                    println!("Context \"{}\" used {} advice columns and {} total advice cells in phase {phase}", context_names[context_id], alloc.0 + 1, alloc.0 * ctx.max_rows + alloc.1);
-                                }
-                            }
-                        }
-                        println!("Special lookup advice cells: {_lookup_cells} used in FirstPhase");
-                        let (fixed_cols, total_fixed) = ctx.fixed_stats();
-                        println!("Fixed columns: {fixed_cols}, Total fixed cells: {total_fixed}");
+                        let context_names = ["Range", "RLC"];
+                        ctx.print_stats(&context_names);
                     }
                     Ok(())
                 },
@@ -396,6 +385,23 @@ mod rlp {
         let input_bytes: Vec<u8> =
             Vec::from_hex("a012341234123412341234123412341234123412341234123412341234123412340000")
                 .unwrap();
+
+        let circuit = RlpTestCircuit::<Fr> {
+            inputs: input_bytes,
+            max_len: 34,
+            max_field_lens: vec![],
+            is_array: false,
+            is_variable_len: false,
+            _marker: PhantomData,
+        };
+        MockProver::run(k, &circuit, vec![]).unwrap().assert_satisfied();
+    }
+
+    #[test]
+    pub fn test_mock_rlp_short_field() {
+        let k = DEGREE;
+        let mut input_bytes: Vec<u8> = vec![127];
+        input_bytes.resize(35, 0);
 
         let circuit = RlpTestCircuit::<Fr> {
             inputs: input_bytes,

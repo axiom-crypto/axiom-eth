@@ -57,10 +57,10 @@ pub struct EthConfig<F: Field> {
 impl<F: Field> EthConfig<F> {
     pub fn configure(
         meta: &mut ConstraintSystem<F>,
-        params: EthConfigParams,
+        params: impl Into<EthConfigParams>,
         context_id: usize,
     ) -> Self {
-        let mpt = MPTConfig::configure(meta, params, context_id);
+        let mpt = MPTConfig::configure(meta, params.into(), context_id);
         let instance = meta.instance_column();
         meta.enable_equality(instance);
         Self { mpt, instance }

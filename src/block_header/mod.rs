@@ -99,7 +99,6 @@ pub struct EthBlockHeaderTrace<'v, F: Field> {
 
     // pub prefix: AssignedValue<'v, F>,
     pub len_trace: RlcTrace<'v, F>,
-    pub field_prefix: Vec<AssignedValue<'v, F>>,
 }
 #[derive(Clone, Debug)]
 pub struct EthBlockHeaderTraceWitness<'v, F: Field> {
@@ -247,7 +246,6 @@ impl<'v, F: Field> EthBlockHeaderChip<'v, F> for EthChip<'v, F> {
             basefee,
             block_hash,
             len_trace: trace.len_trace,
-            field_prefix: trace.field_prefix,
         }
     }
 
