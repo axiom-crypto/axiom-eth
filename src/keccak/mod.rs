@@ -401,7 +401,12 @@ impl<'v, F: Field> KeccakChip<'v, F> {
                 (input_rlcs[min_keccak_f - 1].clone(), output_rlcs[min_keccak_f - 1].clone())
             } else {
                 // num_keccak_f = length / RATE + 1
-                let cap_floor = div_floor(ctx, range, &query.length, RATE as u32);
+                let (cap_floor, _) = range.div_mod(
+                    ctx,
+                    Existing(&query.length),
+                    RATE,
+                    bit_length(query.max_bytes as u64),
+                );
                 let num_keccak_f = gate.add(ctx, Existing(&cap_floor), Constant(F::one()));
                 running_num_squeezed =
                     gate.add(ctx, Existing(&running_num_squeezed), Existing(&num_keccak_f));
@@ -424,8 +429,8 @@ impl<'v, F: Field> KeccakChip<'v, F> {
                 (input_rlc, output_rlc)
             };
             // Define the dynamic RLC: RLC(a, l) = \sum_{i = 0}^{l - 1} a_i r^{l - 1 - i}
-            // For a variable length RLC, we only have a1 = a2 if RLC(a1, l1) = RLC(a2, l2) AND l1 = l2. 
-            // The length constraint is necessary because a1, a2 can have leading zeros. 
+            // For a variable length RLC, we only have a1 = a2 if RLC(a1, l1) = RLC(a2, l2) AND l1 = l2.
+            // The length constraint is necessary because a1, a2 can have leading zeros.
             ctx.constrain_equal(&input_rlc.len, &query.length);
             ctx.constrain_equal(&input_rlc.rlc_val, &table_input_rlc);
             ctx.constrain_equal(&output_rlc.rlc_val, &table_output_rlc);
@@ -489,28 +494,4 @@ pub fn get_bytes<F: ScalarField>(bytes_assigned: &[AssignedValue<F>]) -> Vec<u8>
         .iter()
         .map(|abyte| value_to_option(abyte.value().map(|v| v.get_lower_32() as u8)).unwrap_or(0))
         .collect_vec()
-}
-
-pub fn div_floor<'v, F: ScalarField>(
-    ctx: &mut Context<'v, F>,
-    range: &impl RangeInstructions<F>,
-    len: &AssignedValue<'v, F>,
-    rate: u32,
-) -> AssignedValue<'v, F> {
-    let mut val = 0;
-    len.value().map(|v| val = v.get_lower_32());
-    let (div, rem) = (val / rate, val % rate);
-    let [rate_f, div, rem] = [rate, div, rem].map(|v| range.gate().get_field_element(v as u64));
-    let assigned = range.gate().assign_region(
-        ctx,
-        vec![
-            Witness(Value::known(rem)),
-            Constant(rate_f),
-            Witness(Value::known(div)),
-            Existing(len),
-        ],
-        vec![(0, None)],
-    );
-    range.check_less_than_safe(ctx, &assigned[0], rate as u64);
-    assigned[2].clone()
 }

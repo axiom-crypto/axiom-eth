@@ -37,8 +37,8 @@ rand = "0.8"
 rand_chacha = "0.3.1"
 
 # aggregation 
-snark-verifier = { git = "https://github.com/axiom-crypto/snark-verifier.git", branch = "jpw/dev", default-features = false, features = ["loader_halo2"], optional = true }
-snark-verifier-sdk = { git = "https://github.com/axiom-crypto/snark-verifier.git", branch = "jpw/dev", default-features = false, features = ["loader_halo2"], optional = true }
+snark-verifier = { git = "https://github.com/axiom-crypto/snark-verifier.git", default-features = false, features = ["loader_halo2"], optional = true }
+snark-verifier-sdk = { git = "https://github.com/axiom-crypto/snark-verifier.git", default-features = false, features = ["loader_halo2"], optional = true }
 
 # generating circuit inputs from blockchain
 ethers-providers = { version = "1.0.2", optional = true }  
