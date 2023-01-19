@@ -8,10 +8,6 @@ autobins = false
 name = "header_chain"
 required-features = ["aggregation", "clap"]
 
-[[bin]]
-name = "batch_import"
-required-features = ["aggregation", "clap"]
-
 [dependencies]
 itertools = "0.10"
 lazy_static = "1.4.0"

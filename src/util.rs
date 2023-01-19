@@ -109,6 +109,15 @@ pub fn encode_h256_to_field<F: Field>(hash: &H256) -> [F; 2] {
     [val1, val2]
 }
 
+pub fn decode_field_to_h256<F: Field>(fe: &[F]) -> H256 {
+    assert_eq!(fe.len(), 2);
+    let mut bytes = [0u8; 32];
+    bytes[..16].copy_from_slice(&fe[1].to_repr()[..16]);
+    bytes[16..].copy_from_slice(&fe[0].to_repr()[..16]);
+    bytes.reverse();
+    H256(bytes)
+}
+
 /// Takes U256, converts to bytes32 (big endian) and returns (hash[..16], hash[16..]) represented as big endian numbers in the prime field
 pub fn encode_u256_to_field<F: Field>(input: &U256) -> [F; 2] {
     let mut bytes = vec![0; 32];
@@ -123,12 +132,27 @@ pub fn encode_u256_to_field<F: Field>(input: &U256) -> [F; 2] {
     [val1, val2]
 }
 
+pub fn decode_field_to_u256<F: Field>(fe: &[F]) -> U256 {
+    assert_eq!(fe.len(), 2);
+    let mut bytes = [0u8; 32];
+    bytes[16..].copy_from_slice(&fe[0].to_repr()[..16]);
+    bytes[..16].copy_from_slice(&fe[1].to_repr()[..16]);
+    U256::from_little_endian(&bytes)
+}
+
 pub fn encode_addr_to_field<F: Field>(input: &Address) -> F {
     let mut bytes = input.as_bytes().to_vec();
     bytes.reverse();
     let mut repr = [0u8; 32];
     repr[..20].copy_from_slice(&bytes);
     F::from_repr(repr).unwrap()
+}
+
+pub fn decode_field_to_addr<F: Field>(fe: &F) -> Address {
+    let mut bytes = [0u8; 20];
+    bytes.copy_from_slice(&fe.to_repr()[..20]);
+    bytes.reverse();
+    Address::from_slice(&bytes)
 }
 
 // circuit utils:

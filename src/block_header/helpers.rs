@@ -3,9 +3,13 @@ use super::{
         AggregationWithKeccakConfigParams, EthBlockHeaderChainAggregationCircuit,
         EthBlockHeaderChainFinalAggregationCircuit,
     },
-    EthBlockHeaderChainCircuit, EthBlockHeaderChainInstance,
+    EthBlockHeaderChainCircuit,
 };
-use crate::{util::EthConfigParams, Field, Network};
+use crate::{
+    providers::{GOERLI_PROVIDER_URL, MAINNET_PROVIDER_URL},
+    util::EthConfigParams,
+    Field, Network,
+};
 use core::cmp::min;
 use ethers_providers::{Http, Provider};
 use halo2_base::{
@@ -16,101 +20,342 @@ use halo2_base::{
     },
     utils::{fs::gen_srs, PrimeField},
 };
-use itertools::Itertools;
-use rand::Rng;
+use rand::SeedableRng;
+use rand_chacha::ChaCha20Rng;
 use snark_verifier_sdk::{
     gen_pk,
     halo2::{
-        aggregation::load_verify_circuit_degree, gen_snark_shplonk, read_snark, PoseidonTranscript,
+        aggregation::{load_verify_circuit_degree, PublicAggregationCircuit},
+        gen_snark_shplonk, read_snark,
     },
-    CircuitExt, NativeLoader, Snark, LIMBS,
+    CircuitExt, Snark, LIMBS,
 };
-use std::{borrow::Cow, env::set_var, fs::File, path::Path, vec};
+use std::{
+    collections::HashMap,
+    env::{set_var, var},
+    path::Path,
+    vec,
+};
 
-/// Given
-/// - a JSON-RPC provider
-/// - choice of EVM network
-/// - a range of block numbers
-/// - a universal trusted setup,
-///
-/// this function will generate a ZK proof for the block header chain between blocks `start_block_number` and `end_block_number` inclusive.
-///
-/// If a proving key is provided, it will be used to generate the proof. Otherwise, a new proving key will be generated.
-///
-/// The SNARK's public instance will include a merkle mountain range up to depth `max_depth`.
-///
-/// This SNARK does not use aggregation: it uses a single `EthBlockHeaderChainCircle` circuit,
-/// so it may not be suitable for large block ranges.
-///
-/// Note: we assume that `params` is the correct size for the circuit.
-pub fn gen_block_header_chain_snark<'pk>(
-    params: &ParamsKZG<Bn256>,
-    pk: Option<&'pk ProvingKey<G1Affine>>,
-    provider: &Provider<Http>,
-    network: Network,
-    start_block_number: u32,
-    end_block_number: u32,
-    max_depth: usize,
-    transcript: &mut PoseidonTranscript<NativeLoader, Vec<u8>>,
-    rng: &mut (impl Rng + Send),
-) -> (Snark, EthBlockHeaderChainInstance, Cow<'pk, ProvingKey<G1Affine>>) {
-    let num_blocks = end_block_number - start_block_number + 1;
-    let circuit = EthBlockHeaderChainCircuit::from_provider(
-        provider,
-        network,
-        start_block_number,
-        num_blocks,
-        max_depth,
-    );
-    set_var("BLOCK_HEADER_CONFIG", format!("configs/headers/{network}_{max_depth}.json"));
-    let pk = match pk {
-        Some(pk) => Cow::Borrowed(pk),
-        None => Cow::Owned(gen_pk(
-            params,
-            &circuit,
-            Some(Path::new(&format!("data/headers/{network}_{max_depth}.pkey"))),
-        )),
-    };
-
-    let instance_path = format!(
-        "data/headers/{network}_{max_depth}_{start_block_number:06x}_{end_block_number:06x}.in"
-    );
-    let instance = circuit.instance.clone();
-    bincode::serialize_into(File::create(instance_path).unwrap(), &instance).unwrap();
-
-    let snark_path = format!(
-        "data/headers/{network}_{max_depth}_{start_block_number:06x}_{end_block_number:06x}.snark"
-    );
-    (
-        gen_snark_shplonk(params, &pk, circuit, transcript, rng, Some(Path::new(&snark_path))),
-        instance,
-        pk,
-    )
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub enum Finality {
+    /// Produces as many snarks as needed to fit the entire block number range, without any final processing.
+    None,
+    /// The block number range must fit within the specified max depth.
+    /// Produces a single final snark with the starting & ending block numbers, previous and last block hashes,
+    /// and merkle mountain range as output.
+    Merkle,
+    /// The block number range must fit within the specified max depth. `Evm(round)` performs `round + 1`
+    /// rounds of SNARK verification on the final `Merkle` circuit
+    #[cfg(feature = "evm")]
+    Evm(usize),
 }
 
-pub fn read_block_header_chain_snark(
-    network: Network,
-    start_block_number: u32,
-    end_block_number: u32,
-    max_depth: usize,
-    initial_depth: usize,
-    is_final: bool,
-) -> Result<(Snark, EthBlockHeaderChainInstance), bincode::Error> {
-    assert!(end_block_number - start_block_number < 1 << max_depth);
-    let name = if max_depth == initial_depth {
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct CircuitType {
+    pub depth: usize,
+    pub initial_depth: usize,
+    pub finality: Finality,
+}
+
+impl CircuitType {
+    pub fn new(depth: usize, initial_depth: usize, finality: Finality) -> Self {
+        Self { depth, initial_depth, finality }
+    }
+
+    pub fn prev(&self) -> Self {
+        assert!(self.depth != self.initial_depth, "Trying to call prev on initial circuit");
+        match self.finality {
+            Finality::None | Finality::Merkle => {
+                Self::new(self.depth - 1, self.initial_depth, Finality::None)
+            }
+            #[cfg(feature = "evm")]
+            Finality::Evm(round) => {
+                if round == 0 {
+                    Self::new(self.depth, self.initial_depth, Finality::Merkle)
+                } else {
+                    Self::new(self.depth, self.initial_depth, Finality::Evm(round - 1))
+                }
+            }
+        }
+    }
+
+    pub fn fname_prefix(&self, network: Network) -> String {
+        if self.depth == self.initial_depth {
+            format!("data/headers/{network}_{}", self.depth)
+        } else {
+            format!("data/headers/{network}_{}_{}", self.depth, self.initial_depth)
+        }
+    }
+
+    pub fn fname_suffix(&self) -> String {
+        match self.finality {
+            Finality::None => "".to_string(),
+            Finality::Merkle => "_final".to_string(),
+            #[cfg(feature = "evm")]
+            Finality::Evm(round) => format!("_for_evm_{round}"),
+        }
+    }
+
+    pub fn pkey_name(&self, network: Network) -> String {
+        format!("{}{}.pkey", self.fname_prefix(network), self.fname_suffix())
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct Task {
+    pub start: u32,
+    pub end: u32,
+    pub circuit_type: CircuitType,
+}
+impl Task {
+    pub fn new(start: u32, end: u32, circuit_type: CircuitType) -> Self {
+        Self { start, end, circuit_type }
+    }
+
+    pub fn snark_name(&self, network: Network) -> String {
         format!(
-            "data/headers/{network}_{max_depth}_{start_block_number:06x}_{end_block_number:06x}"
+            "{}_{:06x}_{:06x}{}.snark",
+            self.circuit_type.fname_prefix(network),
+            self.start,
+            self.end,
+            self.circuit_type.fname_suffix()
         )
-    } else {
-        let suffix = if is_final { "_final" } else { "" };
-        format!(
-        "data/headers/{network}_{max_depth}_{initial_depth}_{start_block_number:06x}_{end_block_number:06x}{suffix}")
-    };
-    let instance_path = format!("{name}.in");
-    let snark_path = format!("{name}.snark");
-    let instance = bincode::deserialize_from(File::open(instance_path)?)?;
-    let snark = read_snark(snark_path)?;
-    Ok((snark, instance))
+    }
+
+    pub fn read_snark(&self, network: Network) -> Result<Snark, bincode::Error> {
+        assert!(self.end - self.start < 1 << self.circuit_type.depth);
+        read_snark(self.snark_name(network))
+    }
+}
+
+pub enum AnyCircuit {
+    Initial(EthBlockHeaderChainCircuit<Fr>),
+    Intermediate(EthBlockHeaderChainAggregationCircuit),
+    Final(EthBlockHeaderChainFinalAggregationCircuit),
+    ForEvm(PublicAggregationCircuit),
+}
+
+pub struct Sequencer {
+    pub pkeys: HashMap<CircuitType, ProvingKey<G1Affine>>,
+    pub params_k: HashMap<CircuitType, u32>,
+    pub params: HashMap<u32, ParamsKZG<Bn256>>,
+    pub rng: ChaCha20Rng,
+    pub provider: Provider<Http>,
+    pub network: Network,
+}
+
+impl Sequencer {
+    pub fn new(network: Network) -> Self {
+        let infura_id = var("INFURA_ID").expect("Infura ID not found");
+        let provider_url = match network {
+            Network::Mainnet => MAINNET_PROVIDER_URL,
+            Network::Goerli => GOERLI_PROVIDER_URL,
+        };
+        let provider = Provider::<Http>::try_from(format!("{provider_url}{infura_id}").as_str())
+            .expect("could not instantiate HTTP Provider");
+
+        Sequencer {
+            pkeys: HashMap::new(),
+            params_k: HashMap::new(),
+            params: HashMap::new(),
+            provider,
+            network,
+            rng: ChaCha20Rng::from_entropy(),
+        }
+    }
+
+    pub fn get_params(&mut self, circuit_type: CircuitType) -> u32 {
+        let network = self.network;
+        let CircuitType { depth, initial_depth, finality } = circuit_type;
+        let fname_prefix = if depth == initial_depth {
+            format!("configs/headers/{network}_{depth}")
+        } else {
+            format!("configs/headers/{network}_{depth}_{initial_depth}")
+        };
+        let k = if depth == initial_depth {
+            set_var("BLOCK_HEADER_CONFIG", format!("{fname_prefix}.json"));
+            EthConfigParams::get_header().degree
+        } else {
+            match finality {
+                Finality::None => {
+                    set_var("VERIFY_CONFIG", format!("{fname_prefix}.json"));
+                    load_verify_circuit_degree()
+                }
+                Finality::Merkle => {
+                    set_var("FINAL_AGGREGATION_CONFIG", format!("{fname_prefix}_final.json"));
+                    AggregationWithKeccakConfigParams::get().aggregation.degree
+                }
+                #[cfg(feature = "evm")]
+                Finality::Evm(round) => {
+                    set_var("VERIFY_CONFIG", format!("{fname_prefix}_for_evm_{round}.json"));
+                    load_verify_circuit_degree()
+                }
+            }
+        };
+        self.params.entry(k).or_insert_with(|| gen_srs(k));
+        self.params_k.insert(circuit_type, k);
+        k
+    }
+
+    // recursively generates necessary snarks to create circuit
+    pub fn get_circuit(&mut self, task: Task) -> AnyCircuit {
+        let Task { start, end, circuit_type } = task;
+        let CircuitType { depth, initial_depth, finality } = circuit_type;
+        assert!(end - start < 1 << depth);
+        if depth == initial_depth {
+            // set environmental vars
+            self.get_params(circuit_type);
+            let circuit = EthBlockHeaderChainCircuit::from_provider(
+                &self.provider,
+                self.network,
+                start,
+                end - start + 1,
+                depth,
+            );
+            AnyCircuit::Initial(circuit)
+        } else {
+            let prev_type = circuit_type.prev();
+            let prev_depth = prev_type.depth;
+            let mut snarks: Vec<_> = (start..=end)
+                .step_by(1 << prev_depth)
+                .map(|i| {
+                    self.get_snark(Task::new(i, min(end, i + (1 << prev_depth) - 1), prev_type))
+                })
+                .collect();
+            if (finality == Finality::None || finality == Finality::Merkle) && snarks.len() != 2 {
+                snarks.push(snarks[0].clone());
+            }
+            let mut rng = self.rng.clone();
+            let k = self.get_params(circuit_type);
+            let params = self.params.get(&k).unwrap();
+            match finality {
+                Finality::None => {
+                    let circuit = EthBlockHeaderChainAggregationCircuit::new(
+                        params,
+                        snarks,
+                        &mut rng,
+                        end - start + 1,
+                        depth,
+                        initial_depth,
+                    );
+                    AnyCircuit::Intermediate(circuit)
+                }
+                Finality::Merkle => {
+                    let circuit = EthBlockHeaderChainFinalAggregationCircuit::new(
+                        params,
+                        snarks,
+                        &mut rng,
+                        end - start + 1,
+                        depth,
+                        initial_depth,
+                    );
+                    AnyCircuit::Final(circuit)
+                }
+                #[cfg(feature = "evm")]
+                Finality::Evm(_) => {
+                    let circuit = PublicAggregationCircuit::new(params, snarks, true, &mut rng);
+                    AnyCircuit::ForEvm(circuit)
+                }
+            }
+        }
+    }
+
+    // recursively generates necessary circuits and snarks to create snark
+    pub fn get_snark(&mut self, task: Task) -> Snark {
+        let network = self.network;
+        if let Ok(snark) = task.read_snark(network) {
+            return snark;
+        }
+        let circuit = self.get_circuit(task);
+        let circuit_type = task.circuit_type;
+        let params = &self.params[&self.params_k[&circuit_type]];
+        let pk_name = circuit_type.pkey_name(network);
+        let pk_path = Some(Path::new(&pk_name));
+        let pk = self.pkeys.entry(circuit_type).or_insert_with(|| {
+            // as you can see we do the same thing for each circuit, but because `Circuit` is
+            // not an object-safe trait we can't put it in a `Box`
+            match &circuit {
+                AnyCircuit::Initial(circuit) => gen_pk(params, circuit, pk_path),
+                AnyCircuit::Intermediate(circuit) => gen_pk(params, circuit, pk_path),
+                AnyCircuit::Final(circuit) => gen_pk(params, circuit, pk_path),
+                AnyCircuit::ForEvm(circuit) => gen_pk(params, circuit, pk_path),
+            }
+        });
+        let snark_path = Some(task.snark_name(network));
+        let mut rng = self.rng.clone();
+        match circuit {
+            AnyCircuit::Initial(circuit) => {
+                gen_snark_shplonk(params, pk, circuit, &mut rng, snark_path)
+            }
+            AnyCircuit::Intermediate(circuit) => {
+                gen_snark_shplonk(params, pk, circuit, &mut rng, snark_path)
+            }
+            AnyCircuit::Final(circuit) => {
+                gen_snark_shplonk(params, pk, circuit, &mut rng, snark_path)
+            }
+            AnyCircuit::ForEvm(circuit) => {
+                gen_snark_shplonk(params, pk, circuit, &mut rng, snark_path)
+            }
+        }
+    }
+
+    #[cfg(feature = "evm")]
+    pub fn get_calldata(&mut self, task: Task, generate_smart_contract: bool) -> Vec<u8> {
+        #[allow(unused_imports)]
+        use ethers_core::utils::hex;
+        use snark_verifier::loader::evm::encode_calldata;
+        use snark_verifier_sdk::evm::{
+            evm_verify, gen_evm_proof_shplonk, gen_evm_verifier_shplonk,
+        };
+        use std::fs;
+
+        let network = self.network;
+        let circuit_type = task.circuit_type;
+        let CircuitType { depth, initial_depth, finality } = circuit_type;
+        assert!(matches!(finality, Finality::Evm(_)));
+        let fname = format!(
+            "data/headers/{}_{}_{}_{:06x}_{:06x}.calldata",
+            network, circuit_type.depth, circuit_type.initial_depth, task.start, task.end
+        );
+        if let Ok(calldata) = fs::read(&fname) {
+            return calldata;
+        }
+
+        let circuit = self.get_circuit(task);
+        match circuit {
+            AnyCircuit::ForEvm(circuit) => {
+                let params = &self.params[&self.params_k[&circuit_type]];
+                let pk_name = circuit_type.pkey_name(network);
+                let pk_path = Some(Path::new(&pk_name));
+                let pk = self
+                    .pkeys
+                    .entry(circuit_type)
+                    .or_insert_with(|| gen_pk(params, &circuit, pk_path));
+                let instances = circuit.instances();
+                let mut rng = self.rng.clone();
+                let proof = gen_evm_proof_shplonk(params, pk, circuit, instances.clone(), &mut rng);
+                let calldata = encode_calldata(&instances, &proof);
+                fs::write(fname, hex::encode(&calldata)).expect("write calldata should not fail");
+
+                if generate_smart_contract {
+                    let num_instances = instances[0].len();
+                    let deployment_code = gen_evm_verifier_shplonk::<PublicAggregationCircuit>(
+                        params,
+                        pk.get_vk(),
+                        vec![num_instances],
+                        Some(Path::new(&format!(
+                            "data/headers/{network}_{depth}_{initial_depth}.yul"
+                        ))),
+                    );
+
+                    evm_verify(deployment_code, instances, proof);
+                }
+                calldata
+            }
+            _ => unreachable!(),
+        }
+    }
 }
 
 impl<F: Field + PrimeField> CircuitExt<F> for EthBlockHeaderChainCircuit<F> {
@@ -123,163 +368,34 @@ impl<F: Field + PrimeField> CircuitExt<F> for EthBlockHeaderChainCircuit<F> {
     }
 }
 
-// To keep srs and pk in memory, we use this function to generate multiple instances of the same snark
-// Uses "top-down" memoization approach
-pub fn gen_multiple_block_header_chain_snarks(
-    provider: &Provider<Http>,
-    network: Network,
-    start_block_number: u32,
-    end_block_number: u32,
-    max_depth: usize,
-    initial_depth: usize,
-    transcript: &mut PoseidonTranscript<NativeLoader, Vec<u8>>,
-    rng: &mut (impl Rng + Send),
-) -> Vec<(Snark, EthBlockHeaderChainInstance)> {
-    // first try to just read them all from files
-    let snarks = (start_block_number..=end_block_number)
-        .step_by(1 << max_depth)
-        .map(|start| {
-            let end = min(start + (1 << max_depth) - 1, end_block_number);
-            read_block_header_chain_snark(network, start, end, max_depth, initial_depth, false).ok()
-        })
-        .collect_vec();
-    if snarks.iter().all(|snark| snark.is_some()) {
-        return snarks.into_iter().map(|snark| snark.unwrap()).collect_vec();
-    }
+// Given
+// - a JSON-RPC provider
+// - choice of EVM network
+// - a range of block numbers
+// - a universal trusted setup,
+//
+// this function will generate a ZK proof for the block header chain between blocks `start_block_number` and `end_block_number` inclusive.
+//
+// If a proving key is provided, it will be used to generate the proof. Otherwise, a new proving key will be generated.
+//
+// The SNARK's public instance will include a merkle mountain range up to depth `max_depth`.
+//
+// This SNARK does not use aggregation: it uses a single `EthBlockHeaderChainCircle` circuit,
+// so it may not be suitable for large block ranges.
 
-    // otherwise create srs and pk in order to generate missing snarks
-    let k = if max_depth == initial_depth {
-        set_var("BLOCK_HEADER_CONFIG", format!("configs/headers/{network}_{max_depth}.json"));
-        EthConfigParams::get_header().degree
-    } else {
-        set_var(
-            "VERIFY_CONFIG",
-            format!("configs/headers/{network}_{max_depth}_{initial_depth}.json"),
-        );
-        load_verify_circuit_degree()
-    };
-    let params = gen_srs(k);
-    let mut pk = None;
-    let mut start = start_block_number;
-    snarks
-        .into_iter()
-        .map(|snark| {
-            let end = min(start + (1 << max_depth) - 1, end_block_number);
-            let snark = snark.unwrap_or_else(|| {
-                let (snark, instance, cow_pk) = gen_block_header_chain_snark_with_aggregation(
-                    &params,
-                    pk.as_ref(),
-                    provider,
-                    network,
-                    start,
-                    end,
-                    max_depth,
-                    initial_depth,
-                    transcript,
-                    rng,
-                );
-                if pk.is_none() {
-                    pk = Some(cow_pk.into_owned());
-                }
-                (snark, instance)
-            });
-            start += 1 << max_depth;
-            snark
-        })
-        .collect()
-}
-
-/// Given
-/// - a JSON-RPC provider
-/// - choice of EVM network
-/// - a range of block numbers
-/// - a universal trusted setup,
-///
-/// this function will generate a ZK proof for the block header chain between blocks `start_block_number` and `end_block_number` inclusive. The public instances are NOT finalized,
-/// as the merkle mountain range is not fully computed.
-///
-/// If a proving key is provided, it will be used to generate the proof. Otherwise, a new proving key will be generated.
-///
-/// This SNARK uses recursive aggregation between depth `max_depth` and `initial_depth + 1`. At `initial_depth` it falls back to the `EthBlockHeaderChainCircle` circuit.
-/// At each depth, it will try to load snarks of the previous depth from disk, and if it can't find them, it will generate them.
-///
-/// Note: we assume that `params` is the correct size for the circuit.
-pub fn gen_block_header_chain_snark_with_aggregation<'pk>(
-    params: &ParamsKZG<Bn256>,
-    pk: Option<&'pk ProvingKey<G1Affine>>,
-    provider: &Provider<Http>,
-    network: Network,
-    start_block_number: u32,
-    end_block_number: u32,
-    max_depth: usize,
-    initial_depth: usize,
-    transcript: &mut PoseidonTranscript<NativeLoader, Vec<u8>>,
-    rng: &mut (impl Rng + Send),
-) -> (Snark, EthBlockHeaderChainInstance, Cow<'pk, ProvingKey<G1Affine>>) {
-    if max_depth == initial_depth {
-        return gen_block_header_chain_snark(
-            params,
-            pk,
-            provider,
-            network,
-            start_block_number,
-            end_block_number,
-            initial_depth,
-            transcript,
-            rng,
-        );
-    }
-    let prev_depth = max_depth - 1;
-    let num_blocks = end_block_number - start_block_number + 1;
-    assert!(num_blocks <= 1 << max_depth);
-
-    // load or generate the previous depth snarks
-    let mut prev_snarks = gen_multiple_block_header_chain_snarks(
-        provider,
-        network,
-        start_block_number,
-        end_block_number,
-        prev_depth,
-        initial_depth,
-        transcript,
-        rng,
-    );
-    assert!(prev_snarks.len() <= 2);
-    if prev_snarks.len() != 2 {
-        assert!(num_blocks <= 1 << prev_depth);
-        // add a dummy snark
-        prev_snarks.push(prev_snarks[0].clone());
-    }
-    let (prev_snarks, prev_instances): (Vec<_>, Vec<_>) = prev_snarks.into_iter().unzip();
-    let circuit = EthBlockHeaderChainAggregationCircuit::new(
-        params,
-        prev_snarks,
-        prev_instances.try_into().unwrap(),
-        transcript,
-        rng,
-        num_blocks,
-        max_depth,
-        initial_depth,
-    );
-
-    set_var("VERIFY_CONFIG", format!("configs/headers/{network}_{max_depth}_{initial_depth}.json"));
-    let name = format!("data/headers/{network}_{max_depth}_{initial_depth}");
-    let pk = match pk {
-        Some(pk) => Cow::Borrowed(pk),
-        None => Cow::Owned(gen_pk(params, &circuit, Some(Path::new(&format!("{name}.pkey"))))),
-    };
-
-    let name = format!("{name}_{start_block_number:6x}_{end_block_number:6x}");
-    let instance = circuit.chain_instance.clone();
-    bincode::serialize_into(File::create(format!("{name}.in")).unwrap(), &instance).unwrap();
-
-    let snark_path = format!("{name}.snark");
-    (
-        gen_snark_shplonk(params, &pk, circuit, transcript, rng, Some(Path::new(&snark_path))),
-        instance,
-        pk,
-    )
-}
+// Given
+// - a JSON-RPC provider
+// - choice of EVM network
+// - a range of block numbers
+// - a universal trusted setup,
+//
+// this function will generate a ZK proof for the block header chain between blocks `start_block_number` and `end_block_number` inclusive. The public instances are NOT finalized,
+// as the merkle mountain range is not fully computed.
+//
+// If a proving key is provided, it will be used to generate the proof. Otherwise, a new proving key will be generated.
+//
+// This SNARK uses recursive aggregation between depth `max_depth` and `initial_depth + 1`. At `initial_depth` it falls back to the `EthBlockHeaderChainCircle` circuit.
+// At each depth, it will try to load snarks of the previous depth from disk, and if it can't find them, it will generate them.
 
 impl CircuitExt<Fr> for EthBlockHeaderChainAggregationCircuit {
     fn num_instance(&self) -> Vec<usize> {
@@ -291,99 +407,21 @@ impl CircuitExt<Fr> for EthBlockHeaderChainAggregationCircuit {
     }
 }
 
-/// Given
-/// - a JSON-RPC provider
-/// - choice of EVM network
-/// - a range of block numbers
-/// - a universal trusted setup,
-///
-/// this function will generate a ZK proof for the block header chain between blocks `start_block_number` and `end_block_number` inclusive. The public output is FINALIZED, with
-/// a complete merkle mountain range.
-///
-/// If a proving key is provided, it will be used to generate the proof. Otherwise, a new proving key will be generated.
-///
-/// This SNARK uses recursive aggregation between depth `max_depth` and `initial_depth + 1`. At `initial_depth` it falls back to the `EthBlockHeaderChainCircle` circuit.
-/// At each depth, it will try to load snarks of the previous depth from disk, and if it can't find them, it will generate them.
-///
-/// Note: we assume that `params` is the correct size for the circuit.
-pub fn gen_final_block_header_chain_snark<'pk>(
-    params: &ParamsKZG<Bn256>,
-    pk: Option<&'pk ProvingKey<G1Affine>>,
-    provider: &Provider<Http>,
-    network: Network,
-    start_block_number: u32,
-    end_block_number: u32,
-    max_depth: usize,
-    initial_depth: usize,
-    transcript: &mut PoseidonTranscript<NativeLoader, Vec<u8>>,
-    rng: &mut (impl Rng + Send),
-) -> (Snark, Cow<'pk, ProvingKey<G1Affine>>) {
-    // otherwise create srs and pk in order to generate missing snarks
-    if max_depth == initial_depth {
-        let (snark, _, pk) = gen_block_header_chain_snark(
-            params,
-            pk,
-            provider,
-            network,
-            start_block_number,
-            end_block_number,
-            initial_depth,
-            transcript,
-            rng,
-        );
-        return (snark, pk);
-    }
-    let prev_depth = max_depth - 1;
-    let num_blocks = end_block_number - start_block_number + 1;
-    assert!(num_blocks <= 1 << max_depth);
-
-    // load or generate the previous depth snarks
-    let mut prev_snarks = gen_multiple_block_header_chain_snarks(
-        provider,
-        network,
-        start_block_number,
-        end_block_number,
-        prev_depth,
-        initial_depth,
-        transcript,
-        rng,
-    );
-    assert!(prev_snarks.len() <= 2);
-    if prev_snarks.len() != 2 {
-        assert!(num_blocks <= 1 << prev_depth);
-        // add a dummy snark
-        prev_snarks.push(prev_snarks[0].clone());
-    }
-    let (prev_snarks, prev_instances): (Vec<_>, Vec<_>) = prev_snarks.into_iter().unzip();
-    let circuit = EthBlockHeaderChainFinalAggregationCircuit::new(
-        params,
-        prev_snarks,
-        prev_instances.try_into().unwrap(),
-        transcript,
-        rng,
-        num_blocks,
-        max_depth,
-        initial_depth,
-    );
-    set_var(
-        "FINAL_AGGREGATION_CONFIG",
-        format!("configs/headers/{network}_{max_depth}_{initial_depth}_final.json"),
-    );
-    let pk = match pk {
-        Some(pk) => Cow::Borrowed(pk),
-        None => Cow::Owned(gen_pk(
-            params,
-            &circuit,
-            Some(Path::new(&format!(
-                "data/headers/{network}_{max_depth}_{initial_depth}_final.pkey"
-            ))),
-        )),
-    };
-
-    let name = format!("data/headers/{network}_{max_depth}_{initial_depth}_{start_block_number:6x}_{end_block_number:6x}_final");
-    let snark_path = format!("{name}.snark");
-    (gen_snark_shplonk(params, &pk, circuit, transcript, rng, Some(Path::new(&snark_path))), pk)
-}
+// Given
+// - a JSON-RPC provider
+// - choice of EVM network
+// - a range of block numbers
+// - a universal trusted setup,
+//
+// this function will generate a ZK proof for the block header chain between blocks `start_block_number` and `end_block_number` inclusive. The public output is FINALIZED, with
+// a complete merkle mountain range.
+//
+// If a proving key is provided, it will be used to generate the proof. Otherwise, a new proving key will be generated.
+//
+// This SNARK uses recursive aggregation between depth `max_depth` and `initial_depth + 1`. At `initial_depth` it falls back to the `EthBlockHeaderChainCircle` circuit.
+// At each depth, it will try to load snarks of the previous depth from disk, and if it can't find them, it will generate them.
+//
+// Note: we assume that `params` is the correct size for the circuit.
 
 impl CircuitExt<Fr> for EthBlockHeaderChainFinalAggregationCircuit {
     fn num_instance(&self) -> Vec<usize> {
@@ -392,112 +430,5 @@ impl CircuitExt<Fr> for EthBlockHeaderChainFinalAggregationCircuit {
 
     fn instances(&self) -> Vec<Vec<Fr>> {
         vec![self.instance()]
-    }
-}
-
-pub fn autogen_final_block_header_chain_snark(
-    provider: &Provider<Http>,
-    network: Network,
-    start_block_number: u32,
-    end_block_number: u32,
-    max_depth: usize,
-    initial_depth: usize,
-    transcript: &mut PoseidonTranscript<NativeLoader, Vec<u8>>,
-    rng: &mut (impl Rng + Send),
-) -> Snark {
-    let path = format!("data/headers/{network}_{max_depth}_{initial_depth}_{start_block_number:6x}_{end_block_number:6x}_final.snark");
-    let snark = read_snark(path);
-    if let Ok(snark) = snark {
-        return snark;
-    }
-    set_var(
-        "FINAL_AGGREGATION_CONFIG",
-        format!("configs/headers/{network}_{max_depth}_{initial_depth}_final.json"),
-    );
-    let k = AggregationWithKeccakConfigParams::get().aggregation.degree;
-    let params = gen_srs(k);
-    gen_final_block_header_chain_snark(
-        &params,
-        None,
-        provider,
-        network,
-        start_block_number,
-        end_block_number,
-        max_depth,
-        initial_depth,
-        transcript,
-        rng,
-    )
-    .0
-}
-
-#[cfg(feature = "evm")]
-pub mod evm {
-    use super::*;
-    use snark_verifier_sdk::{
-        evm::{evm_verify, gen_evm_proof_shplonk, gen_evm_verifier_shplonk, write_calldata},
-        gen_pk,
-        halo2::aggregation::PublicAggregationCircuit,
-    };
-
-    pub fn autogen_final_block_header_chain_snark_for_evm(
-        provider: &Provider<Http>,
-        network: Network,
-        start_block_number: u32,
-        end_block_number: u32,
-        max_depth: usize,
-        initial_depth: usize,
-        generate_smart_contract: bool,
-        transcript: &mut PoseidonTranscript<NativeLoader, Vec<u8>>,
-        rng: &mut (impl Rng + Send),
-    ) {
-        assert!(max_depth >= initial_depth);
-        assert!(end_block_number - start_block_number < 1 << max_depth);
-
-        let snark = autogen_final_block_header_chain_snark(
-            provider,
-            network,
-            start_block_number,
-            end_block_number,
-            max_depth,
-            initial_depth,
-            transcript,
-            rng,
-        );
-
-        set_var(
-            "VERIFY_CONFIG",
-            format!("configs/headers/{network}_{max_depth}_{initial_depth}_for_evm.json"),
-        );
-        let k = load_verify_circuit_degree();
-        let params = gen_srs(k);
-
-        let circuit = PublicAggregationCircuit::new(&params, vec![snark], true, transcript, rng);
-
-        let pk = gen_pk(
-            &params,
-            &circuit,
-            Some(Path::new(&format!(
-                "data/headers/{network}_{max_depth}_{initial_depth}_for_evm.pkey"
-            ))),
-        );
-
-        let instances = circuit.instances();
-        let num_instances = instances[0].len();
-        let proof = gen_evm_proof_shplonk(&params, &pk, circuit, instances.clone(), rng);
-        write_calldata(&instances, &proof, Path::new(&format!(
-            "data/headers/{network}_{max_depth}_{initial_depth}_{start_block_number:6x}_{end_block_number:6x}.calldata"
-        ))).expect("writing proof calldata should not fail");
-
-        if generate_smart_contract {
-            let deployment_code = gen_evm_verifier_shplonk::<PublicAggregationCircuit>(
-                &params,
-                pk.get_vk(),
-                vec![num_instances],
-                Some(Path::new(&format!("data/headers/{network}_{max_depth}_{initial_depth}.yul"))),
-            );
-
-            evm_verify(deployment_code, instances, proof);
-        }
     }
 }

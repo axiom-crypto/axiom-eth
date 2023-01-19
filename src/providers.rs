@@ -18,7 +18,7 @@ use ethers_providers::{Http, Middleware, Provider};
 // use halo2_mpt::mpt::{max_branch_lens, max_leaf_lens};
 use itertools::Itertools;
 use lazy_static::__Deref;
-use rlp::{decode, decode_list, Encodable, RlpStream};
+use rlp::{decode, decode_list, Encodable, RlpStream, Rlp};
 use serde::{Deserialize, Serialize};
 use std::{
     convert::TryFrom,
@@ -52,6 +52,10 @@ pub fn get_block_storage_input(
         .block_on(provider.get_proof(addr, slots, Some(Number(BlockNumber::from(block_number)))))
         .unwrap();
 
+    for storage_pf in pf.storage_proof.iter() {
+        println!("key: {:?}, is_assigned_slot: {}", storage_pf.key, is_assigned_slot(&storage_pf));
+    }
+
     let acct_pf = MPTFixedKeyInput {
         path: H256(keccak256(addr)),
         value: get_acct_rlp(&pf),
@@ -81,11 +85,54 @@ pub fn get_block_storage_input(
         .collect();
 
     EthBlockStorageInput {
+        block,
         block_number,
         block_hash,
         block_header,
         storage: EthStorageInput { addr, acct_pf, storage_pfs },
     }
+}
+
+pub fn is_assigned_slot(pf: &StorageProof) -> bool {
+    let key = keccak256(pf.key);
+    let mut key_nibbles = Vec::new();
+    for byte in key {
+        key_nibbles.push(byte / 16);
+        key_nibbles.push(byte % 16);
+    }
+    let mut key_frags = Vec::new();
+    let mut path_idx = 0;
+    for node in pf.proof.iter() {
+        let rlp = Rlp::new(node);
+        if rlp.item_count().unwrap() == 2 {
+            let path = rlp.at(0).unwrap().data().unwrap();
+            let is_odd = (path[0] / 16 == 1u8) || (path[0] / 16 == 3u8);
+            let mut frag = Vec::new();
+            if is_odd {
+                frag.push(path[0] % 16);
+                path_idx += 1;
+            }
+            for idx in 1..path.len() {
+                frag.push(path[idx] / 16);
+                frag.push(path[idx] % 16);
+                path_idx += 2;
+            }
+            key_frags.extend(frag);
+        } else {
+            key_frags.extend(vec![key_nibbles[path_idx]]);
+            path_idx += 1;
+        }        
+    }
+    if path_idx == 64 {
+        for idx in 0..64 {
+            if key_nibbles[idx] != key_frags[idx] {
+                return false;
+            }
+        }
+    } else {
+        return false;
+    }
+    true
 }
 
 pub fn get_acct_rlp(pf: &EIP1186ProofResponse) -> Vec<u8> {

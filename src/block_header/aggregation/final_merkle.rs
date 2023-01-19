@@ -12,7 +12,6 @@ use halo2_base::{
 };
 
 use crate::{
-    block_header::EthBlockHeaderChainInstance,
     keccak::{KeccakChip, KeccakConfig},
     rlp::rlc::{RlcChip, RlcConfig},
     util::{bytes_be_to_u128, get_merkle_mountain_range, num_to_bytes_be, NUM_BYTES_IN_U128},
@@ -21,11 +20,8 @@ use itertools::Itertools;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use snark_verifier_sdk::{
-    halo2::{
-        aggregation::{AggregationConfig, AggregationConfigParams},
-        PoseidonTranscript,
-    },
-    CircuitExt, NativeLoader, Snark, LIMBS,
+    halo2::aggregation::{AggregationConfig, AggregationConfigParams},
+    CircuitExt, Snark, LIMBS,
 };
 use std::{
     env::{set_var, var},
@@ -96,8 +92,6 @@ impl EthBlockHeaderChainFinalAggregationCircuit {
     pub fn new(
         params: &ParamsKZG<Bn256>,
         snarks: Vec<Snark>,
-        snark_instances: [EthBlockHeaderChainInstance; 2],
-        transcript: &mut PoseidonTranscript<NativeLoader, Vec<u8>>,
         rng: &mut (impl Rng + Send),
         num_blocks: u32,
         max_depth: usize,
@@ -106,8 +100,6 @@ impl EthBlockHeaderChainFinalAggregationCircuit {
         let mut pre_circuit = EthBlockHeaderChainAggregationCircuit::new(
             params,
             snarks,
-            snark_instances,
-            transcript,
             rng,
             num_blocks,
             max_depth,
@@ -153,7 +145,7 @@ impl Circuit<Fr> for EthBlockHeaderChainFinalAggregationCircuit {
     ) -> Result<(), Error> {
         #[cfg(feature = "display")]
         let witness_time = start_timer!(|| format!(
-            "synthesize {:6x}-{:6x} {} {} with keccak",
+            "synthesize {:06x}-{:06x} {} {} with keccak",
             self.0.chain_instance.start_block_number,
             self.0.chain_instance.end_block_number,
             self.0.max_depth,

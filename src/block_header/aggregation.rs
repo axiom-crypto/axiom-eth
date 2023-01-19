@@ -16,13 +16,12 @@ use halo2_base::{
 };
 use itertools::Itertools;
 use rand::Rng;
-use snark_verifier::pcs::kzg::{Bdfg21, Kzg, KzgAccumulator};
+use snark_verifier::pcs::kzg::{Bdfg21, Kzg};
 use snark_verifier_sdk::{
-    halo2::{
-        aggregation::{aggregate, AggregationCircuit, AggregationConfig, Halo2Loader},
-        PoseidonTranscript,
+    halo2::aggregation::{
+        aggregate, flatten_accumulator, AggregationCircuit, AggregationConfig, Halo2Loader,
     },
-    CircuitExt, NativeLoader, Snark, LIMBS,
+    CircuitExt, Snark, LIMBS,
 };
 use std::rc::Rc;
 
@@ -48,8 +47,6 @@ impl EthBlockHeaderChainAggregationCircuit {
     pub fn new(
         params: &ParamsKZG<Bn256>,
         snarks: Vec<Snark>,
-        snark_instances: [EthBlockHeaderChainInstance; 2],
-        transcript: &mut PoseidonTranscript<NativeLoader, Vec<u8>>,
         rng: &mut (impl Rng + Send),
         num_blocks: u32,
         max_depth: usize,
@@ -59,7 +56,13 @@ impl EthBlockHeaderChainAggregationCircuit {
         assert!(max_depth > initial_depth);
         assert!(num_blocks <= 1 << max_depth);
 
-        let [instance0, instance1] = snark_instances;
+        let instance_start_idx = usize::from(initial_depth + 1 != max_depth) * 4 * LIMBS;
+        let [instance0, instance1] = [0, 1].map(|i| {
+            EthBlockHeaderChainInstance::from_instance(
+                &snarks[i].instances[0][instance_start_idx..],
+            )
+        });
+
         let mut roots = Vec::with_capacity((1 << (max_depth - initial_depth)) + initial_depth);
         let cutoff = 1 << (max_depth - initial_depth - 1);
         roots.extend_from_slice(&instance0.merkle_mountain_range[..cutoff]);
@@ -88,7 +91,7 @@ impl EthBlockHeaderChainAggregationCircuit {
             end_block_number: instance0.start_block_number + num_blocks - 1,
             merkle_mountain_range: roots,
         };
-        let aggregation = AggregationCircuit::new(params, snarks, transcript, rng);
+        let aggregation = AggregationCircuit::new(params, snarks, rng);
 
         Self { aggregation, num_blocks, chain_instance, max_depth, initial_depth }
     }
@@ -108,14 +111,12 @@ impl EthBlockHeaderChainAggregationCircuit {
         );
         let ecc_chip = config.ecc_chip();
         let loader = Halo2Loader::new(ecc_chip, ctx);
-        let (prev_instances, KzgAccumulator { lhs, rhs }) = aggregate::<Kzg<Bn256, Bdfg21>>(
+        let (prev_instances, acc) = aggregate::<Kzg<Bn256, Bdfg21>>(
             self.aggregation.succinct_verifying_key(),
             &loader,
             self.aggregation.snarks(),
             self.aggregation.as_proof(),
         );
-        let lhs = lhs.assigned();
-        let rhs = rhs.assigned();
 
         // for some reason the strong count of `loader` is >1, so to avoid unsafe code this is a hack to work with context
         let tmp = Rc::clone(&loader);
@@ -134,17 +135,7 @@ impl EthBlockHeaderChainAggregationCircuit {
             self.initial_depth,
         );
 
-        let new_instances = lhs
-            .x
-            .truncation
-            .limbs
-            .iter()
-            .chain(lhs.y.truncation.limbs.iter())
-            .chain(rhs.x.truncation.limbs.iter())
-            .chain(rhs.y.truncation.limbs.iter())
-            .cloned()
-            .chain(new_instances.into_iter())
-            .collect();
+        let new_instances = [flatten_accumulator(acc), new_instances].concat();
         (new_instances, num_blocks_minus_one, loader)
     }
 
@@ -184,7 +175,7 @@ impl Circuit<Fr> for EthBlockHeaderChainAggregationCircuit {
     ) -> Result<(), Error> {
         #[cfg(feature = "display")]
         let witness_time = start_timer!(|| format!(
-            "synthesize {:6x}-{:6x} {} {}",
+            "synthesize {:06x}-{:06x} {} {}",
             self.chain_instance.start_block_number,
             self.chain_instance.end_block_number,
             self.max_depth,

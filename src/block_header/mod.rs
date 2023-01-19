@@ -7,7 +7,7 @@ use crate::{
         rlc::{RlcFixedTrace, RlcTrace, RLC_PHASE},
         RlpArrayTraceWitness, RlpFieldTrace,
     },
-    util::bytes_be_var_to_fixed,
+    util::{bytes_be_var_to_fixed, decode_field_to_h256},
     EthChip, EthConfig,
 };
 #[cfg(feature = "display")]
@@ -383,11 +383,11 @@ pub fn get_boundary_block_data<'v, F: Field + PrimeField>(
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct EthBlockHeaderChainInstance {
-    prev_hash: H256,
-    end_hash: H256,
-    start_block_number: u32,
-    end_block_number: u32,
-    merkle_mountain_range: Vec<H256>,
+    pub prev_hash: H256,
+    pub end_hash: H256,
+    pub start_block_number: u32,
+    pub end_block_number: u32,
+    pub merkle_mountain_range: Vec<H256>,
 }
 
 impl EthBlockHeaderChainInstance {
@@ -417,6 +417,18 @@ impl EthBlockHeaderChainInstance {
             .collect_vec();
 
         [&prev_hash[..], &end_hash[..], &[block_numbers], &merkle_mountain_range].concat()
+    }
+
+    pub fn from_instance<F: Field>(instance: &[F]) -> Self {
+        let prev_hash = decode_field_to_h256(&instance[0..2]);
+        let end_hash = decode_field_to_h256(&instance[2..4]);
+        let block_numbers = instance[4].to_repr(); // little endian
+        let start_block_number = u32::from_le_bytes(block_numbers[4..8].try_into().unwrap());
+        let end_block_number = u32::from_le_bytes(block_numbers[..4].try_into().unwrap());
+        let merkle_mountain_range =
+            instance[5..].chunks(2).map(|chunk| decode_field_to_h256(chunk)).collect_vec();
+
+        Self::new(prev_hash, end_hash, start_block_number, end_block_number, merkle_mountain_range)
     }
 }
 

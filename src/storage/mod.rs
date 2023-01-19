@@ -18,7 +18,7 @@ use crate::{
 };
 #[cfg(feature = "display")]
 use ark_std::{end_timer, start_timer};
-use ethers_core::types::{Address, H256, U256};
+use ethers_core::types::{Address, Block, H256, U256};
 #[cfg(feature = "providers")]
 use ethers_providers::{Http, Provider};
 use halo2_base::{gates::GateInstructions, AssignedValue, Context, ContextParams, SKIP_FIRST_PASS};
@@ -389,6 +389,7 @@ pub struct EthStorageInput {
 
 #[derive(Clone, Debug)]
 pub struct EthBlockStorageInput {
+    pub block: Block<H256>,
     pub block_number: u32,
     pub block_hash: H256,
     pub block_header: Vec<u8>,

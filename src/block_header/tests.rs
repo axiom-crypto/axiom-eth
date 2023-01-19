@@ -303,113 +303,48 @@ pub fn test_multi_goerli_header_prover() {
 
 #[cfg(all(feature = "aggregation", feature = "providers"))]
 mod aggregation {
-    use super::helpers::gen_multiple_block_header_chain_snarks;
     use super::*;
-    use crate::{
-        block_header::helpers::autogen_final_block_header_chain_snark,
-        providers::GOERLI_PROVIDER_URL,
-    };
-    use rand::SeedableRng;
-    use snark_verifier_sdk::{
-        halo2::{PoseidonTranscript, POSEIDON_SPEC},
-        NativeLoader,
-    };
+    use crate::block_header::helpers::{CircuitType, Finality, Sequencer, Task};
 
     #[test]
     fn test_goerli_header_chain_provider() {
-        let infura_id =
-            std::fs::read_to_string("scripts/input_gen/INFURA_ID").expect("Infura ID not found");
-        let provider =
-            Provider::<Http>::try_from(format!("{GOERLI_PROVIDER_URL}{infura_id}").as_str())
-                .expect("could not instantiate HTTP Provider");
-
-        let mut transcript =
-            PoseidonTranscript::<NativeLoader, Vec<u8>>::from_spec(vec![], POSEIDON_SPEC.clone());
-        let mut rng = rand_chacha::ChaChaRng::from_seed([0u8; 32]);
-        gen_multiple_block_header_chain_snarks(
-            &provider,
-            Network::Goerli,
+        let mut sequencer = Sequencer::new(Network::Goerli);
+        sequencer.get_snark(Task::new(
             0x765fb3,
-            0x765fb3 + 11,
-            3,
-            3,
-            &mut transcript,
-            &mut rng,
-        );
+            0x765fb3 + 7,
+            CircuitType::new(3, 3, Finality::None),
+        ));
     }
 
     #[test]
     #[ignore = "requires over 32G memory"]
     fn test_goerli_header_chain_with_aggregation() {
-        let infura_id =
-            std::fs::read_to_string("scripts/input_gen/INFURA_ID").expect("Infura ID not found");
-        let provider =
-            Provider::<Http>::try_from(format!("{GOERLI_PROVIDER_URL}{infura_id}").as_str())
-                .expect("could not instantiate HTTP Provider");
-
-        let mut transcript =
-            PoseidonTranscript::<NativeLoader, Vec<u8>>::from_spec(vec![], POSEIDON_SPEC.clone());
-        let mut rng = rand_chacha::ChaChaRng::from_seed([0u8; 32]);
-        gen_multiple_block_header_chain_snarks(
-            &provider,
-            Network::Goerli,
+        let mut sequencer = Sequencer::new(Network::Goerli);
+        sequencer.get_snark(Task::new(
             0x765fb3,
             0x765fb3 + 11,
-            4,
-            3,
-            &mut transcript,
-            &mut rng,
-        );
+            CircuitType::new(4, 3, Finality::None),
+        ));
     }
 
     #[test]
     fn test_goerli_header_chain_final_aggregation() {
-        let infura_id =
-            std::fs::read_to_string("scripts/input_gen/INFURA_ID").expect("Infura ID not found");
-        let provider =
-            Provider::<Http>::try_from(format!("{GOERLI_PROVIDER_URL}{infura_id}").as_str())
-                .expect("could not instantiate HTTP Provider");
-
-        let mut transcript =
-            PoseidonTranscript::<NativeLoader, Vec<u8>>::from_spec(vec![], POSEIDON_SPEC.clone());
-        let mut rng = rand_chacha::ChaChaRng::from_seed([0u8; 32]);
-
-        autogen_final_block_header_chain_snark(
-            &provider,
-            Network::Goerli,
+        let mut sequencer = Sequencer::new(Network::Goerli);
+        sequencer.get_snark(Task::new(
             0x765fb3,
             0x765fb3 + 11,
-            4,
-            3,
-            &mut transcript,
-            &mut rng,
-        );
+            CircuitType::new(4, 3, Finality::Merkle),
+        ));
     }
 
     #[cfg(feature = "evm")]
     #[test]
     fn test_goerli_header_chain_for_evm() {
-        use crate::block_header::helpers::evm::autogen_final_block_header_chain_snark_for_evm;
-
-        let infura_id =
-            std::fs::read_to_string("scripts/input_gen/INFURA_ID").expect("Infura ID not found");
-        let provider =
-            Provider::<Http>::try_from(format!("{GOERLI_PROVIDER_URL}{infura_id}").as_str())
-                .expect("could not instantiate HTTP Provider");
-        let mut transcript =
-            PoseidonTranscript::<NativeLoader, Vec<u8>>::from_spec(vec![], POSEIDON_SPEC.clone());
-        let mut rng = rand_chacha::ChaChaRng::from_seed([0u8; 32]);
-
-        autogen_final_block_header_chain_snark_for_evm(
-            &provider,
-            Network::Goerli,
+        let mut sequencer = Sequencer::new(Network::Goerli);
+        sequencer.get_snark(Task::new(
             0x765fb3,
             0x765fb3 + 11,
-            4,
-            3,
-            true,
-            &mut transcript,
-            &mut rng,
-        );
+            CircuitType::new(4, 3, Finality::Evm(0)),
+        ));
     }
 }

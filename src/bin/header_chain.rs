@@ -1,23 +1,12 @@
 #[cfg(feature = "display")]
 use ark_std::{end_timer, start_timer};
-#[cfg(feature = "evm")]
-use axiom_eth::block_header::helpers::evm::autogen_final_block_header_chain_snark_for_evm;
 use axiom_eth::{
-    block_header::helpers::{
-        autogen_final_block_header_chain_snark, gen_multiple_block_header_chain_snarks,
-    },
-    providers::{GOERLI_PROVIDER_URL, MAINNET_PROVIDER_URL},
+    block_header::helpers::{CircuitType, Finality, Sequencer, Task},
     Network,
 };
 use clap::{Parser, ValueEnum};
 use clap_num::maybe_hex;
-use ethers_providers::{Http, Provider};
-use rand::SeedableRng;
-use snark_verifier_sdk::{
-    halo2::{PoseidonTranscript, POSEIDON_SPEC},
-    NativeLoader,
-};
-use std::{fmt::Display, fs::read_to_string};
+use std::{cmp::min, fmt::Display};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)] // Read from `Cargo.toml`
@@ -34,14 +23,18 @@ struct Cli {
     max_depth: usize,
     #[arg(long = "initial-depth")]
     initial_depth: Option<usize>,
-    #[arg(long = "final", default_value_t = Finality::None)]
-    finality: Finality,
+    #[arg(long = "final", default_value_t = CliFinality::None)]
+    finality: CliFinality,
+    #[cfg_attr(feature = "evm", arg(long = "extra-rounds"))]
+    rounds: Option<usize>,
+    #[arg(long = "calldata")]
+    calldata: bool,
     #[cfg_attr(feature = "evm", arg(long = "create-contract"))]
     create_contract: bool,
 }
 
 #[derive(Clone, Debug, ValueEnum)]
-enum Finality {
+enum CliFinality {
     /// Produces as many snarks as needed to fit the entire block number range, without any final processing.
     None,
     /// The block number range must fit within the specified max depth.
@@ -54,13 +47,13 @@ enum Finality {
     Evm,
 }
 
-impl Display for Finality {
+impl Display for CliFinality {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Finality::None => write!(f, "none"),
-            Finality::Merkle => write!(f, "merkle"),
+            CliFinality::None => write!(f, "none"),
+            CliFinality::Merkle => write!(f, "merkle"),
             #[cfg(feature = "evm")]
-            Finality::Evm => write!(f, "evm"),
+            CliFinality::Evm => write!(f, "evm"),
         }
     }
 }
@@ -69,17 +62,7 @@ fn main() {
     let args = Cli::parse();
     let initial_depth = args.initial_depth.unwrap_or(args.max_depth);
 
-    let infura_id = read_to_string("scripts/input_gen/INFURA_ID").expect("Infura ID not found");
-    let provider_url = match args.network {
-        Network::Mainnet => MAINNET_PROVIDER_URL,
-        Network::Goerli => GOERLI_PROVIDER_URL,
-    };
-    let provider = Provider::<Http>::try_from(format!("{provider_url}{infura_id}").as_str())
-        .expect("could not instantiate HTTP Provider");
-
-    let mut transcript =
-        PoseidonTranscript::<NativeLoader, Vec<u8>>::from_spec(vec![], POSEIDON_SPEC.clone());
-    let mut rng = rand_chacha::ChaChaRng::from_entropy();
+    let mut sequencer = Sequencer::new(args.network);
 
     #[cfg(feature = "display")]
     let start = start_timer!(|| format!(
@@ -90,46 +73,25 @@ fn main() {
         initial_depth,
         args.finality
     ));
-    match args.finality {
-        Finality::None => {
-            gen_multiple_block_header_chain_snarks(
-                &provider,
-                args.network,
-                args.start_block_number,
-                args.end_block_number,
-                args.max_depth,
-                initial_depth,
-                &mut transcript,
-                &mut rng,
-            );
-        }
-        Finality::Merkle => {
-            autogen_final_block_header_chain_snark(
-                &provider,
-                args.network,
-                args.start_block_number,
-                args.end_block_number,
-                args.max_depth,
-                initial_depth,
-                &mut transcript,
-                &mut rng,
-            );
-        }
+
+    let finality = match args.finality {
+        CliFinality::None => Finality::None,
+        CliFinality::Merkle => Finality::Merkle,
         #[cfg(feature = "evm")]
-        Finality::Evm => {
-            autogen_final_block_header_chain_snark_for_evm(
-                &provider,
-                args.network,
-                args.start_block_number,
-                args.end_block_number,
-                args.max_depth,
-                initial_depth,
-                args.create_contract,
-                &mut transcript,
-                &mut rng,
-            );
+        CliFinality::Evm => Finality::Evm(args.rounds.unwrap_or(0)),
+    };
+    let circuit_type = CircuitType::new(args.max_depth, initial_depth, finality);
+    for start in (args.start_block_number..=args.end_block_number).step_by(1 << args.max_depth) {
+        let end = min(start + (1 << args.max_depth) - 1, args.end_block_number);
+        let task = Task::new(start, end, circuit_type);
+        if args.calldata {
+            #[cfg(feature = "evm")]
+            sequencer.get_calldata(task, args.create_contract);
+        } else {
+            sequencer.get_snark(task);
         }
     }
+
     #[cfg(feature = "display")]
     end_timer!(start);
 }

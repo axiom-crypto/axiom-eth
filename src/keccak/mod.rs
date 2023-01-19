@@ -9,7 +9,7 @@ use halo2_base::{
     halo2_proofs::circuit::Value,
     utils::{bit_length, value_to_option, ScalarField},
     AssignedValue, Context,
-    QuantumCell::{Constant, Existing, Witness},
+    QuantumCell::{Constant, Existing},
 };
 use itertools::Itertools;
 use rayon::prelude::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};

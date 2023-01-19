@@ -1,6 +1,4 @@
-#![allow(clippy::too_many_arguments)]
 #![feature(int_log)]
-#![feature(arc_unwrap_or_clone)]
 
 pub mod block_header;
 pub mod keccak;

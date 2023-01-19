@@ -12,7 +12,6 @@ use crate::{
     util::EthConfigParams,
     Field,
 };
-use ::rlp::Rlp;
 use ethers_core::{types::H256, utils::hex::FromHex};
 use halo2_base::{
     gates::{flex_gate::FlexGateConfig, range::RangeConfig, GateInstructions, RangeInstructions},
@@ -22,6 +21,7 @@ use halo2_base::{
 };
 use itertools::Itertools;
 use lazy_static::lazy_static;
+use rlp::Rlp;
 use std::{cmp::max, env::set_var, iter::once};
 
 #[cfg(test)]
