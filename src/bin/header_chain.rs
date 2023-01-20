@@ -44,8 +44,6 @@ enum CliFinality {
     /// The block number range must fit within the specified max depth. Produces the final verifier circuit to verifier all
     /// the previous snarks in EVM. Writes the calldata to disk.
     Evm,
-    /// Special option for additional aggregation of historical block headers into batches of size greater than 2<sup>max_depth</sup>.
-    Historical,
 }
 
 impl Display for CliFinality {
@@ -54,7 +52,6 @@ impl Display for CliFinality {
             CliFinality::None => write!(f, "none"),
             CliFinality::Merkle => write!(f, "merkle"),
             CliFinality::Evm => write!(f, "evm"),
-            CliFinality::Historical => write!(f, "historical"),
         }
     }
 }
@@ -79,7 +76,6 @@ fn main() {
         CliFinality::None => Finality::None,
         CliFinality::Merkle => Finality::Merkle,
         CliFinality::Evm => Finality::Evm(args.rounds.unwrap_or(0)),
-        CliFinality::Historical => Finality::Historical(args.rounds.unwrap_or(0)),
     };
     let circuit_type = CircuitType::new(args.max_depth, initial_depth, finality);
     for start in (args.start_block_number..=args.end_block_number).step_by(1 << args.max_depth) {

@@ -1,8 +1,7 @@
 use super::{
     aggregation::{
         AggregationWithKeccakConfigParams, EthBlockHeaderChainAggregationCircuit,
-        EthBlockHeaderChainFinalAggregationCircuit, HistoricalAggConfigParams,
-        HistoricalAggregationCircuit,
+        EthBlockHeaderChainFinalAggregationCircuit,
     },
     EthBlockHeaderChainCircuit,
 };
@@ -16,17 +15,17 @@ use ethers_providers::{Http, Provider};
 use halo2_base::{
     halo2_proofs::{
         halo2curves::bn256::{Bn256, Fr, G1Affine},
-        plonk::{ProvingKey, Selector},
+        plonk::ProvingKey,
         poly::kzg::commitment::ParamsKZG,
     },
-    utils::{fs::gen_srs, value_to_option, PrimeField},
+    utils::{fs::gen_srs, PrimeField},
 };
 use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;
 use snark_verifier_sdk::{
     gen_pk,
     halo2::{
-        aggregation::{load_verify_circuit_degree, AggregationCircuit, PublicAggregationCircuit},
+        aggregation::{load_verify_circuit_degree, PublicAggregationCircuit},
         gen_snark_shplonk, read_snark,
     },
     CircuitExt, Snark, LIMBS,
@@ -49,9 +48,6 @@ pub enum Finality {
     /// The block number range must fit within the specified max depth. `Evm(round)` performs `round + 1`
     /// rounds of SNARK verification on the final `Merkle` circuit
     Evm(usize),
-    /// For historical batch upload of block headers, we will aggregate `Merkle` finality circuits using
-    /// multiple `round`s
-    Historical(usize),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -79,13 +75,6 @@ impl CircuitType {
                     Self::new(self.depth, self.initial_depth, Finality::Evm(round - 1))
                 }
             }
-            Finality::Historical(round) => {
-                if round == 0 {
-                    Self::new(self.depth, self.initial_depth, Finality::Merkle)
-                } else {
-                    Self::new(self.depth, self.initial_depth, Finality::Historical(round - 1))
-                }
-            }
         }
     }
 
@@ -102,7 +91,6 @@ impl CircuitType {
             Finality::None => "".to_string(),
             Finality::Merkle => "_final".to_string(),
             Finality::Evm(round) => format!("_for_evm_{round}"),
-            Finality::Historical(round) => format!("_historical_{round}"),
         }
     }
 
@@ -144,7 +132,6 @@ pub enum AnyCircuit {
     Intermediate(EthBlockHeaderChainAggregationCircuit),
     Final(EthBlockHeaderChainFinalAggregationCircuit),
     ForEvm(PublicAggregationCircuit),
-    Historical(HistoricalAggregationCircuit),
 }
 
 pub struct Sequencer {
@@ -201,13 +188,6 @@ impl Sequencer {
                     set_var("VERIFY_CONFIG", format!("{fname_prefix}_for_evm_{round}.json"));
                     load_verify_circuit_degree()
                 }
-                Finality::Historical(round) => {
-                    set_var(
-                        "HISTORICAL_AGG_CONFIG",
-                        format!("{fname_prefix}_historical_{round}.json"),
-                    );
-                    HistoricalAggConfigParams::get().aggregation.degree
-                }
             }
         };
         self.params.entry(k).or_insert_with(|| gen_srs(k));
@@ -233,39 +213,18 @@ impl Sequencer {
             AnyCircuit::Initial(circuit)
         } else {
             let prev_type = circuit_type.prev();
-            let k;
             let mut snarks: Vec<Snark>;
-            if let Finality::Historical(round) = finality {
-                let conf_path = format!(
-                    "configs/headers/{}_{depth}_{initial_depth}_historical_{round}.json",
-                    self.network,
-                );
-                set_var("HISTORICAL_AGG_CONFIG", conf_path);
-                let conf_params = HistoricalAggConfigParams::get();
-                k = conf_params.aggregation.degree;
-                self.params.entry(k).or_insert_with(|| gen_srs(k));
-                let num_snarks = conf_params.num_snarks;
-                let prev_agg_total = conf_params.prev_agg_total;
-                let prev_total_blocks = prev_agg_total << depth;
-                assert_eq!(end - start + 1, num_snarks * prev_total_blocks);
-                snarks = (start..=end)
-                    .step_by(prev_total_blocks as usize)
-                    .map(|i| self.get_snark(Task::new(i, i + prev_total_blocks - 1, prev_type)))
-                    .collect();
-            } else {
-                let prev_depth = prev_type.depth;
-                snarks = (start..=end)
-                    .step_by(1 << prev_depth)
-                    .map(|i| {
-                        self.get_snark(Task::new(i, min(end, i + (1 << prev_depth) - 1), prev_type))
-                    })
-                    .collect();
-                if (finality == Finality::None || finality == Finality::Merkle) && snarks.len() != 2
-                {
-                    snarks.push(snarks[0].clone());
-                }
-                k = self.get_params(circuit_type);
-            };
+            let prev_depth = prev_type.depth;
+            snarks = (start..=end)
+                .step_by(1 << prev_depth)
+                .map(|i| {
+                    self.get_snark(Task::new(i, min(end, i + (1 << prev_depth) - 1), prev_type))
+                })
+                .collect();
+            if (finality == Finality::None || finality == Finality::Merkle) && snarks.len() != 2 {
+                snarks.push(snarks[0].clone());
+            }
+            let k = self.get_params(circuit_type);
             let params = self.params.get(&k).unwrap();
             let mut rng = self.rng.clone();
             match finality {
@@ -295,11 +254,6 @@ impl Sequencer {
                     let circuit = PublicAggregationCircuit::new(params, snarks, true, &mut rng);
                     AnyCircuit::ForEvm(circuit)
                 }
-                Finality::Historical(round) => {
-                    let circuit =
-                        HistoricalAggregationCircuit::new(params, snarks, depth, round, &mut rng);
-                    AnyCircuit::Historical(circuit)
-                }
             }
         }
     }
@@ -323,7 +277,6 @@ impl Sequencer {
                 AnyCircuit::Intermediate(circuit) => gen_pk(params, circuit, pk_path),
                 AnyCircuit::Final(circuit) => gen_pk(params, circuit, pk_path),
                 AnyCircuit::ForEvm(circuit) => gen_pk(params, circuit, pk_path),
-                AnyCircuit::Historical(circuit) => gen_pk(params, circuit, pk_path),
             }
         });
         let snark_path = Some(task.snark_name(network));
@@ -341,9 +294,6 @@ impl Sequencer {
             AnyCircuit::ForEvm(circuit) => {
                 gen_snark_shplonk(params, pk, circuit, &mut rng, snark_path)
             }
-            AnyCircuit::Historical(circuit) => {
-                gen_snark_shplonk(params, pk, circuit, &mut rng, snark_path)
-            }
         }
     }
 
@@ -351,7 +301,7 @@ impl Sequencer {
     pub fn get_calldata(&mut self, task: Task, generate_smart_contract: bool) -> Vec<u8> {
         let network = self.network;
         let circuit_type = task.circuit_type;
-        assert!(matches!(circuit_type.finality, Finality::Evm(_) | Finality::Historical(_)));
+        assert!(matches!(circuit_type.finality, Finality::Evm(_)));
         let fname = format!(
             "data/headers/{}_{}_{}_{:06x}_{:06x}.calldata",
             network, circuit_type.depth, circuit_type.initial_depth, task.start, task.end
@@ -363,9 +313,6 @@ impl Sequencer {
         let circuit = self.get_circuit(task);
         match circuit {
             AnyCircuit::ForEvm(circuit) => {
-                self.write_calldata_generic(circuit, circuit_type, &fname, generate_smart_contract)
-            }
-            AnyCircuit::Historical(circuit) => {
                 self.write_calldata_generic(circuit, circuit_type, &fname, generate_smart_contract)
             }
             _ => unreachable!(),
@@ -401,17 +348,12 @@ impl Sequencer {
 
         if generate_smart_contract {
             let num_instances = instances[0].len();
-            let suffix = if matches!(circuit_type.finality, Finality::Historical(_)) {
-                "_historical"
-            } else {
-                ""
-            };
             let deployment_code = gen_evm_verifier_shplonk::<ConcreteCircuit>(
                 params,
                 pk.get_vk(),
                 vec![num_instances],
                 Some(Path::new(&format!(
-                    "data/headers/{}_{}_{}{suffix}.yul",
+                    "data/headers/{}_{}_{}.yul",
                     self.network, circuit_type.depth, circuit_type.initial_depth
                 ))),
             );
@@ -494,43 +436,5 @@ impl CircuitExt<Fr> for EthBlockHeaderChainFinalAggregationCircuit {
 
     fn instances(&self) -> Vec<Vec<Fr>> {
         vec![self.instance()]
-    }
-}
-
-impl CircuitExt<Fr> for HistoricalAggregationCircuit {
-    fn num_instance(&self) -> Vec<usize> {
-        let num_prev = if self.round == 0 {
-            self.aggregation.snarks().len() * 7
-        } else {
-            self.aggregation.snarks()[0].instances[0].len() - 4 * LIMBS
-        };
-        vec![4 * LIMBS + self.aggregation.snarks().len() * num_prev]
-    }
-
-    fn instances(&self) -> Vec<Vec<Fr>> {
-        const START: usize = 4 * LIMBS;
-        let mut instance = self.aggregation.instance();
-        instance.extend(
-            self.aggregation
-                .snarks()
-                .iter()
-                .flat_map(|snark| {
-                    if self.round == 0 {
-                        snark.instances[0][START..START + 7].iter()
-                    } else {
-                        snark.instances[0][START..].iter()
-                    }
-                })
-                .map(|value| value_to_option(*value).unwrap()),
-        );
-        vec![instance]
-    }
-
-    fn accumulator_indices() -> Option<Vec<(usize, usize)>> {
-        Some((0..4 * LIMBS).map(|idx| (0, idx)).collect())
-    }
-
-    fn selectors(config: &Self::Config) -> Vec<Selector> {
-        AggregationCircuit::selectors(config)
     }
 }

@@ -26,9 +26,7 @@ use snark_verifier_sdk::{
 use std::rc::Rc;
 
 mod final_merkle;
-mod historical;
 pub use final_merkle::*;
-pub use historical::*;
 
 #[derive(Clone)]
 pub struct EthBlockHeaderChainAggregationCircuit {
