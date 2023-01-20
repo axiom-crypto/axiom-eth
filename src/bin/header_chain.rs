@@ -25,7 +25,7 @@ struct Cli {
     initial_depth: Option<usize>,
     #[arg(long = "final", default_value_t = CliFinality::None)]
     finality: CliFinality,
-    #[cfg_attr(feature = "evm", arg(long = "extra-rounds"))]
+    #[arg(long = "extra-rounds")]
     rounds: Option<usize>,
     #[arg(long = "calldata")]
     calldata: bool,
@@ -43,8 +43,9 @@ enum CliFinality {
     Merkle,
     /// The block number range must fit within the specified max depth. Produces the final verifier circuit to verifier all
     /// the previous snarks in EVM. Writes the calldata to disk.
-    #[cfg(feature = "evm")]
     Evm,
+    /// Special option for additional aggregation of historical block headers into batches of size greater than 2<sup>max_depth</sup>.
+    Historical,
 }
 
 impl Display for CliFinality {
@@ -52,8 +53,8 @@ impl Display for CliFinality {
         match self {
             CliFinality::None => write!(f, "none"),
             CliFinality::Merkle => write!(f, "merkle"),
-            #[cfg(feature = "evm")]
             CliFinality::Evm => write!(f, "evm"),
+            CliFinality::Historical => write!(f, "historical"),
         }
     }
 }
@@ -77,8 +78,8 @@ fn main() {
     let finality = match args.finality {
         CliFinality::None => Finality::None,
         CliFinality::Merkle => Finality::Merkle,
-        #[cfg(feature = "evm")]
         CliFinality::Evm => Finality::Evm(args.rounds.unwrap_or(0)),
+        CliFinality::Historical => Finality::Historical(args.rounds.unwrap_or(0)),
     };
     let circuit_type = CircuitType::new(args.max_depth, initial_depth, finality);
     for start in (args.start_block_number..=args.end_block_number).step_by(1 << args.max_depth) {

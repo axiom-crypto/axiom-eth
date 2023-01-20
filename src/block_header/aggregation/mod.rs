@@ -26,7 +26,9 @@ use snark_verifier_sdk::{
 use std::rc::Rc;
 
 mod final_merkle;
+mod historical;
 pub use final_merkle::*;
+pub use historical::*;
 
 #[derive(Clone)]
 pub struct EthBlockHeaderChainAggregationCircuit {
@@ -129,7 +131,7 @@ impl EthBlockHeaderChainAggregationCircuit {
         let new_instances = join_previous_instances(
             &mut ctx,
             config.range(),
-            &prev_instances,
+            prev_instances.try_into().unwrap(),
             &num_blocks_minus_one,
             self.max_depth,
             self.initial_depth,
@@ -225,7 +227,7 @@ impl Circuit<Fr> for EthBlockHeaderChainAggregationCircuit {
 pub fn join_previous_instances<'v, F: Field + PrimeField>(
     ctx: &mut Context<'v, F>,
     range: &RangeConfig<F>,
-    prev_instances: &[AssignedValue<'v, F>],
+    prev_instances: [Vec<AssignedValue<'v, F>>; 2],
     num_blocks_minus_one: &AssignedValue<'v, F>,
     max_depth: usize,
     initial_depth: usize,
@@ -235,10 +237,11 @@ pub fn join_previous_instances<'v, F: Field + PrimeField>(
     let num_instance =
         EthBlockHeaderChainAggregationCircuit::get_num_instance(prev_depth, initial_depth)
             + non_accumulator_start;
-    assert_eq!(prev_instances.len(), num_instance * 2);
+    debug_assert_eq!(num_instance, prev_instances[0].len());
+    debug_assert_eq!(num_instance, prev_instances[1].len());
 
-    let instance0 = &prev_instances[non_accumulator_start..num_instance];
-    let instance1 = &prev_instances[num_instance + non_accumulator_start..];
+    let instance0 = &prev_instances[0][non_accumulator_start..];
+    let instance1 = &prev_instances[1][non_accumulator_start..];
     let mountain_selector = range.is_less_than_safe(ctx, num_blocks_minus_one, 1 << prev_depth);
 
     // join block hashes
