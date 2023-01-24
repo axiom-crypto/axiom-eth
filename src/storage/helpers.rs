@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     env::{set_var, var},
+    fs,
     path::Path,
     vec,
 };
@@ -9,7 +10,10 @@ use crate::{
     util::EthConfigParams,
     Field, Network,
 };
-use ethers_core::types::{Address, H256};
+use ethers_core::{
+    types::{Address, H256},
+    utils::hex
+};
 use ethers_providers::{Http, Provider};
 use halo2_base::{
     halo2_proofs::{
@@ -24,7 +28,7 @@ use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;
 use serde::{Deserialize, Serialize};
 use snark_verifier::loader::evm::encode_calldata;
-use snark_verifier_sdk::{halo2::{aggregation::{PublicAggregationCircuit, load_verify_circuit_degree}, gen_snark_shplonk}, evm::gen_evm_proof_shplonk, CircuitExt, gen_pk};
+use snark_verifier_sdk::{halo2::{aggregation::{PublicAggregationCircuit, load_verify_circuit_degree}, gen_snark_shplonk}, evm::{gen_evm_proof_shplonk, gen_evm_verifier_shplonk}, CircuitExt, gen_pk};
 
 use super::EthBlockStorageCircuit;
 
@@ -116,6 +120,22 @@ impl Sequencer {
         let evm_snark = gen_evm_proof_shplonk(evm_params, evm_pk, evm_circuit, instances.clone(), &mut rng);
 
         let calldata = encode_calldata(&instances, &evm_snark);
+        let fname = format!(
+            "data/storage/{}_{}.calldata", network, task.slots.len()
+        );
+        fs::write(fname, hex::encode(&calldata)).expect("write calldata should not fail");
+        if generate_smart_contract {
+            let num_instances = instances[0].len();
+            let deployment_code = gen_evm_verifier_shplonk::<PublicAggregationCircuit>(
+                evm_params,
+                evm_pk.get_vk(),
+                vec![num_instances],
+                Some(Path::new(&format!(
+                    "data/storage/{}_{}.yul", self.network, task.slots.len()
+                ))),
+            );
+        }
+
         calldata
     }
 }
