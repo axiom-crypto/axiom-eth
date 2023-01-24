@@ -29,6 +29,9 @@ use std::marker::PhantomData;
 #[cfg(all(test, feature = "providers"))]
 mod tests;
 
+#[cfg(all(feature = "aggregation", feature = "providers"))]
+pub mod helpers;
+
 #[derive(Clone, Debug)]
 pub struct EthAccountTrace<'v, F: Field> {
     pub nonce_trace: RlcTrace<'v, F>,

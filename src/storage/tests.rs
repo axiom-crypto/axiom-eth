@@ -43,7 +43,8 @@ fn get_test_circuit<F: Field>(network: Network, num_slots: usize) -> EthBlockSto
         Network::Mainnet => {
             // cryptopunks
             addr = "0xb47e3cd837dDF8e4c57F05d70Ab865de6e193BBB".parse::<Address>().unwrap();
-            block_number = 0xf929e6;
+            block_number = 16356350;
+            //block_number = 0xf929e6;
         }
         Network::Goerli => {
             addr = "0xf2d1f94310823fe26cfa9c9b6fd152834b8e7849".parse::<Address>().unwrap();
