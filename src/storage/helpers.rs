@@ -17,17 +17,18 @@ use halo2_base::{
         plonk::ProvingKey,
         poly::kzg::commitment::ParamsKZG,
     },
-    utils::{fs::{gen_srs, read_params}, PrimeField},
+    utils::{fs::{read_params}, PrimeField},
 };
 
 use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;
+use serde::{Deserialize, Serialize};
 use snark_verifier::loader::evm::encode_calldata;
 use snark_verifier_sdk::{halo2::{aggregation::{PublicAggregationCircuit, load_verify_circuit_degree}, gen_snark_shplonk}, evm::gen_evm_proof_shplonk, CircuitExt, gen_pk};
 
 use super::EthBlockStorageCircuit;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Task {
     pub block_number: u32,
     pub address: Address,
