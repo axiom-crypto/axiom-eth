@@ -18,8 +18,9 @@ use ethers_providers::{Http, Middleware, Provider};
 // use halo2_mpt::mpt::{max_branch_lens, max_leaf_lens};
 use itertools::Itertools;
 use lazy_static::__Deref;
-use rlp::{decode, decode_list, Encodable, RlpStream, Rlp};
+use rlp::{decode, decode_list, Encodable, Rlp, RlpStream};
 use serde::{Deserialize, Serialize};
+use serde_with::serde_as;
 use std::{
     convert::TryFrom,
     fs::{self, File},
@@ -121,7 +122,7 @@ pub fn is_assigned_slot(pf: &StorageProof) -> bool {
         } else {
             key_frags.extend(vec![key_nibbles[path_idx]]);
             path_idx += 1;
-        }        
+        }
     }
     if path_idx == 64 {
         for idx in 0..64 {
@@ -166,6 +167,28 @@ pub fn get_block_rlp(block: &Block<H256>) -> Vec<u8> {
     rlp.out().into()
 }
 
+serde_with::serde_conv!(
+    BytesBase64,
+    Vec<u8>,
+    |bytes: &Vec<u8>| {
+        use base64::{engine::general_purpose, Engine as _};
+        general_purpose::STANDARD.encode(bytes)
+    },
+    |encoded: String| {
+        use base64::{engine::general_purpose, Engine as _};
+        general_purpose::STANDARD.decode(encoded)
+    }
+);
+
+#[serde_as]
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ProcessedBlock {
+    #[serde_as(as = "Vec<BytesBase64>")]
+    pub block_rlps: Vec<Vec<u8>>,
+    pub block_hashes: Vec<H256>,
+    pub prev_hash: H256,
+}
+
 /// returns tuple of:
 ///   * vector of RLP bytes of each block
 ///   * tuple of  
@@ -187,33 +210,34 @@ pub fn get_blocks_input(
     let rt = Runtime::new().unwrap();
     let chain_id = rt.block_on(provider.get_chainid()).unwrap();
     let path = format!(
-        "./data/headers/chainid{chain_id}_{start_block_number:06x}_{end_block_number:06x}.dat"
+        "./data/headers/chainid{chain_id}_{start_block_number:06x}_{end_block_number:06x}.json"
     );
 
-    let (mut block_rlps, block_hashes, prev_hash) = if let Ok(f) = File::open(path.as_str()) {
-        bincode::deserialize_from(f).unwrap()
-    } else {
-        let mut block_rlps = Vec::with_capacity(max_depth);
-        let mut block_hashes = Vec::with_capacity(num_blocks as usize);
-        let mut prev_hash = H256::zero();
+    let ProcessedBlock { mut block_rlps, block_hashes, prev_hash } =
+        if let Ok(f) = File::open(path.as_str()) {
+            serde_json::from_reader(f).unwrap()
+        } else {
+            let mut block_rlps = Vec::with_capacity(max_depth);
+            let mut block_hashes = Vec::with_capacity(num_blocks as usize);
+            let mut prev_hash = H256::zero();
 
-        for block_number in start_block_number..start_block_number + num_blocks {
-            let block = rt
-                .block_on(provider.get_block(block_number as u64))
-                .expect("get_block JSON-RPC call")
-                .unwrap_or_else(|| panic!("block {block_number} should exist"));
-            if block_number == start_block_number {
-                prev_hash = block.parent_hash;
+            for block_number in start_block_number..start_block_number + num_blocks {
+                let block = rt
+                    .block_on(provider.get_block(block_number as u64))
+                    .expect("get_block JSON-RPC call")
+                    .unwrap_or_else(|| panic!("block {block_number} should exist"));
+                if block_number == start_block_number {
+                    prev_hash = block.parent_hash;
+                }
+                block_hashes.push(block.hash.unwrap());
+                block_rlps.push(get_block_rlp(&block));
             }
-            block_hashes.push(block.hash.unwrap());
-            block_rlps.push(get_block_rlp(&block));
-        }
-        // write this to file
-        let file = File::create(path.as_str()).unwrap();
-        let payload = (block_rlps, block_hashes, prev_hash);
-        bincode::serialize_into(file, &payload).unwrap();
-        payload
-    };
+            // write this to file
+            let file = File::create(path.as_str()).unwrap();
+            let payload = ProcessedBlock { block_rlps, block_hashes, prev_hash };
+            serde_json::to_writer(file, &payload).unwrap();
+            payload
+        };
     // pad to correct length with dummies
     let dummy_block_rlp = block_rlps[0].clone();
     block_rlps.resize(1 << max_depth, dummy_block_rlp);
