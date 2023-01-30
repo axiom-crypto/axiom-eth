@@ -1,0 +1,60 @@
+[package]
+name = "axiom-eth"
+version = "0.0.1"
+edition = "2021"
+autobins = false
+
+[[bin]]
+name = "header_chain"
+required-features = ["aggregation", "clap"]
+
+[dependencies]
+itertools = "0.10"
+lazy_static = "1.4.0"
+serde = { version = "1.0", default-features = false, features = ["derive"] }
+serde_json = { version = "1.0", default-features = false }
+rayon = "1.6.1"
+
+# misc
+ark-std = { version = "0.3.0", features = ["print-trace"], optional = true }
+clap = { version = "4.0.13", features = ["derive"], optional = true }
+clap-num = { version = "1.0.2", optional = true }
+bincode = { version = "1.3.3", optional = true }
+base64 = { version = "0.21", optional = true }
+serde_with = { version = "2.2", optional = true }
+
+# halo2
+halo2-base = { path = "../halo2-lib/halo2-base", default-features = false }
+zkevm-keccak = { path = "../halo2-lib/hashes/zkevm-keccak", default-features = false }
+
+# crypto
+rlp = "0.5.2"
+ethers-core = { version = "1.0.2" } # used by halo2-mpt already
+rand_core = { version = "0.6", default-features = false, features = ["getrandom"] }
+rand = "0.8"
+rand_chacha = "0.3.1"
+
+# aggregation 
+snark-verifier = { git = "https://github.com/axiom-crypto/snark-verifier.git", default-features = false, features = ["loader_halo2"], optional = true }
+snark-verifier-sdk = { git = "https://github.com/axiom-crypto/snark-verifier.git", default-features = false, features = ["loader_halo2"], optional = true }
+
+# generating circuit inputs from blockchain
+ethers-providers = { version = "1.0.2", optional = true }  
+tokio = { version = "1.23.0", default-features = false, features = ["rt", "rt-multi-thread"], optional = true }
+
+[dev-dependencies]
+hex = "0.4.3"
+ark-std = { version = "0.3.0", features = ["print-trace"] }
+log = "0.4"
+env_logger = "0.10"
+
+[features]
+default = ["evm", "aggregation", "clap", "halo2-axiom", "halo2-base/jemallocator"]
+aggregation = ["dep:snark-verifier", "snark-verifier-sdk", "providers"]
+evm = ["snark-verifier-sdk?/loader_evm", "aggregation"]
+providers = ["dep:ethers-providers", "dep:tokio", "dep:bincode", "dep:base64", "dep:serde_with"]
+display = ["zkevm-keccak/display", "snark-verifier-sdk?/display", "dep:ark-std"]
+clap = ["dep:clap", "dep:clap-num"]
+# EXACTLY one of halo2-pse / halo2-axiom should always be turned on
+halo2-pse = ["zkevm-keccak/halo2-pse", "snark-verifier-sdk?/halo2-pse"]
+halo2-axiom = ["zkevm-keccak/halo2-axiom", "snark-verifier-sdk?/halo2-axiom"]

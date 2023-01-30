@@ -1,0 +1,38 @@
+[
+  [
+    {
+      "degree": 18,
+      "num_rlc_columns": 2,
+      "num_range_advice": [20, 15],
+      "num_lookup_advice": [1, 1],
+      "num_fixed": 1,
+      "unusable_rows": 79,
+      "keccak_rows_per_round": 16
+    },
+    10
+  ],
+  [
+    {
+      "degree": 18,
+      "num_rlc_columns": 1,
+      "num_range_advice": [4, 3],
+      "num_lookup_advice": [1, 1],
+      "num_fixed": 1,
+      "unusable_rows": 69,
+      "keccak_rows_per_round": 85
+    },
+    1
+  ],
+  [
+    {
+      "degree": 17,
+      "num_rlc_columns": 2,
+      "num_range_advice": [19, 12],
+      "num_lookup_advice": [1, 1],
+      "num_fixed": 1,
+      "unusable_rows": 55,
+      "keccak_rows_per_round": 17
+    },
+    4
+  ]
+]
