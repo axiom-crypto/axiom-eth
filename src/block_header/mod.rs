@@ -141,11 +141,8 @@ pub trait EthBlockHeaderChip<'v, F: Field> {
     /// decomposes each header into it's fields.
     /// `headers[0]` is the earliest block.
     ///
-    /// - If `num_blocks` is not None, then the circuit checks that the first `num_blocks` block headers form a chain: meaning that the parent hash of block i + 1 equals the hash of block i.
-    /// - Otherwise if `num_blocks` is None, the circuit checks that all `headers` form a hash chain.
-    ///
     /// This is the preparation step that computes the witnesses. This MUST be done in `FirstPhase`.
-    /// The accompanying `decompose_block_header_chain_finalize` must be called in `SecondPhase` to constrain the RLCs associated to the RLP decoding.
+    /// The accompanying `decompose_block_header_chain_phase1` must be called in `SecondPhase` to constrain the RLCs associated to the RLP decoding.
     fn decompose_block_header_chain_phase0(
         &mut self,
         ctx: &mut Context<'v, F>,
@@ -163,9 +160,8 @@ pub trait EthBlockHeaderChip<'v, F: Field> {
     /// Decomposes each header into it's fields.
     /// `headers[0]` is the earliest block
     ///
-    /// If `num_blocks_minus_one` is not None, then the circuit checks that the first `num_blocks := num_blocks_minus_one + 1` block headers form a chain: meaning that the parent hash of block i + 1 equals the hash of block i.
-    ///
-    /// Otherwise if `num_blocks` is None, the circuit checks that all `headers` form a hash chain.
+    /// - If `num_blocks_minus_one` is not None, then the circuit checks that the first `num_blocks := num_blocks_minus_one + 1` block headers form a chain: meaning that the parent hash of block i + 1 equals the hash of block i.
+    /// - Otherwise if `num_blocks` is None, the circuit checks that all `headers` form a hash chain.
     ///
     /// Assumes that `0 <= num_blocks_minus_one < 2^max_depth`.
     ///
