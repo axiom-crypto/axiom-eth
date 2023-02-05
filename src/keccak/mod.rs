@@ -187,7 +187,6 @@ impl<'v, F: Field> KeccakChip<'v, F> {
         // bottom layer hashes
         let mut hashes = leaves
             .chunks(2)
-            .into_iter()
             .map(|pair| {
                 let leaves_concat = [&pair[0][..], &pair[1][..]].concat();
                 self.keccak_fixed_len(ctx, gate, leaves_concat, None)

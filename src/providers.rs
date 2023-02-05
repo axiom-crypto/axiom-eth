@@ -54,7 +54,7 @@ pub fn get_block_storage_input(
         .unwrap();
 
     for storage_pf in pf.storage_proof.iter() {
-        println!("key: {:?}, is_assigned_slot: {}", storage_pf.key, is_assigned_slot(&storage_pf));
+        println!("key: {:?}, is_assigned_slot: {}", storage_pf.key, is_assigned_slot(storage_pf));
     }
 
     let acct_pf = MPTFixedKeyInput {

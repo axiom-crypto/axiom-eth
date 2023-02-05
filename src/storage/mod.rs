@@ -570,7 +570,7 @@ impl<F: Field> Circuit<F> for EthBlockStorageCircuit<F> {
                                     .iter()
                                     .flat_map(|(slot, value)| slot.iter().chain(value.iter())),
                             )
-                            .map(|acell| acell.cell().clone()),
+                            .map(|acell| *acell.cell()),
                     );
 
                     #[cfg(feature = "display")]

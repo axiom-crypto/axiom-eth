@@ -659,7 +659,6 @@ impl<'v, F: Field> MPTChip<'v, F> {
         let key_hex_rlc = self.rlp.rlc.compute_rlc_fixed_len(ctx, self.gate(), key_hexs);
         let fragment_rlcs = key_frag
             .into_iter()
-            .into_iter()
             .zip(witness.frag_lens.into_iter())
             .map(|(key_frag, frag_lens)| {
                 self.rlc().compute_rlc(ctx, self.gate(), key_frag.nibbles, frag_lens)
