@@ -10,50 +10,42 @@ use halo2_base::{
     QuantumCell::{Constant, Existing, Witness},
 };
 use itertools::Itertools;
-use std::{iter, marker::PhantomData};
+use std::{
+    iter,
+    marker::PhantomData,
+    sync::{RwLock, RwLockReadGuard},
+};
 
 pub const RLC_PHASE: usize = 1;
 
-#[derive(Clone, Debug)]
-pub struct RlcVarLen<'v, F: ScalarField> {
-    pub rlc_val: AssignedValue<'v, F>, // in SecondPhase
-    pub len: AssignedValue<'v, F>,     // everything else in FirstPhase
+#[derive(Clone, Copy, Debug)]
+/// RLC of a vector of `F` values of variable length but known maximum length
+pub struct RlcTrace<F: ScalarField> {
+    pub rlc_val: AssignedValue<F>, // in SecondPhase
+    pub len: AssignedValue<F>,     // in FirstPhase
+                                   // pub rlc_max: AssignedValue<'a, F>,
+                                   // We no longer store the input values as they should be exposed elsewhere
+                                   // pub values: Vec<AssignedValue<'v, F>>,
+                                   // pub max_len: usize,
 }
 
-#[derive(Clone, Debug)]
-pub struct RlcVarRef<'a, 'v: 'a, F: ScalarField> {
-    pub rlc_val: &'a AssignedValue<'v, F>, // in SecondPhase
-    pub len: &'a AssignedValue<'v, F>,     // everything else in FirstPhase
+#[derive(Clone, Copy, Debug)]
+pub struct RlcTraceRef<'a, F: ScalarField> {
+    pub rlc_val: &'a AssignedValue<F>, // in SecondPhase
+    pub len: &'a AssignedValue<F>,     // everything else in FirstPhase
 }
 
-impl<'a, 'v, F: ScalarField> From<&'a RlcTrace<'v, F>> for RlcVarRef<'a, 'v, F> {
-    fn from(trace: &'a RlcTrace<'v, F>) -> Self {
-        RlcVarRef { rlc_val: &trace.rlc_val, len: &trace.len }
+impl<'a, F: ScalarField> From<&'a RlcTrace<F>> for RlcTraceRef<'a, F> {
+    fn from(trace: &'a RlcTrace<F>) -> Self {
+        RlcTraceRef { rlc_val: &trace.rlc_val, len: &trace.len }
     }
 }
 
-impl<'a, 'v, F: ScalarField> From<&'a RlcVarLen<'v, F>> for RlcVarRef<'a, 'v, F> {
-    fn from(trace: &'a RlcVarLen<'v, F>) -> RlcVarRef<'a, 'v, F> {
-        RlcVarRef { rlc_val: &trace.rlc_val, len: &trace.len }
-    }
-}
-
-#[derive(Clone, Debug)]
-/// RLC of a trace of variable length but known maximum length
-pub struct RlcTrace<'v, F: ScalarField> {
-    pub rlc_val: AssignedValue<'v, F>, // in SecondPhase
-    pub len: AssignedValue<'v, F>,     // everything else in FirstPhase
-    // pub rlc_max: AssignedValue<'a, F>,
-    /// After computing RLC we store the original values here
-    pub values: Vec<AssignedValue<'v, F>>,
-    pub max_len: usize,
-}
-
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 /// RLC of a trace of known fixed length
-pub struct RlcFixedTrace<'v, F: ScalarField> {
-    pub rlc_val: AssignedValue<'v, F>,     // SecondPhase
-    pub values: Vec<AssignedValue<'v, F>>, // FirstPhase
+pub struct RlcFixedTrace<F: ScalarField> {
+    pub rlc_val: AssignedValue<F>, // SecondPhase
+    // pub values: Vec<AssignedValue<'v, F>>, // FirstPhase
     pub len: usize,
 }
 
@@ -66,13 +58,12 @@ pub struct RlcFixedTrace<'v, F: ScalarField> {
 /// Make sure that the `context_id` of `RlcChip` is different from that of any `FlexGateConfig` or `RangeConfig` you are using.
 pub struct RlcConfig<F: ScalarField> {
     pub basic_gates: Vec<(Column<Advice>, Selector)>,
-    pub context_id: usize,
     pub gamma: Challenge,
     _marker: PhantomData<F>,
 }
 
 impl<F: ScalarField> RlcConfig<F> {
-    pub fn configure(meta: &mut ConstraintSystem<F>, num_advice: usize, context_id: usize) -> Self {
+    pub fn configure(meta: &mut ConstraintSystem<F>, num_advice: usize) -> Self {
         let basic_gates = (0..num_advice)
             .map(|_| {
                 let a = meta.advice_column_in(SecondPhase);
@@ -100,228 +91,116 @@ impl<F: ScalarField> RlcConfig<F> {
             });
         }
 
-        Self { basic_gates, context_id, gamma, _marker: PhantomData }
+        Self { basic_gates, gamma, _marker: PhantomData }
     }
 }
 
-/// This chip is a wrapper around `RlcConfig` together with cached assigned values of the powers of the challenge `gamma`. The chip can be mutably borrowed so that the cache can be updated to higher powers.
-#[derive(Clone, Debug)]
-pub struct RlcChip<'g, F: ScalarField> {
-    pub config: RlcConfig<F>,
+/// This chip provides functions related to computing Random Linear Combinations (RLCs) using powers of a random
+/// challenge value `gamma`. Throughout we assume that `gamma` is supplied through the Halo2 Challenge API.
+/// The chip can be borrowed so that the cache can be updated to higher powers.
+#[derive(Debug)]
+pub struct RlcChip<F: ScalarField> {
     /// `gamma_pow_cached[i] = gamma^{2^i}`
-    gamma_pow_cached: Vec<AssignedValue<'g, F>>,
-    pub gamma: Value<F>,
+    gamma_pow_cached: RwLock<Vec<AssignedValue<F>>>, // Use RwLock so we can read from multiple threads if necessary
+    gamma: F,
 }
 
-impl<'g, F: ScalarField> RlcChip<'g, F> {
-    pub fn new(config: RlcConfig<F>, gamma: Value<F>) -> RlcChip<'g, F> {
-        Self { config, gamma_pow_cached: Vec::with_capacity(64), gamma }
+impl<F: ScalarField> RlcChip<F> {
+    pub fn new(gamma: F) -> Self {
+        Self { gamma_pow_cached: RwLock::new(vec![]), gamma }
     }
 
-    pub fn get_challenge(&mut self, ctx: &mut Context<'_, F>) {
-        #[cfg(feature = "halo2-axiom")]
-        {
-            // only allowed to update challenge if it is unknown
-            // debug_assert!(value_to_option(self.gamma).is_none()); // doesn't work with mockprover
-            self.gamma = ctx.region.get_challenge(self.config.gamma);
-        }
+    pub fn gamma(&self) -> &F {
+        &self.gamma
     }
 
-    pub fn basic_gates(&self) -> &[(Column<Advice>, Selector)] {
-        &self.config.basic_gates
+    pub fn gamma_pow_cached(&self) -> RwLockReadGuard<Vec<AssignedValue<F>>> {
+        self.gamma_pow_cached.read().unwrap()
     }
 
-    pub fn context_id(&self) -> usize {
-        self.config.context_id
-    }
-
-    pub fn gamma_pow_cached(&self) -> &[AssignedValue<'g, F>] {
-        &self.gamma_pow_cached
-    }
-
-    /// Similar to gate.assign_region but everything is in `SecondPhase` and `gate_offsets` are relative offsets for the "RLC computation" gate.
-    ///
-    /// Returns the inputs as a vector of `AssignedValue`s.
-    pub fn assign_region<'a, 'v: 'a>(
-        &self,
-        ctx: &mut Context<'_, F>,
-        inputs: impl IntoIterator<Item = QuantumCell<'a, 'v, F>>,
-        gate_offsets: impl IntoIterator<Item = usize>,
-    ) -> Vec<AssignedValue<'v, F>> {
-        debug_assert_eq!(ctx.current_phase(), RLC_PHASE);
-        let inputs = inputs.into_iter();
-        let (len, hi) = inputs.size_hint();
-        debug_assert_eq!(Some(len), hi);
-        assert!(self.context_id() < ctx.advice_alloc.len());
-
-        let (gate_index, row_offset) = {
-            let alloc = ctx.advice_alloc.get_mut(self.context_id()).unwrap();
-
-            if alloc.1 + len >= ctx.max_rows {
-                alloc.1 = 0;
-                alloc.0 += 1;
-            }
-            *alloc
-        };
-
-        let (rlc_column, q_rlc) =
-            self.basic_gates().get(gate_index).expect("NOT ENOUGH RLC ADVICE COLUMNS");
-
-        let rlc_assigned = inputs
-            .enumerate()
-            .map(|(i, input)| {
-                ctx.assign_cell(
-                    input,
-                    *rlc_column,
-                    #[cfg(feature = "display")]
-                    self.context_id(),
-                    row_offset + i,
-                    #[cfg(feature = "halo2-pse")]
-                    (RLC_PHASE as u8),
-                )
-            })
-            .collect_vec();
-
-        for idx in gate_offsets {
-            q_rlc.enable(&mut ctx.region, row_offset + idx).unwrap();
-        }
-
-        ctx.advice_alloc[self.context_id()].1 += rlc_assigned.len();
-
-        #[cfg(feature = "display")]
-        {
-            ctx.total_advice += rlc_assigned.len();
-        }
-
-        rlc_assigned
-    }
-
-    /// Same as `assign_region` except we only return the final assigned value. Optimized to avoid the memory allocation from collecting assignments into a vector.
-    pub fn assign_region_last<'a, 'v: 'a>(
-        &self,
-        ctx: &mut Context<'_, F>,
-        inputs: impl IntoIterator<Item = QuantumCell<'a, 'v, F>>,
-        gate_offsets: impl IntoIterator<Item = usize>,
-    ) -> AssignedValue<'v, F> {
-        debug_assert_eq!(ctx.current_phase(), RLC_PHASE);
-        let inputs = inputs.into_iter();
-        let (len, hi) = inputs.size_hint();
-        debug_assert_eq!(Some(len), hi);
-        debug_assert!(self.context_id() < ctx.advice_alloc.len(), "context id out of bounds");
-
-        let (gate_index, row_offset) = {
-            let alloc = ctx.advice_alloc.get_mut(self.context_id()).unwrap();
-
-            if alloc.1 + len >= ctx.max_rows {
-                alloc.1 = 0;
-                alloc.0 += 1;
-            }
-            *alloc
-        };
-
-        let (rlc_column, q_rlc) =
-            self.basic_gates().get(gate_index).expect("NOT ENOUGH RLC ADVICE COLUMNS");
-
-        let mut out = None;
-        for (i, input) in inputs.enumerate() {
-            out = Some(ctx.assign_cell(
-                input,
-                *rlc_column,
-                #[cfg(feature = "display")]
-                self.context_id(),
-                row_offset + i,
-                #[cfg(feature = "halo2-pse")]
-                (RLC_PHASE as u8),
-            ));
-        }
-
-        for idx in gate_offsets {
-            q_rlc.enable(&mut ctx.region, row_offset + idx).unwrap();
-        }
-
-        ctx.advice_alloc[self.context_id()].1 += len;
-
-        #[cfg(feature = "display")]
-        {
-            ctx.total_advice += len;
-        }
-
-        out.unwrap()
-    }
-
-    /// `inputs` should all be assigned cells in `FirstPhase`.
+    /// Computes the RLC of `inputs` where the given `inputs` is assumed to be padded to a fixed length `max_len`,
+    /// but the RLC is computed for a variable length `len`. If `a := inputs, l := len, r := gamma` then
+    /// ```
+    /// RLC(a, l) = \sum_{i = 0}^{l - 1} a_i r^{l - 1 - i}
+    /// ```
+    /// We assume all cells of `inputs` are in a previous phase, and `ctx_gate` and `ctx_rlc` are both
+    /// [`Context`]s in a later phase. Here `ctx_gate` is used for [halo2_base] gate assignments, while `ctx_rlc`
+    /// is used for assignments in special RLC gate assignments.
     ///
     /// Assumes `0 <= len <= max_len`.
-    pub fn compute_rlc<'v>(
+    pub fn compute_rlc(
         &self,
-        ctx: &mut Context<'v, F>,
+        ctx_gate: &mut Context<F>,
+        ctx_rlc: &mut Context<F>,
         gate: &impl GateInstructions<F>,
-        inputs: Vec<AssignedValue<'v, F>>,
-        len: AssignedValue<'v, F>,
-    ) -> RlcTrace<'v, F> {
-        let max_len = inputs.len();
-        // This part can be done in either `FirstPhase` or `SecondPhase`
-        let is_zero = gate.is_zero(ctx, &len);
-        let len_minus_one = gate.sub(ctx, Existing(&len), Constant(F::one()));
-        let idx =
-            gate.select(ctx, Constant(F::zero()), Existing(&len_minus_one), Existing(&is_zero));
+        inputs: impl IntoIterator<Item = AssignedValue<F>>,
+        len: AssignedValue<F>,
+    ) -> RlcTrace<F> {
+        let mut inputs = inputs.into_iter();
+        let is_zero = gate.is_zero(ctx_gate, len);
+        let len_minus_one = gate.sub(ctx_gate, len, Constant(F::one()));
+        let idx = gate.select(ctx_gate, Constant(F::zero()), len_minus_one, is_zero);
 
-        // From now on we need to be in `SecondPhase` to use challenge `gamma`
-        debug_assert_eq!(ctx.current_phase(), RLC_PHASE);
-
-        let assigned = if inputs.is_empty() {
-            vec![]
-        } else {
-            let mut running_rlc = inputs[0].value().copied();
-            let rlc_vals =
-                iter::once(Existing(&inputs[0])).chain(inputs.iter().skip(1).flat_map(|input| {
-                    running_rlc = running_rlc * self.gamma + input.value();
-                    [Existing(input), Witness(running_rlc)]
-                }));
-            self.assign_region(ctx, rlc_vals, (0..2 * max_len - 2).step_by(2))
-        };
-
-        let rlc_val = if inputs.is_empty() {
-            gate.load_zero(ctx)
-        } else {
-            gate.select_from_idx(ctx, assigned.iter().step_by(2).map(Existing), Existing(&idx))
-        };
-
-        // rlc_val = rlc_val * (1 - is_zero)
-        let rlc_val = gate.mul_not(ctx, Existing(&is_zero), Existing(&rlc_val));
-
-        RlcTrace {
-            rlc_val,
-            len,
-            values: inputs,
-            max_len,
-            /* rlc_max: if inputs.is_empty() { rlc_val.clone() } else { assigned.pop().unwrap() } */
+        let mut max_len = 0;
+        let row_offset = ctx_rlc.advice.len() as isize;
+        if let Some(first) = inputs.next() {
+            max_len = 1;
+            let mut running_rlc = *first.value();
+            let rlc_vals = iter::once(Existing(first)).chain(inputs.flat_map(|input| {
+                max_len += 1;
+                running_rlc = running_rlc * self.gamma() + input.value();
+                [Existing(input), Witness(running_rlc)]
+            }));
+            if ctx_rlc.witness_gen_only() {
+                ctx_rlc.assign_region(rlc_vals, []);
+            } else {
+                let rlc_vals = rlc_vals.collect_vec();
+                ctx_rlc.assign_region(rlc_vals, (0..2 * max_len - 2).step_by(2));
+            }
         }
+
+        let rlc_val = if max_len == 0 {
+            ctx_gate.load_zero()
+        } else {
+            gate.select_from_idx(
+                ctx_gate,
+                // TODO: optimize this with iterator on ctx_rlc.advice
+                (0..2 * max_len).step_by(2).map(|i| ctx_rlc.get(row_offset + i)),
+                idx,
+            )
+        };
+        // rlc_val = rlc_val * (1 - is_zero)
+        let rlc_val = gate.mul_not(ctx_gate, is_zero, rlc_val);
+
+        RlcTrace { rlc_val, len }
     }
 
-    pub fn compute_rlc_fixed_len<'v>(
+    /// Same as [`compute_rlc`] but now the input is of known fixed length.
+    pub fn compute_rlc_fixed_len(
         &self,
-        ctx: &mut Context<'v, F>,
-        gate: &impl GateInstructions<F>,
-        inputs: Vec<AssignedValue<'v, F>>,
-    ) -> RlcFixedTrace<'v, F> {
-        let len = inputs.len();
-
-        if len == 0 {
-            return RlcFixedTrace { rlc_val: gate.load_zero(ctx), values: inputs, len };
+        ctx_gate: &mut Context<F>,
+        ctx_rlc: &mut Context<F>,
+        inputs: impl IntoIterator<Item = AssignedValue<F>>,
+    ) -> RlcFixedTrace<F> {
+        let mut inputs = inputs.into_iter();
+        if let Some(first) = inputs.next() {
+            let mut running_rlc = *first.value();
+            let mut len: usize = 1;
+            let rlc_vals = iter::once(Existing(first)).chain(inputs.flat_map(|input| {
+                len += 1;
+                running_rlc = running_rlc * self.gamma() + input.value();
+                [Existing(input), Witness(running_rlc)]
+            }));
+            let rlc_val = if ctx_rlc.witness_gen_only() {
+                ctx_rlc.assign_region_last(rlc_vals, [])
+            } else {
+                let rlc_vals = rlc_vals.collect_vec();
+                ctx_rlc.assign_region_last(rlc_vals, (0..2 * (len as isize) - 2).step_by(2))
+            };
+            RlcFixedTrace { rlc_val, len }
+        } else {
+            RlcFixedTrace { rlc_val: ctx_gate.load_zero(), len: 0 }
         }
-
-        let rlc_val = {
-            let mut running_rlc = inputs[0].value().copied();
-            let rlc_vals =
-                iter::once(Existing(&inputs[0])).chain(inputs.iter().skip(1).flat_map(|input| {
-                    running_rlc = running_rlc * self.gamma + input.value();
-                    [Existing(input), Witness(running_rlc)]
-                }));
-            self.assign_region_last(ctx, rlc_vals, (0..2 * len - 2).step_by(2))
-        };
-
-        RlcFixedTrace { rlc_val, values: inputs, len }
     }
 
     /// Define the dynamic RLC: RLC(a, l) = \sum_{i = 0}^{l - 1} a_i r^{l - 1 - i}
@@ -340,149 +219,124 @@ impl<'g, F: ScalarField> RlcChip<'g, F> {
     /// * all rlc_len values have been range checked
     ///
     /// `inputs[i] = (rlc_input, len, max_len)`
-    pub fn constrain_rlc_concat<'a, 'v: 'a>(
+    ///
+    /// `ctx_gate` should be in later phase than `inputs`
+    pub fn constrain_rlc_concat(
         &self,
-        ctx: &mut Context<'_, F>,
+        ctx_gate: &mut Context<F>,
+        ctx_rlc: &mut Context<F>,
         gate: &impl GateInstructions<F>,
-        inputs: impl IntoIterator<Item = (&'a AssignedValue<'v, F>, &'a AssignedValue<'v, F>, usize)>,
-        concat: (&AssignedValue<'v, F>, &AssignedValue<'v, F>),
+        inputs: impl IntoIterator<Item = (AssignedValue<F>, AssignedValue<F>, usize)>,
+        (concat_rlc, concat_len): (&AssignedValue<F>, &AssignedValue<F>),
     ) {
-        debug_assert_eq!(ctx.current_phase(), RLC_PHASE);
-
         let mut inputs = inputs.into_iter();
 
         let (mut running_rlc, mut running_len, _) = inputs.next().unwrap();
-        let mut tmp_rlc;
-        let mut tmp_len;
         for (input, len, max_len) in inputs {
-            tmp_len = gate.add(ctx, Existing(running_len), Existing(len));
-            let gamma_pow = self.rlc_pow(ctx, gate, len, bit_length(max_len as u64));
-            tmp_rlc =
-                gate.mul_add(ctx, Existing(running_rlc), Existing(&gamma_pow), Existing(input));
-            running_len = &tmp_len;
-            running_rlc = &tmp_rlc;
+            running_len = gate.add(ctx_gate, running_len, len);
+            let gamma_pow = self.rlc_pow(ctx_gate, ctx_rlc, gate, len, bit_length(max_len as u64));
+            running_rlc = gate.mul_add(ctx_gate, running_rlc, gamma_pow, input);
         }
-        ctx.region.constrain_equal(running_rlc.cell(), concat.0.cell());
-        ctx.region.constrain_equal(running_len.cell(), concat.1.cell());
+        ctx_gate.constrain_equal(&running_rlc, concat_rlc);
+        ctx_gate.constrain_equal(&running_len, concat_len);
     }
 
     /// Same as `constrain_rlc_concat` but now the actual length of `inputs` to use is variable:
     /// these are referred to as "fragments".
     ///
     /// Assumes 0 < num_frags <= max_num_frags.
-    pub fn constrain_rlc_concat_var<'a, 'v: 'a>(
+    ///
+    /// `ctx_gate` and `ctx_rlc` should be in later phase than `inputs`
+    pub fn constrain_rlc_concat_var(
         &self,
-        ctx: &mut Context<'_, F>,
+        ctx_gate: &mut Context<F>,
+        ctx_rlc: &mut Context<F>,
         gate: &impl GateInstructions<F>,
-        inputs: impl IntoIterator<Item = (&'a AssignedValue<'v, F>, &'a AssignedValue<'v, F>, usize)>,
-        concat: (&AssignedValue<'v, F>, &AssignedValue<'v, F>),
-        num_frags: &AssignedValue<F>,
+        inputs: impl IntoIterator<Item = (AssignedValue<F>, AssignedValue<F>, usize)>,
+        (concat_rlc, concat_len): (&AssignedValue<F>, &AssignedValue<F>),
+        num_frags: AssignedValue<F>,
         max_num_frags: usize,
-        rlc_cache: &[AssignedValue<F>],
     ) {
-        debug_assert_eq!(ctx.current_phase(), RLC_PHASE);
-        #[cfg(debug_assertions)]
-        {
-            num_frags.value().map(|v| {
-                if v.is_zero_vartime() {
-                    panic!("num_frags must be positive.")
-                }
-            });
-        }
+        debug_assert!(!num_frags.value().is_zero_vartime(), "num_frags must be positive.");
 
         let mut inputs = inputs.into_iter();
         let (size, hi) = inputs.size_hint();
+        // size only used for capacity estimation
         debug_assert_eq!(Some(size), hi);
 
         let mut partial_rlc = Vec::with_capacity(size);
         let mut partial_len = Vec::with_capacity(size);
 
-        let first = inputs.next().unwrap();
-        partial_rlc.push(first.0.clone());
-        partial_len.push(first.1.clone());
+        let (mut running_rlc, mut running_len, _) = inputs.next().unwrap();
+        partial_rlc.push(running_rlc);
+        partial_len.push(running_len);
         for (input, len, max_len) in inputs {
-            debug_assert!(rlc_cache.len() >= bit_length(max_len as u64));
-            let running_len = gate.add(ctx, Existing(partial_len.last().unwrap()), Existing(len));
-            let gamma_pow = self.rlc_pow(ctx, gate, len, bit_length(max_len as u64));
-            let running_rlc = gate.mul_add(
-                ctx,
-                Existing(partial_rlc.last().unwrap()),
-                Existing(&gamma_pow),
-                Existing(input),
-            );
+            running_len = gate.add(ctx_gate, running_len, len);
+            let gamma_pow = self.rlc_pow(ctx_gate, ctx_rlc, gate, len, bit_length(max_len as u64));
+            running_rlc = gate.mul_add(ctx_gate, running_rlc, gamma_pow, input);
             partial_len.push(running_len);
             partial_rlc.push(running_rlc);
         }
         assert_eq!(partial_rlc.len(), max_num_frags);
 
-        let num_frags_minus_1 = gate.sub(ctx, Existing(num_frags), Constant(F::one()));
-        let total_len = gate.select_from_idx(
-            ctx,
-            partial_len.iter().map(Existing),
-            Existing(&num_frags_minus_1),
-        );
-        ctx.region.constrain_equal(total_len.cell(), concat.1.cell());
+        let num_frags_minus_1 = gate.sub(ctx_gate, num_frags, Constant(F::one()));
+        let total_len = gate.select_from_idx(ctx_gate, partial_len, num_frags_minus_1);
+        ctx_gate.constrain_equal(&total_len, concat_len);
 
-        let concat_select = gate.select_from_idx(
-            ctx,
-            partial_rlc.iter().map(Existing),
-            Existing(&num_frags_minus_1),
-        );
-        ctx.region.constrain_equal(concat_select.cell(), concat.0.cell());
+        let rlc_select = gate.select_from_idx(ctx_gate, partial_rlc, num_frags_minus_1);
+        ctx_gate.constrain_equal(&rlc_select, concat_rlc);
+    }
+
+    fn load_gamma(&self, ctx_rlc: &mut Context<F>, gamma: F) -> AssignedValue<F> {
+        ctx_rlc.assign_region_last([Constant(F::one()), Constant(F::zero()), Witness(gamma)], [0])
     }
 
     /// Updates `gamma_pow_cached` to contain assigned values for `gamma^{2^i}` for `i = 0,...,cache_bits - 1` where `gamma` is the challenge value
     pub fn load_rlc_cache(
-        &mut self,
-        ctx: &mut Context<'_, F>,
+        &self,
+        ctx_gate: &mut Context<F>,
+        ctx_rlc: &mut Context<F>,
         gate: &impl GateInstructions<F>,
+        gamma: F,
         cache_bits: usize,
     ) {
-        if cache_bits <= self.gamma_pow_cached.len() {
+        if cache_bits <= self.gamma_pow_cached().len() {
             return;
         }
-        if self.gamma_pow_cached.is_empty() {
-            let gamma = self.assign_region_last(
-                ctx,
-                vec![Constant(F::one()), Constant(F::zero()), Witness(self.gamma)],
-                vec![0],
-            );
-            self.gamma_pow_cached.push(gamma);
+        let mut gamma_pow_cached = self.gamma_pow_cached.write().unwrap();
+        if gamma_pow_cached.is_empty() {
+            let gamma_assigned = self.load_gamma(ctx_rlc, gamma);
+            gamma_pow_cached.push(gamma_assigned);
         };
 
-        assert_eq!(ctx.current_phase(), RLC_PHASE);
-        for _ in self.gamma_pow_cached.len()..cache_bits {
-            let last = self.gamma_pow_cached.last().unwrap();
-            let sq = gate.mul(ctx, Existing(last), Existing(last));
-            self.gamma_pow_cached.push(sq);
+        for _ in gamma_pow_cached.len()..cache_bits {
+            let last = *gamma_pow_cached.last().unwrap();
+            let sq = gate.mul(ctx_gate, last, last);
+            gamma_pow_cached.push(sq);
         }
     }
 
     /// Computes `gamma^pow` where `gamma` is the challenge value.
-    pub fn rlc_pow<'v>(
+    pub fn rlc_pow(
         &self,
-        ctx: &mut Context<'_, F>,
+        ctx_gate: &mut Context<F>,
+        ctx_rlc: &mut Context<F>,
         gate: &impl GateInstructions<F>,
-        pow: &AssignedValue<'v, F>,
+        pow: AssignedValue<F>,
         mut pow_bits: usize,
-    ) -> AssignedValue<'v, F>
-    where
-        'g: 'v,
-    {
+    ) -> AssignedValue<F> {
         if pow_bits == 0 {
             pow_bits = 1;
         }
-        debug_assert!(pow_bits <= self.gamma_pow_cached.len());
-        debug_assert_eq!(ctx.current_phase(), RLC_PHASE);
+        self.load_rlc_cache(ctx_gate, ctx_rlc, gate, *self.gamma(), pow_bits);
 
-        let bits = gate.num_to_bits(ctx, pow, pow_bits);
+        let bits = gate.num_to_bits(ctx_gate, pow, pow_bits);
         let mut out = None;
 
-        for (bit, gamma_pow) in bits.iter().zip(self.gamma_pow_cached.iter()) {
-            let multiplier =
-                gate.select(ctx, Existing(gamma_pow), Constant(F::one()), Existing(bit));
+        for (bit, &gamma_pow) in bits.into_iter().zip(self.gamma_pow_cached().iter()) {
+            let multiplier = gate.select(ctx_gate, gamma_pow, Constant(F::one()), bit);
             out = Some(if let Some(prev) = out {
-                gate.mul(ctx, Existing(&multiplier), Existing(&prev))
+                gate.mul(ctx_gate, multiplier, prev)
             } else {
                 multiplier
             });
@@ -496,51 +350,48 @@ impl<'g, F: ScalarField> RlcChip<'g, F> {
 ///
 /// We have `a == b` iff `RLC(a, l_a) == RLC(b, l_b)` AND `l_a == l_b`.
 /// The length equality constraint is necessary because `a` and `b` can have leading zeros.
-pub fn rlc_is_equal<'a, 'v: 'a, F: ScalarField>(
-    ctx: &mut Context<'_, F>,
+pub fn rlc_is_equal<F: ScalarField>(
+    ctx_gate: &mut Context<F>,
     gate: &impl GateInstructions<F>,
-    a: impl Into<RlcVarRef<'a, 'v, F>>,
-    b: impl Into<RlcVarRef<'a, 'v, F>>,
-) -> AssignedValue<'v, F> {
-    let a: RlcVarRef<F> = a.into();
-    let b: RlcVarRef<F> = b.into();
-    let len_is_equal = gate.is_equal(ctx, Existing(a.len), Existing(b.len));
-    let rlc_is_equal = gate.is_equal(ctx, Existing(a.rlc_val), Existing(b.rlc_val));
-    gate.and(ctx, Existing(&len_is_equal), Existing(&rlc_is_equal))
+    a: RlcTrace<F>,
+    b: RlcTrace<F>,
+) -> AssignedValue<F> {
+    let len_is_equal = gate.is_equal(ctx_gate, a.len, b.len);
+    let rlc_is_equal = gate.is_equal(ctx_gate, a.rlc_val, b.rlc_val);
+    gate.and(ctx_gate, len_is_equal, rlc_is_equal)
 }
 
-pub fn rlc_constrain_equal<'a, 'v: 'a, F: ScalarField>(
-    ctx: &mut Context<'_, F>,
-    a: impl Into<RlcVarRef<'a, 'v, F>>,
-    b: impl Into<RlcVarRef<'a, 'v, F>>,
+pub fn rlc_constrain_equal<'a, F: ScalarField>(
+    ctx: &mut Context<F>,
+    a: impl Into<RlcTraceRef<'a, F>>,
+    b: impl Into<RlcTraceRef<'a, F>>,
 ) {
-    let a: RlcVarRef<F> = a.into();
-    let b: RlcVarRef<F> = b.into();
+    let a = a.into();
+    let b = b.into();
     ctx.constrain_equal(a.len, b.len);
     ctx.constrain_equal(a.rlc_val, b.rlc_val);
 }
 
-pub fn rlc_select<'a, 'v: 'a, F: ScalarField>(
-    ctx: &mut Context<'_, F>,
+pub fn rlc_select<F: ScalarField>(
+    ctx_gate: &mut Context<F>,
     gate: &impl GateInstructions<F>,
-    a: impl Into<RlcVarRef<'a, 'v, F>>,
-    b: impl Into<RlcVarRef<'a, 'v, F>>,
-    condition: &AssignedValue<'v, F>,
-) -> RlcVarLen<'v, F> {
-    let a: RlcVarRef<F> = a.into();
-    let b: RlcVarRef<F> = b.into();
-    let len = gate.select(ctx, Existing(a.len), Existing(b.len), Existing(condition));
-    let rlc_val = gate.select(ctx, Existing(a.rlc_val), Existing(b.rlc_val), Existing(condition));
-    RlcVarLen { len, rlc_val }
+    a: RlcTrace<F>,
+    b: RlcTrace<F>,
+    condition: AssignedValue<F>,
+) -> RlcTrace<F> {
+    let len = gate.select(ctx_gate, a.len, b.len, condition);
+    let rlc_val = gate.select(ctx_gate, a.rlc_val, b.rlc_val, condition);
+    RlcTrace { rlc_val, len }
 }
 
-pub fn rlc_select_from_idx<'a, 'v: 'a, F: ScalarField>(
-    ctx: &mut Context<'_, F>,
+pub fn rlc_select_from_idx<F: ScalarField>(
+    ctx_gate: &mut Context<F>,
     gate: &impl GateInstructions<F>,
-    a: Vec<RlcVarRef<'a, 'v, F>>,
-    idx: &AssignedValue<'v, F>,
-) -> RlcVarLen<'v, F> {
-    let len = gate.select_from_idx(ctx, a.iter().map(|a| Existing(a.len)), Existing(idx));
-    let rlc_val = gate.select_from_idx(ctx, a.iter().map(|a| Existing(a.rlc_val)), Existing(idx));
-    RlcVarLen { len, rlc_val }
+    a: impl IntoIterator<Item = RlcTrace<F>>,
+    idx: AssignedValue<F>,
+) -> RlcTrace<F> {
+    let (a_len, a_rlc): (Vec<_>, Vec<_>) = a.into_iter().map(|a| (a.len, a.rlc_val)).unzip();
+    let len = gate.select_from_idx(ctx_gate, a_len, idx);
+    let rlc_val = gate.select_from_idx(ctx_gate, a_rlc, idx);
+    RlcTrace { rlc_val, len }
 }

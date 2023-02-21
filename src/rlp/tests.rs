@@ -1,207 +1,105 @@
 mod rlc {
-    use crate::halo2_proofs::{
-        circuit::{Layouter, SimpleFloorPlanner, Value},
-        dev::MockProver,
-        halo2curves::bn256::{Bn256, Fr, G1Affine},
-        plonk::*,
-        poly::commitment::ParamsProver,
-        poly::kzg::{
-            commitment::{KZGCommitmentScheme, ParamsKZG},
-            multiopen::{ProverSHPLONK, VerifierSHPLONK},
-            strategy::SingleStrategy,
-        },
-        transcript::{
-            Blake2bRead, Blake2bWrite, Challenge255, TranscriptReadBuffer, TranscriptWriterBuffer,
-        },
-    };
-    use crate::rlp::rlc::*;
     use halo2_base::{
-        gates::{
-            flex_gate::{FlexGateConfig, GateStrategy},
-            GateInstructions,
+        gates::GateChip,
+        halo2_proofs::{
+            dev::MockProver,
+            halo2curves::bn256::{Bn256, Fr, G1Affine},
+            plonk::{create_proof, keygen_pk, keygen_vk, verify_proof, Error},
+            poly::{
+                commitment::ParamsProver,
+                kzg::{
+                    commitment::{KZGCommitmentScheme, ParamsKZG},
+                    multiopen::{ProverGWC, ProverSHPLONK, VerifierGWC, VerifierSHPLONK},
+                    strategy::SingleStrategy,
+                },
+            },
+            transcript::{
+                Blake2bRead, Blake2bWrite, Challenge255, TranscriptReadBuffer,
+                TranscriptWriterBuffer,
+            },
         },
-        utils::{value_to_option, ScalarField},
-        Context, ContextParams, SKIP_FIRST_PASS,
+        utils::ScalarField,
     };
     use itertools::Itertools;
-    use rand_core::OsRng;
-    use std::marker::PhantomData;
+    use rand::{rngs::StdRng, SeedableRng};
 
-    #[derive(Clone, Debug)]
-    pub struct TestConfig<F: ScalarField> {
-        rlc: RlcConfig<F>,
-        gate: FlexGateConfig<F>,
-    }
-
-    impl<F: ScalarField> TestConfig<F> {
-        pub fn configure(
-            meta: &mut ConstraintSystem<F>,
-            num_rlc_columns: usize,
-            num_advice: &[usize],
-            num_fixed: usize,
-            circuit_degree: usize,
-        ) -> Self {
-            assert_ne!(num_advice[0], 0, "Must create some phase 0 advice columns");
-            let gate = FlexGateConfig::configure(
-                meta,
-                GateStrategy::Vertical,
-                num_advice,
-                num_fixed,
-                0,
-                circuit_degree,
-            );
-            // Only configure `rlc` after `gate`, otherwise backend will detect that you created no phase 0 advice columns
-            let rlc = RlcConfig::configure(meta, num_rlc_columns, 1);
-            Self { rlc, gate }
-        }
-    }
-
-    #[derive(Clone, Debug, Default)]
-    pub struct TestCircuit<F> {
-        inputs: Vec<Option<u8>>,
-        len: usize,
-        _marker: PhantomData<F>,
-    }
+    use crate::rlp::{
+        builder::{RlcCircuitBuilder, RlcThreadBuilder},
+        rlc::{RlcChip, RLC_PHASE},
+    };
 
     const DEGREE: u32 = 10;
 
-    impl<F: ScalarField> Circuit<F> for TestCircuit<F> {
-        type Config = TestConfig<F>;
-        type FloorPlanner = SimpleFloorPlanner;
+    fn rlc_test_circuit<F: ScalarField>(
+        mut builder: RlcThreadBuilder<F>,
+        _inputs: Vec<F>,
+        _len: usize,
+    ) -> RlcCircuitBuilder<F, impl Fn(&mut RlcThreadBuilder<F>, F)> {
+        let ctx = builder.gate_builder.main(0);
+        let inputs = ctx.assign_witnesses(_inputs.clone());
+        let len = ctx.load_witness(F::from(_len as u64));
 
-        fn without_witnesses(&self) -> Self {
-            Self::default()
-        }
+        let synthesize_phase1 = move |builder: &mut RlcThreadBuilder<F>, gamma: F| {
+            log::info!("phase 1 synthesize begin");
+            let gate = GateChip::default();
+            let rlc = RlcChip::new(gamma);
 
-        fn configure(meta: &mut ConstraintSystem<F>) -> Self::Config {
-            TestConfig::configure(meta, 1, &[1, 1], 1, DEGREE as usize)
-        }
+            builder.new_thread_rlc();
+            let ctx_gate = builder.gate_builder.main(RLC_PHASE);
+            let ctx_rlc = builder.threads_rlc.last_mut().unwrap();
+            let rlc_trace = rlc.compute_rlc(ctx_gate, ctx_rlc, &gate, inputs.clone(), len);
+            let rlc_val = *rlc_trace.rlc_val.value();
+            let real_rlc = compute_rlc_acc(&_inputs[.._len], gamma);
+            assert_eq!(real_rlc, rlc_val);
+        };
 
-        fn synthesize(
-            &self,
-            config: Self::Config,
-            mut layouter: impl Layouter<F>,
-        ) -> Result<(), Error> {
-            let gamma = config.rlc.gamma;
-            let mut rlc_chip = RlcChip::new(config.rlc, layouter.get_challenge(gamma));
-
-            let mut first_pass = SKIP_FIRST_PASS;
-            let mut rlc_val = None;
-            layouter.assign_region(
-                || "",
-                |region| {
-                    if first_pass {
-                        first_pass = false;
-                        return Ok(());
-                    }
-                    let mut aux = Context::new(
-                        region,
-                        ContextParams {
-                            max_rows: config.gate.max_rows,
-                            num_context_ids: 2,
-                            fixed_columns: config.gate.constants.clone(),
-                        },
-                    );
-                    let ctx = &mut aux;
-
-                    // ============ FIRST PHASE =============
-                    let inputs_assigned = config.gate.assign_witnesses(
-                        ctx,
-                        self.inputs
-                            .iter()
-                            .map(|x| {
-                                x.map(|v| Value::known(F::from(v as u64)))
-                                    .unwrap_or(Value::unknown())
-                            })
-                    );
-                    let len_assigned = config
-                        .gate
-                        .assign_witnesses(ctx, vec![Value::known(F::from(self.len as u64))]);
-
-                    // ============= SECOND PHASE ===============
-                    ctx.next_phase();
-                    // squeeze challenge now that it is available
-                    rlc_chip.get_challenge(ctx);
-
-                    let rlc_trace = rlc_chip.compute_rlc(
-                        ctx,
-                        &config.gate,
-                        inputs_assigned,
-                        len_assigned[0].clone(),
-                    );
-                    rlc_val = value_to_option(rlc_trace.rlc_val.value().copied());
-
-                    assert!(ctx.current_phase() <= 1);
-                    #[cfg(feature = "display")]
-                    {
-                        let context_names = ["Gate", "RLC"]; 
-                        ctx.advice_alloc_cache[RLC_PHASE] = ctx.advice_alloc.clone();
-                        for phase in 0..=RLC_PHASE {
-                            for (context_id, alloc) in ctx.advice_alloc_cache[phase].iter().enumerate() {
-                                if phase != 0 || context_id != 1 {
-                                    println!("Context \"{}\" used {} advice columns and {} total advice cells in phase {phase}", context_names[context_id], alloc.0 + 1, alloc.0 * ctx.max_rows + alloc.1);
-                                }
-                            }
-                        }
-                        let (fixed_cols, total_fixed) = ctx.fixed_stats();
-                        println!("Fixed columns: {fixed_cols}, Total fixed cells: {total_fixed}");
-                    }
-                    Ok(())
-                },
-            )?;
-
-            // the multi-phase system might call synthesize multiple times, so only do final check once `gamma` is "known"
-            if self.inputs[0].is_some() && value_to_option(rlc_chip.gamma).is_some() {
-                let real_rlc = compute_rlc_acc(
-                    &self.inputs[..self.len].iter().map(|x| x.unwrap()).collect_vec(),
-                    value_to_option(rlc_chip.gamma).unwrap(),
-                );
-                assert_eq!(real_rlc, rlc_val.unwrap());
-                println!("Passed test");
-            }
-            Ok(())
-        }
+        RlcCircuitBuilder::new(builder, synthesize_phase1)
     }
 
-    fn compute_rlc_acc<F: ScalarField>(msg: &[u8], r: F) -> F {
-        let mut rlc = F::from(msg[0] as u64);
+    fn compute_rlc_acc<F: ScalarField>(msg: &[F], r: F) -> F {
+        let mut rlc = msg[0];
         for val in msg.iter().skip(1) {
-            rlc = rlc * r + F::from(*val as u64);
+            rlc = rlc * r + val;
         }
         rlc
     }
 
     #[test]
     pub fn test_mock_rlc() {
+        let _ = env_logger::builder().is_test(true).try_init();
         let k = DEGREE;
         let input_bytes = vec![
             1, 2, 3, 4, 5, 6, 7, 8, 1, 2, 3, 4, 5, 6, 7, 8, 1, 2, 3, 4, 5, 6, 7, 8, 1, 2, 3, 4, 5,
             6, 7, 8, 0, 0, 0, 0, 0, 0, 0, 0,
-        ];
+        ]
+        .into_iter()
+        .map(|x| Fr::from(x as u64))
+        .collect_vec();
         let len = 32;
 
-        let circuit = TestCircuit::<Fr> {
-            inputs: input_bytes.iter().map(|x| Some(*x)).collect(),
-            len,
-            _marker: PhantomData,
-        };
+        let circuit = rlc_test_circuit(RlcThreadBuilder::mock(), input_bytes.clone(), len);
 
+        circuit.config(k as usize, Some(6));
         MockProver::run(k, &circuit, vec![]).unwrap().assert_satisfied();
     }
 
     #[test]
     pub fn test_rlc() -> Result<(), Error> {
+        let _ = env_logger::builder().is_test(true).try_init();
         let k = DEGREE;
-        let input_bytes_pre = vec![
+        let input_bytes = vec![
             1, 2, 3, 4, 5, 6, 7, 8, 1, 2, 3, 4, 5, 6, 7, 8, 1, 2, 3, 4, 5, 6, 7, 8, 1, 2, 3, 4, 5,
             6, 7, 8, 0, 0, 0, 0, 0, 0, 0, 0,
-        ];
-        let input_bytes: Vec<Option<u8>> = input_bytes_pre.iter().map(|x| Some(*x)).collect();
-        let input_bytes_none: Vec<Option<u8>> = input_bytes_pre.iter().map(|_| None).collect();
+        ]
+        .into_iter()
+        .map(|x| Fr::from(x as u64))
+        .collect_vec();
         let len = 32;
 
-        let params = ParamsKZG::<Bn256>::setup(k, OsRng);
-        let circuit = TestCircuit::<Fr> { inputs: input_bytes_none, len, _marker: PhantomData };
+        let mut rng = StdRng::from_seed([0u8; 32]);
+        let params = ParamsKZG::<Bn256>::setup(k, &mut rng);
+        let circuit = rlc_test_circuit(RlcThreadBuilder::keygen(), input_bytes.clone(), len);
+        circuit.config(k as usize, Some(6));
 
         println!("vk gen started");
         let vk = keygen_vk(&params, &circuit)?;
@@ -210,8 +108,10 @@ mod rlc {
         println!("pk gen done");
         println!();
         println!("==============STARTING PROOF GEN===================");
-
-        let proof_circuit = TestCircuit::<Fr> { inputs: input_bytes, len, _marker: PhantomData };
+        let break_points = circuit.break_points.take();
+        drop(circuit);
+        let circuit = rlc_test_circuit(RlcThreadBuilder::prover(), input_bytes, len);
+        *circuit.break_points.borrow_mut() = break_points;
 
         let mut transcript = Blake2bWrite::<_, _, Challenge255<_>>::init(vec![]);
         create_proof::<
@@ -220,26 +120,27 @@ mod rlc {
             Challenge255<G1Affine>,
             _,
             Blake2bWrite<Vec<u8>, G1Affine, Challenge255<G1Affine>>,
-            TestCircuit<Fr>,
-        >(&params, &pk, &[proof_circuit], &[&[]], OsRng, &mut transcript)?;
+            _,
+        >(&params, &pk, &[circuit], &[&[]], rng, &mut transcript)?;
         let proof = transcript.finalize();
         println!("proof gen done");
         let verifier_params = params.verifier_params();
-        let strategy = SingleStrategy::new(&params);
+        let strategy = SingleStrategy::new(verifier_params);
         let mut transcript = Blake2bRead::<_, _, Challenge255<_>>::init(&proof[..]);
-        assert!(verify_proof::<
+        verify_proof::<
             KZGCommitmentScheme<Bn256>,
             VerifierSHPLONK<'_, Bn256>,
             Challenge255<G1Affine>,
             Blake2bRead<&[u8], G1Affine, Challenge255<G1Affine>>,
             SingleStrategy<'_, Bn256>,
         >(verifier_params, pk.get_vk(), strategy, &[&[]], &mut transcript)
-        .is_ok());
+        .unwrap();
         println!("verify done");
         Ok(())
     }
 }
 
+/*
 mod rlp {
     use crate::rlp::*;
     use halo2_base::{
@@ -446,3 +347,4 @@ mod rlp {
         MockProver::run(k, &circuit, vec![]).unwrap().assert_satisfied();
     }
 }
+ */

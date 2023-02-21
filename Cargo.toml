@@ -16,6 +16,7 @@ serde_json = { version = "1.0", default-features = false }
 rayon = "1.6.1"
 
 # misc
+log = "0.4"
 ark-std = { version = "0.3.0", features = ["print-trace"], optional = true }
 clap = { version = "4.0.13", features = ["derive"], optional = true }
 clap-num = { version = "1.0.2", optional = true }
@@ -49,7 +50,7 @@ log = "0.4"
 env_logger = "0.10"
 
 [features]
-default = ["evm", "aggregation", "clap", "halo2-axiom", "halo2-base/jemallocator", "display"]
+default = ["halo2-axiom", "halo2-base/jemallocator", "display"] # "evm", "aggregation", "clap", 
 aggregation = ["dep:snark-verifier", "snark-verifier-sdk", "providers"]
 evm = ["snark-verifier-sdk?/loader_evm", "aggregation"]
 providers = ["dep:ethers-providers", "dep:tokio", "dep:bincode", "dep:base64", "dep:serde_with"]

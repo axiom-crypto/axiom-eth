@@ -1,19 +1,20 @@
 #![feature(int_log)]
 
-pub mod block_header;
-pub mod keccak;
-pub mod mpt;
+//pub mod block_header;
+// pub mod keccak;
+//pub mod mpt;
 pub mod rlp;
-pub mod storage;
+//pub mod storage;
 pub mod util;
 
 #[cfg(feature = "providers")]
 pub mod providers;
 
+/*
 use crate::rlp::{
     rlc::{RlcChip, RlcConfig},
     RlpChip, RlpConfig,
-};
+};*/
 use halo2_base::{
     gates::{flex_gate::FlexGateConfig, range::RangeConfig},
     halo2_proofs::{
@@ -23,9 +24,9 @@ use halo2_base::{
     },
     Context,
 };
-use keccak::KeccakChip;
-use mpt::{MPTChip, MPTConfig};
-use util::EthConfigParams;
+// use keccak::KeccakChip;
+// use mpt::{MPTChip, MPTConfig};
+// use util::EthConfigParams;
 pub use zkevm_keccak::util::eth_types::Field;
 use zkevm_keccak::KeccakConfig;
 
@@ -45,6 +46,7 @@ impl std::fmt::Display for Network {
     }
 }
 
+/* uncomment when done refactor
 #[derive(Clone, Debug)]
 /// Config shared for block header and storage proof circuits
 pub struct EthConfig<F: Field> {
@@ -123,7 +125,8 @@ impl<'v, F: Field> EthChip<'v, F> {
     }
 
     /// Call this at the beginning of `SecondPhase` if you want to use keccak RLCs for other purposes
-    pub fn keccak_assign_phase1(&mut self, ctx: &mut Context<'v, F>) {
+    pub fn keccak_assign_phase1(&mut self, ctx: &mut Context<F>) {
         self.mpt.keccak.assign_phase1(ctx, &mut self.mpt.rlp.rlc, &self.mpt.rlp.range);
     }
 }
+*/

@@ -14,6 +14,7 @@ use halo2_base::{
 };
 use std::iter;
 
+pub mod builder;
 pub mod rlc;
 #[cfg(test)]
 mod tests;
@@ -28,135 +29,116 @@ pub fn max_rlp_len_len(max_len: usize) -> usize {
     }
 }
 
-pub struct AssignedByte<'v, F: ScalarField> {
-    // This should be `Value<u8>` but we don't use the Value api to reduce overhead.
-    pub value: u8,
-    pub assigned: AssignedValue<'v, F>,
-}
-
 /// Returns array whose first `sub_len` cells are
 ///     `array[start_idx..start_idx + sub_len]`
 /// and whose last cells are `0`.
 ///
 /// These cells are witnessed but _NOT_ constrained
-pub fn witness_subarray<'v, F: ScalarField>(
-    ctx: &mut Context<'_, F>,
+pub fn witness_subarray<F: ScalarField>(
+    ctx: &mut Context<F>,
     gate: &impl GateInstructions<F>,
     array: &[AssignedValue<F>],
-    start_id: Value<&F>,
-    sub_len: Value<&F>,
+    start_id: &F,
+    sub_len: &F,
     max_len: usize,
-) -> Vec<AssignedValue<'v, F>> {
-    let mut out = vec![];
-    start_id.zip(sub_len).map(|(start_id, sub_len)| {
-        // `u32` should be enough for array indices
-        let [start_id, sub_len] = [start_id, sub_len].map(|fe| fe.get_lower_32() as usize);
-        debug_assert!(sub_len <= max_len);
-        // TODO: maybe implement Copy for AssignedValue and use `copy_from_slice` for memcpy optimization?
-        out = gate.assign_region(
-            ctx,
-            array[start_id..start_id + sub_len]
-                .iter()
-                .map(|a| Witness(a.value().copied()))
-                .chain(iter::repeat(Witness(Value::known(F::zero()))))
-                .take(max_len),
-            [],
-        );
-    });
-    if out.is_empty() {
-        out = gate.assign_witnesses(ctx, vec![Value::unknown(); max_len]);
-    }
-    out
+) -> Vec<AssignedValue<F>> {
+    // `u32` should be enough for array indices
+    let [start_id, sub_len] = [start_id, sub_len].map(|fe| fe.get_lower_32() as usize);
+    debug_assert!(sub_len <= max_len);
+    ctx.assign_witnesses(
+        array[start_id..start_id + sub_len]
+            .iter()
+            .map(|a| *a.value())
+            .chain(iter::repeat(F::zero()))
+            .take(max_len),
+    )
 }
 
 /// Evaluate a variable length byte array `array[..len]` to a big endian number
-pub fn evaluate_byte_array<'v, F: ScalarField>(
-    ctx: &mut Context<'v, F>,
+pub fn evaluate_byte_array<F: ScalarField>(
+    ctx: &mut Context<F>,
     gate: &impl GateInstructions<F>,
-    array: &[AssignedValue<'v, F>],
-    len: &AssignedValue<'v, F>,
-) -> AssignedValue<'v, F> {
+    array: &[AssignedValue<F>],
+    len: AssignedValue<F>,
+) -> AssignedValue<F> {
     let f_256 = gate.get_field_element(256);
     if !array.is_empty() {
-        let incremental_evals = gate.accumulated_product(
-            ctx,
-            iter::repeat(Constant(f_256)),
-            array.iter().map(Existing),
-        );
-        let len_minus_one = gate.sub(ctx, Existing(len), Constant(F::one()));
+        let incremental_evals =
+            gate.accumulated_product(ctx, iter::repeat(Constant(f_256)), array.iter().copied());
+        let len_minus_one = gate.sub(ctx, len, Constant(F::one()));
         // if `len = 0` then `len_minus_one` will be very large, so `select_from_idx` will return 0.
-        gate.select_from_idx(ctx, incremental_evals.iter().map(Existing), Existing(&len_minus_one))
+        gate.select_from_idx(ctx, incremental_evals.iter().copied(), len_minus_one)
     } else {
-        gate.load_zero(ctx)
+        ctx.load_zero()
     }
 }
 
 #[derive(Clone, Debug)]
-pub struct RlpFieldPrefixParsed<'v, F: ScalarField> {
-    is_not_literal: AssignedValue<'v, F>,
-    is_big: AssignedValue<'v, F>,
+pub struct RlpFieldPrefixParsed<F: ScalarField> {
+    is_not_literal: AssignedValue<F>,
+    is_big: AssignedValue<F>,
 
-    next_len: AssignedValue<'v, F>,
-    len_len: AssignedValue<'v, F>,
+    next_len: AssignedValue<F>,
+    len_len: AssignedValue<F>,
 }
 
 #[derive(Clone, Debug)]
-pub struct RlpArrayPrefixParsed<'v, F: ScalarField> {
-    // is_empty: AssignedValue<'v, F>,
-    is_big: AssignedValue<'v, F>,
+pub struct RlpArrayPrefixParsed<F: ScalarField> {
+    // is_empty: AssignedValue<F>,
+    is_big: AssignedValue<F>,
 
-    next_len: AssignedValue<'v, F>,
-    len_len: AssignedValue<'v, F>,
+    next_len: AssignedValue<F>,
+    len_len: AssignedValue<F>,
 }
 
 #[derive(Clone, Debug)]
-pub struct RlpFieldWitness<'v, F: ScalarField> {
-    prefix: AssignedValue<'v, F>, // value of the prefix
-    prefix_len: AssignedValue<'v, F>,
-    len_len: AssignedValue<'v, F>,
-    len_cells: Vec<AssignedValue<'v, F>>,
+pub struct RlpFieldWitness<F: ScalarField> {
+    prefix: AssignedValue<F>, // value of the prefix
+    prefix_len: AssignedValue<F>,
+    len_len: AssignedValue<F>,
+    len_cells: Vec<AssignedValue<F>>,
     max_len_len: usize,
 
-    pub field_len: AssignedValue<'v, F>,
-    pub field_cells: Vec<AssignedValue<'v, F>>,
+    pub field_len: AssignedValue<F>,
+    pub field_cells: Vec<AssignedValue<F>>,
     max_field_len: usize,
 }
 
 #[derive(Clone, Debug)]
-pub struct RlpFieldTraceWitness<'v, F: ScalarField> {
-    pub witness: RlpFieldWitness<'v, F>,
+pub struct RlpFieldTraceWitness<F: ScalarField> {
+    pub witness: RlpFieldWitness<F>,
 
-    pub rlp_len: AssignedValue<'v, F>,
-    pub rlp_field: Vec<AssignedValue<'v, F>>,
+    pub rlp_len: AssignedValue<F>,
+    pub rlp_field: Vec<AssignedValue<F>>,
 }
 
 #[derive(Clone, Debug)]
-pub struct RlpFieldTrace<'v, F: ScalarField> {
-    pub prefix: AssignedValue<'v, F>, // value of the prefix
-    pub prefix_len: AssignedValue<'v, F>,
-    pub len_trace: RlcTrace<'v, F>,
-    pub field_trace: RlcTrace<'v, F>,
+pub struct RlpFieldTrace<F: ScalarField> {
+    pub prefix: AssignedValue<F>, // value of the prefix
+    pub prefix_len: AssignedValue<F>,
+    pub len_trace: RlcTrace<F>,
+    pub field_trace: RlcTrace<F>,
     // to save memory maybe we don't need this
-    // pub rlp_trace: RlcTrace<'v, F>,
+    // pub rlp_trace: RlcTrace<F>,
 }
 
 #[derive(Clone, Debug)]
-pub struct RlpArrayTraceWitness<'v, F: ScalarField> {
-    pub field_witness: Vec<RlpFieldWitness<'v, F>>,
+pub struct RlpArrayTraceWitness<F: ScalarField> {
+    pub field_witness: Vec<RlpFieldWitness<F>>,
 
-    pub len_len: AssignedValue<'v, F>,
-    pub len_cells: Vec<AssignedValue<'v, F>>,
+    pub len_len: AssignedValue<F>,
+    pub len_cells: Vec<AssignedValue<F>>,
 
-    pub rlp_len: AssignedValue<'v, F>,
-    pub rlp_array: Vec<AssignedValue<'v, F>>,
+    pub rlp_len: AssignedValue<F>,
+    pub rlp_array: Vec<AssignedValue<F>>,
 }
 
 #[derive(Clone, Debug)]
-pub struct RlpArrayTrace<'v, F: ScalarField> {
-    pub len_trace: RlcTrace<'v, F>,
-    pub field_trace: Vec<RlpFieldTrace<'v, F>>,
+pub struct RlpArrayTrace<F: ScalarField> {
+    pub len_trace: RlcTrace<F>,
+    pub field_trace: Vec<RlpFieldTrace<F>>,
     // to save memory we don't need this
-    // pub array_trace: RlcTrace<'v, F>,
+    // pub array_trace: RlcTrace<F>,
 }
 
 #[derive(Clone, Debug)]
@@ -173,7 +155,6 @@ impl<F: ScalarField> RlpConfig<F> {
         num_lookup_advice: &[usize],
         num_fixed: usize,
         lookup_bits: usize,
-        context_id: usize,
         circuit_degree: usize,
     ) -> Self {
         let mut range = RangeConfig::configure(
@@ -183,16 +164,16 @@ impl<F: ScalarField> RlpConfig<F> {
             num_lookup_advice,
             num_fixed,
             lookup_bits,
-            context_id,
             circuit_degree,
         );
-        let rlc = RlcConfig::configure(meta, num_rlc_columns, context_id + 1);
+        let rlc = RlcConfig::configure(meta, num_rlc_columns);
         // blinding factors may have changed
         range.gate.max_rows = (1 << circuit_degree) - meta.minimum_rows();
         Self { rlc, range }
     }
 }
 
+/*
 #[derive(Clone, Debug)]
 pub struct RlpChip<'g, F: ScalarField> {
     pub rlc: RlcChip<'g, F>,
@@ -219,9 +200,9 @@ impl<'g, F: ScalarField> RlpChip<'g, F> {
 
     pub fn parse_rlp_field_prefix<'v>(
         &self,
-        ctx: &mut Context<'v, F>,
-        prefix: &AssignedValue<'v, F>,
-    ) -> RlpFieldPrefixParsed<'v, F> {
+        ctx: &mut Context<F>,
+        prefix: &AssignedValue<F>,
+    ) -> RlpFieldPrefixParsed<F> {
         let is_not_literal = self.range.is_less_than(
             ctx,
             Constant(self.gate().get_field_element(127)),
@@ -265,9 +246,9 @@ impl<'g, F: ScalarField> RlpChip<'g, F> {
 
     pub fn parse_rlp_array_prefix<'v>(
         &self,
-        ctx: &mut Context<'v, F>,
-        prefix: &AssignedValue<'v, F>,
-    ) -> RlpArrayPrefixParsed<'v, F> {
+        ctx: &mut Context<F>,
+        prefix: &AssignedValue<F>,
+    ) -> RlpArrayPrefixParsed<F> {
         // is valid
         self.range.check_less_than(
             ctx,
@@ -297,11 +278,11 @@ impl<'g, F: ScalarField> RlpChip<'g, F> {
 
     fn parse_rlp_len<'v>(
         &self,
-        ctx: &mut Context<'v, F>,
-        rlp_cells: &[AssignedValue<'v, F>],
-        len_len: &AssignedValue<'v, F>,
+        ctx: &mut Context<F>,
+        rlp_cells: &[AssignedValue<F>],
+        len_len: &AssignedValue<F>,
         max_len_len: usize,
-    ) -> (Vec<AssignedValue<'v, F>>, AssignedValue<'v, F>) {
+    ) -> (Vec<AssignedValue<F>>, AssignedValue<F>) {
         let len_cells = witness_subarray(
             ctx,
             self.gate(),
@@ -319,10 +300,10 @@ impl<'g, F: ScalarField> RlpChip<'g, F> {
     /// Witnesses MUST be generated in `FirstPhase` to be able to compute RLC of them in `SecondPhase`
     pub fn decompose_rlp_field_phase0<'v>(
         &self,
-        ctx: &mut Context<'v, F>,
-        rlp_field: Vec<AssignedValue<'v, F>>,
+        ctx: &mut Context<F>,
+        rlp_field: Vec<AssignedValue<F>>,
         max_field_len: usize,
-    ) -> RlpFieldTraceWitness<'v, F> {
+    ) -> RlpFieldTraceWitness<F> {
         let max_len_len = max_rlp_len_len(max_field_len);
         debug_assert_eq!(rlp_field.len(), 1 + max_len_len + max_field_len);
         debug_assert_eq!(ctx.current_phase(), 0);
@@ -397,9 +378,9 @@ impl<'g, F: ScalarField> RlpChip<'g, F> {
     /// Use RLC to constrain the parsed RLP field witness. This MUST be done in `SecondPhase`.
     pub fn decompose_rlp_field_phase1<'v>(
         &mut self,
-        ctx: &mut Context<'v, F>,
-        rlp_field_witness: RlpFieldTraceWitness<'v, F>,
-    ) -> RlpFieldTrace<'v, F> {
+        ctx: &mut Context<F>,
+        rlp_field_witness: RlpFieldTraceWitness<F>,
+    ) -> RlpFieldTrace<F> {
         debug_assert_eq!(ctx.current_phase(), RLC_PHASE);
 
         let RlpFieldTraceWitness { witness, rlp_len, rlp_field } = rlp_field_witness;
@@ -446,11 +427,11 @@ impl<'g, F: ScalarField> RlpChip<'g, F> {
     /// In order for the circuit to pass, the excess witness values in `rlp_array` beyond the actual RLP sequence should all be `0`s.
     pub fn decompose_rlp_array_phase0<'v>(
         &self,
-        ctx: &mut Context<'v, F>,
-        rlp_array: Vec<AssignedValue<'v, F>>,
+        ctx: &mut Context<F>,
+        rlp_array: Vec<AssignedValue<F>>,
         max_field_lens: &[usize],
         is_variable_len: bool,
-    ) -> RlpArrayTraceWitness<'v, F> {
+    ) -> RlpArrayTraceWitness<F> {
         let max_rlp_array_len = rlp_array.len();
         let max_len_len = max_rlp_len_len(max_rlp_array_len);
 
@@ -596,10 +577,10 @@ impl<'g, F: ScalarField> RlpChip<'g, F> {
     /// We do not make any guarantees on the values in the original RLP sequence beyond the parsed length for the total payload
     pub fn decompose_rlp_array_phase1<'v>(
         &mut self,
-        ctx: &mut Context<'v, F>,
-        rlp_array_witness: RlpArrayTraceWitness<'v, F>,
+        ctx: &mut Context<F>,
+        rlp_array_witness: RlpArrayTraceWitness<F>,
         _is_variable_len: bool,
-    ) -> RlpArrayTrace<'v, F> {
+    ) -> RlpArrayTrace<F> {
         debug_assert_eq!(ctx.current_phase(), RLC_PHASE);
 
         let RlpArrayTraceWitness { field_witness, len_len, len_cells, rlp_len, rlp_array } =
@@ -672,3 +653,4 @@ impl<'g, F: ScalarField> RlpChip<'g, F> {
         RlpArrayTrace { len_trace, field_trace }
     }
 }
+*/
