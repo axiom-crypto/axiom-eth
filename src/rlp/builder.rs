@@ -1,29 +1,31 @@
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
-    iter,
+    iter, mem,
 };
 
 use halo2_base::{
     gates::{
         builder::{
-            assign_threads_in, CircuitBuilderStage, FlexGateConfigParams, GateThreadBuilder,
+            assign_threads_in, FlexGateConfigParams, GateThreadBuilder,
             KeygenAssignments as GateKeygenAssignments, MultiPhaseThreadBreakPoints,
             ThreadBreakPoints,
         },
-        flex_gate::{FlexGateConfig, GateStrategy, MAX_PHASE},
+        flex_gate::{FlexGateConfig, GateStrategy},
     },
     halo2_proofs::{
         circuit::{self, Layouter, Region, SimpleFloorPlanner, Value},
         plonk::{Advice, Circuit, Column, ConstraintSystem, Error, Selector},
     },
     utils::ScalarField,
-    Context, ContextCell, SKIP_FIRST_PASS,
+    Context, SKIP_FIRST_PASS,
 };
 
-use crate::{rlp::rlc::RLC_PHASE, util::EthConfigParams};
-
-use super::rlc::RlcConfig;
+use super::{
+    rlc::{RlcConfig, RlcContextPair, RLC_PHASE},
+    RlcGateConfig, RlpConfig,
+};
+use crate::util::EthConfigParams;
 
 #[derive(Clone, Debug, Default)]
 pub struct RlcThreadBreakPoints {
@@ -69,12 +71,11 @@ impl<F: ScalarField> RlcThreadBuilder<F> {
         self
     }
 
-    pub fn main_rlc(&mut self) -> &mut Context<F> {
+    pub fn rlc_ctx_pair(&mut self) -> RlcContextPair<F> {
         if self.threads_rlc.is_empty() {
-            self.new_thread_rlc()
-        } else {
-            self.threads_rlc.last_mut().unwrap()
+            self.new_thread_rlc();
         }
+        (self.gate_builder.main(RLC_PHASE), self.threads_rlc.last_mut().unwrap())
     }
 
     pub fn witness_gen_only(&self) -> bool {
@@ -156,7 +157,7 @@ impl<F: ScalarField> RlcThreadBuilder<F> {
         region: &mut Region<F>,
         KeygenAssignments {
             mut assigned_advices,
-            mut assigned_constants,
+            assigned_constants,
             mut break_points,
         }: KeygenAssignments<F>,
     ) -> KeygenAssignments<F> {
@@ -287,64 +288,168 @@ pub fn assign_threads_rlc<F: ScalarField>(
     }
 }
 
+pub trait FnSynthesize<F> = FnOnce(&mut RlcThreadBuilder<F>, F) + Clone;
 /// A wrapper struct to auto-build a circuit from a `RlcThreadBuilder`.
 ///
 /// This struct is trickier because it uses the Multi-phase Challenge API. The intended use is as follows:
 /// * The user can run phase 0 calculations on `builder` outside of the circuit (as usual) and supply the builder to construct the circuit.
 /// * The user also specifies a closure `synthesize_phase1(builder, challenge)` that specifies all calculations that should be done in phase 1.
 /// The builder will then handle the process of assigning all advice cells in phase 1, squeezing a challenge value `challenge` from the backend API, and then using that value to do all phase 1 witness generation.
-#[derive(Clone, Debug)]
-pub struct RlcCircuitBuilder<F: ScalarField, FN>
+pub struct RlcCircuitBuilder<F: ScalarField, FnPhase1>
 where
-    FN: FnOnce(&mut RlcThreadBuilder<F>, F),
+    FnPhase1: FnOnce(&mut RlcThreadBuilder<F>, F),
 {
     pub builder: RefCell<RlcThreadBuilder<F>>,
     pub break_points: RefCell<RlcThreadBreakPoints>, // `RefCell` allows the circuit to record break points in a keygen call of `synthesize` for use in later witness gen
-
-    pub synthesize_phase1: FN,
+    // we guarantee that `synthesize_phase1` is called *exactly once* during the proving stage, but since `Circuit::synthesize` takes `&self`, and `assign_region` takes a `Fn` instead of `FnOnce`, we need some extra engineering:
+    pub synthesize_phase1: RefCell<Option<FnPhase1>>,
 }
 
-impl<F: ScalarField, FN> RlcCircuitBuilder<F, FN>
+impl<F: ScalarField, FnPhase1> RlcCircuitBuilder<F, FnPhase1>
 where
-    FN: Fn(&mut RlcThreadBuilder<F>, F),
+    FnPhase1: FnSynthesize<F>, // `Clone` because we may run synthesize multiple times on the same circuit during keygen or mock stages
 {
-    pub fn new(builder: RlcThreadBuilder<F>, synthesize_phase1: FN) -> Self {
+    pub fn new(builder: RlcThreadBuilder<F>, synthesize_phase1: FnPhase1) -> Self {
         Self {
             builder: RefCell::new(builder),
             break_points: RefCell::new(RlcThreadBreakPoints::default()),
-            synthesize_phase1,
+            synthesize_phase1: RefCell::new(Some(synthesize_phase1)),
         }
     }
 
     pub fn prover(
         builder: RlcThreadBuilder<F>,
         break_points: RlcThreadBreakPoints,
-        synthesize_phase1: FN,
+        synthesize_phase1: FnPhase1,
     ) -> Self {
         assert!(builder.witness_gen_only());
         Self {
             builder: RefCell::new(builder),
             break_points: RefCell::new(break_points),
-            synthesize_phase1,
+            synthesize_phase1: RefCell::new(Some(synthesize_phase1)),
         }
     }
 
     pub fn config(&self, k: usize, minimum_rows: Option<usize>) -> EthConfigParams {
+        // clone everything so we don't alter the circuit in any way for later calls
         let mut builder = self.builder.borrow().clone();
-        (self.synthesize_phase1)(&mut builder, F::zero());
+        let f = self.synthesize_phase1.borrow().clone().expect("synthesize_phase1 should exist");
+        f(&mut builder, F::zero());
         builder.config(k, minimum_rows)
+    }
+
+    // re-usable function for synthesize
+    pub fn two_phase_synthesize(
+        &self,
+        gate: &FlexGateConfig<F>,
+        lookup_advice: &[Vec<Column<Advice>>],
+        q_lookup: &[Option<Selector>],
+        rlc: &RlcConfig<F>,
+        layouter: &mut impl Layouter<F>,
+    ) {
+        let mut first_pass = SKIP_FIRST_PASS;
+        #[cfg(feature = "halo2-axiom")]
+        let witness_gen_only = self.builder.borrow().witness_gen_only();
+        // in non halo2-axiom, the prover calls `synthesize` twice: first just to get FirstPhase advice columns, commit, and then generate challenge value; then the second time to actually compute SecondPhase advice
+        // our "Prover" implementation is heavily optimized for the Axiom version, which only calls `synthesize` once
+        #[cfg(not(feature = "halo2-axiom"))]
+        let witness_gen_only = false;
+
+        let mut gamma = None;
+        if !witness_gen_only {
+            // in these cases, synthesize is called twice, and challenge can be gotten after the first time, or we use dummy value 0
+            layouter.get_challenge(rlc.gamma).map(|gamma_| gamma = Some(gamma_));
+        }
+
+        layouter
+            .assign_region(
+                || "RlcCircuitBuilder generated circuit",
+                |mut region| {
+                    if first_pass {
+                        first_pass = false;
+                        return Ok(());
+                    }
+                    if !witness_gen_only {
+                        let mut builder = self.builder.borrow().clone();
+                        let f = self
+                            .synthesize_phase1
+                            .borrow()
+                            .clone()
+                            .expect("synthesize_phase1 should exist");
+                        // call the actual synthesize function
+                        f(&mut builder, gamma.unwrap_or_else(|| F::zero()));
+                        let KeygenAssignments {
+                            assigned_advices: _,
+                            assigned_constants: _,
+                            break_points,
+                        } = builder.assign_all(
+                            gate,
+                            lookup_advice,
+                            q_lookup,
+                            rlc,
+                            &mut region,
+                            Default::default(),
+                        );
+                        *self.break_points.borrow_mut() = break_points;
+                    } else {
+                        let break_points = self.break_points.take();
+                        let mut break_points_gate = break_points.gate.into_iter();
+
+                        // warning: we currently take all contexts from phase 0, which means you can't read the values
+                        // from these contexts later in phase 1. If we want to read, should clone here
+                        let threads =
+                            mem::take(&mut self.builder.borrow_mut().gate_builder.threads[0]);
+                        // assign phase 0
+                        const FIRST_PHASE: usize = 0;
+                        assign_threads_in(
+                            FIRST_PHASE,
+                            threads,
+                            gate,
+                            &lookup_advice[FIRST_PHASE],
+                            &mut region,
+                            break_points_gate.next().unwrap(),
+                        );
+                        log::info!("End of FirstPhase");
+                        // this is a special backend API function (in halo2-axiom only) that computes the KZG commitments for all columns in FirstPhase and performs Fiat-Shamir on them to return the challenge value
+                        region.next_phase();
+                        // get challenge value
+                        let mut gamma = None;
+                        region.get_challenge(rlc.gamma).map(|gamma_| {
+                            log::info!("gamma: {gamma_:?}");
+                            gamma = Some(gamma_);
+                        });
+                        let gamma = gamma.expect("Could not get challenge in second phase");
+
+                        // generate witnesses depending on challenge
+                        let f = RefCell::take(&self.synthesize_phase1)
+                            .expect("synthesize_phase1 should exist"); // we `take` the closure during proving to avoid cloning captured variables (the captured variables would be the AssignedValue payload sent from FirstPhase to SecondPhase)
+                        f(&mut self.builder.borrow_mut(), gamma);
+
+                        let threads = mem::take(
+                            &mut self.builder.borrow_mut().gate_builder.threads[RLC_PHASE],
+                        );
+                        // assign phase 1
+                        assign_threads_in(
+                            RLC_PHASE,
+                            threads,
+                            gate,
+                            &lookup_advice[RLC_PHASE],
+                            &mut region,
+                            break_points_gate.next().unwrap(),
+                        );
+                        let threads_rlc = mem::take(&mut self.builder.borrow_mut().threads_rlc);
+                        assign_threads_rlc(threads_rlc, rlc, &mut region, break_points.rlc);
+                    }
+                    Ok(())
+                },
+            )
+            .unwrap();
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct RlcGateConfig<F: ScalarField> {
-    pub rlc: RlcConfig<F>,
-    pub gate: FlexGateConfig<F>,
-}
-
-impl<F: ScalarField, FN> Circuit<F> for RlcCircuitBuilder<F, FN>
+impl<F: ScalarField, FnPhase1> Circuit<F> for RlcCircuitBuilder<F, FnPhase1>
 where
-    FN: Fn(&mut RlcThreadBuilder<F>, F),
+    FnPhase1: FnSynthesize<F>,
 {
     type Config = RlcGateConfig<F>;
     type FloorPlanner = SimpleFloorPlanner;
@@ -381,89 +486,83 @@ where
         config: Self::Config,
         mut layouter: impl Layouter<F>,
     ) -> Result<(), Error> {
-        let mut first_pass = SKIP_FIRST_PASS;
-        let witness_gen_only = self.builder.borrow().witness_gen_only();
+        self.two_phase_synthesize(&config.gate, &[], &[], &config.rlc, &mut layouter);
+        Ok(())
+    }
+}
 
-        let mut gamma = None;
-        if !witness_gen_only {
-            // in these cases, synthesize is called twice, and challenge can be gotten after the first time, or we use dummy value 0
-            layouter.get_challenge(config.rlc.gamma).map(|gamma_| gamma = Some(gamma_));
-        }
+/// A wrapper around RlcCircuitBuilder where Gate is replaced by Range in the circuit
+pub struct RlpCircuitBuilder<F: ScalarField, FnPhase1>(RlcCircuitBuilder<F, FnPhase1>)
+where
+    FnPhase1: FnOnce(&mut RlcThreadBuilder<F>, F);
 
-        layouter
-            .assign_region(
-                || "RlcCircuitBuilder generated circuit",
-                |mut region| {
-                    if first_pass {
-                        first_pass = false;
-                        return Ok(());
-                    }
-                    if !witness_gen_only {
-                        let mut builder = self.builder.borrow().clone();
-                        // call the actual synthesize function
-                        (self.synthesize_phase1)(&mut builder, gamma.unwrap_or_else(|| F::zero()));
-                        let KeygenAssignments {
-                            assigned_advices: _,
-                            assigned_constants: _,
-                            break_points,
-                        } = builder.assign_all(
-                            &config.gate,
-                            &[],
-                            &[],
-                            &config.rlc,
-                            &mut region,
-                            Default::default(),
-                        );
-                        *self.break_points.borrow_mut() = break_points;
-                    } else {
-                        let break_points = self.break_points.take();
-                        let mut break_points_gate = break_points.gate.into_iter();
+impl<F: ScalarField, FnPhase1> RlpCircuitBuilder<F, FnPhase1>
+where
+    FnPhase1: FnSynthesize<F>,
+{
+    pub fn new(builder: RlcThreadBuilder<F>, synthesize_phase1: FnPhase1) -> Self {
+        Self(RlcCircuitBuilder::new(builder, synthesize_phase1))
+    }
 
-                        // warning: we currently take all contexts from phase 0, which means you can't read the values
-                        // from these contexts later in phase 1. If we want to read, should clone here
-                        let threads =
-                            std::mem::take(&mut self.builder.borrow_mut().gate_builder.threads[0]);
-                        // assign phase 0
-                        assign_threads_in(
-                            0,
-                            threads,
-                            &config.gate,
-                            &[],
-                            &mut region,
-                            break_points_gate.next().unwrap(),
-                        );
-                        log::info!("End of FirstPhase");
-                        region.next_phase();
-                        // get challenge value
-                        let mut gamma = None;
-                        region.get_challenge(config.rlc.gamma).map(|gamma_| {
-                            log::info!("gamma: {gamma_:?}");
-                            gamma = Some(gamma_);
-                        });
-                        let gamma = gamma.expect("Could not get challenge in second phase");
+    pub fn prover(
+        builder: RlcThreadBuilder<F>,
+        break_points: RlcThreadBreakPoints,
+        synthesize_phase1: FnPhase1,
+    ) -> Self {
+        Self(RlcCircuitBuilder::prover(builder, break_points, synthesize_phase1))
+    }
 
-                        // generate witnesses depending on challenge
-                        (self.synthesize_phase1)(&mut self.builder.borrow_mut(), gamma);
+    pub fn config(&self, k: usize, minimum_rows: Option<usize>) -> EthConfigParams {
+        self.0.config(k, minimum_rows)
+    }
+}
 
-                        let threads =
-                            std::mem::take(&mut self.builder.borrow_mut().gate_builder.threads[1]);
-                        // assign phase 1
-                        assign_threads_in(
-                            1,
-                            threads,
-                            &config.gate,
-                            &[],
-                            &mut region,
-                            break_points_gate.next().unwrap(),
-                        );
-                        let threads_rlc =
-                            std::mem::take(&mut self.builder.borrow_mut().threads_rlc);
-                        assign_threads_rlc(threads_rlc, &config.rlc, &mut region, break_points.rlc);
-                    }
-                    Ok(())
-                },
-            )
-            .unwrap();
+impl<F: ScalarField, FnPhase1> Circuit<F> for RlpCircuitBuilder<F, FnPhase1>
+where
+    FnPhase1: FnSynthesize<F>,
+{
+    type Config = RlpConfig<F>;
+    type FloorPlanner = SimpleFloorPlanner;
+
+    fn without_witnesses(&self) -> Self {
+        unimplemented!()
+    }
+
+    fn configure(meta: &mut ConstraintSystem<F>) -> RlpConfig<F> {
+        let EthConfigParams {
+            degree,
+            num_rlc_columns,
+            num_range_advice,
+            num_lookup_advice,
+            num_fixed,
+            unusable_rows: _,
+            keccak_rows_per_round: _,
+        } = serde_json::from_str(&std::env::var("ETH_CONFIG_PARAMS").unwrap()).unwrap();
+        let lookup_bits = std::env::var("LOOKUP_BITS").unwrap().parse().unwrap();
+        RlpConfig::configure(
+            meta,
+            num_rlc_columns,
+            &num_range_advice,
+            &num_lookup_advice,
+            num_fixed,
+            lookup_bits,
+            degree as usize,
+        )
+    }
+
+    fn synthesize(
+        &self,
+        config: Self::Config,
+        mut layouter: impl Layouter<F>,
+    ) -> Result<(), Error> {
+        config.range.load_lookup_table(&mut layouter)?;
+        self.0.two_phase_synthesize(
+            &config.range.gate,
+            &config.range.lookup_advice,
+            &config.range.q_lookup,
+            &config.rlc,
+            &mut layouter,
+        );
         Ok(())
     }
 }

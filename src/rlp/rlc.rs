@@ -1,12 +1,11 @@
 use crate::halo2_proofs::{
-    circuit::Value,
     plonk::{Advice, Challenge, Column, ConstraintSystem, FirstPhase, SecondPhase, Selector},
     poly::Rotation,
 };
 use halo2_base::{
     gates::GateInstructions,
     utils::{bit_length, ScalarField},
-    AssignedValue, Context, QuantumCell,
+    AssignedValue, Context,
     QuantumCell::{Constant, Existing, Witness},
 };
 use itertools::Itertools;
@@ -23,22 +22,9 @@ pub const RLC_PHASE: usize = 1;
 pub struct RlcTrace<F: ScalarField> {
     pub rlc_val: AssignedValue<F>, // in SecondPhase
     pub len: AssignedValue<F>,     // in FirstPhase
-                                   // pub rlc_max: AssignedValue<'a, F>,
-                                   // We no longer store the input values as they should be exposed elsewhere
-                                   // pub values: Vec<AssignedValue<'v, F>>,
-                                   // pub max_len: usize,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct RlcTraceRef<'a, F: ScalarField> {
-    pub rlc_val: &'a AssignedValue<F>, // in SecondPhase
-    pub len: &'a AssignedValue<F>,     // everything else in FirstPhase
-}
-
-impl<'a, F: ScalarField> From<&'a RlcTrace<F>> for RlcTraceRef<'a, F> {
-    fn from(trace: &'a RlcTrace<F>) -> Self {
-        RlcTraceRef { rlc_val: &trace.rlc_val, len: &trace.len }
-    }
+    pub max_len: usize,
+    // We no longer store the input values as they should be exposed elsewhere
+    // pub values: Vec<AssignedValue<F>>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -105,6 +91,11 @@ pub struct RlcChip<F: ScalarField> {
     gamma: F,
 }
 
+/// Wrapper so we don't need to pass around two contexts separately. The pair consists of `(ctx_gate, ctx_rlc)` where
+/// * `ctx_gate` should be an `RLC_PHASE` context for use with `GateChip`.
+/// * `ctx_rlc` should be a context for use with `RlcChip`.
+pub(crate) type RlcContextPair<'a, F> = (&'a mut Context<F>, &'a mut Context<F>);
+
 impl<F: ScalarField> RlcChip<F> {
     pub fn new(gamma: F) -> Self {
         Self { gamma_pow_cached: RwLock::new(vec![]), gamma }
@@ -130,8 +121,7 @@ impl<F: ScalarField> RlcChip<F> {
     /// Assumes `0 <= len <= max_len`.
     pub fn compute_rlc(
         &self,
-        ctx_gate: &mut Context<F>,
-        ctx_rlc: &mut Context<F>,
+        (ctx_gate, ctx_rlc): RlcContextPair<F>,
         gate: &impl GateInstructions<F>,
         inputs: impl IntoIterator<Item = AssignedValue<F>>,
         len: AssignedValue<F>,
@@ -141,7 +131,7 @@ impl<F: ScalarField> RlcChip<F> {
         let len_minus_one = gate.sub(ctx_gate, len, Constant(F::one()));
         let idx = gate.select(ctx_gate, Constant(F::zero()), len_minus_one, is_zero);
 
-        let mut max_len = 0;
+        let mut max_len: usize = 0;
         let row_offset = ctx_rlc.advice.len() as isize;
         if let Some(first) = inputs.next() {
             max_len = 1;
@@ -155,7 +145,7 @@ impl<F: ScalarField> RlcChip<F> {
                 ctx_rlc.assign_region(rlc_vals, []);
             } else {
                 let rlc_vals = rlc_vals.collect_vec();
-                ctx_rlc.assign_region(rlc_vals, (0..2 * max_len - 2).step_by(2));
+                ctx_rlc.assign_region(rlc_vals, (0..2 * max_len as isize - 2).step_by(2));
             }
         }
 
@@ -165,21 +155,20 @@ impl<F: ScalarField> RlcChip<F> {
             gate.select_from_idx(
                 ctx_gate,
                 // TODO: optimize this with iterator on ctx_rlc.advice
-                (0..2 * max_len).step_by(2).map(|i| ctx_rlc.get(row_offset + i)),
+                (0..2 * max_len as isize).step_by(2).map(|i| ctx_rlc.get(row_offset + i)),
                 idx,
             )
         };
         // rlc_val = rlc_val * (1 - is_zero)
         let rlc_val = gate.mul_not(ctx_gate, is_zero, rlc_val);
 
-        RlcTrace { rlc_val, len }
+        RlcTrace { rlc_val, len, max_len }
     }
 
     /// Same as [`compute_rlc`] but now the input is of known fixed length.
     pub fn compute_rlc_fixed_len(
         &self,
-        ctx_gate: &mut Context<F>,
-        ctx_rlc: &mut Context<F>,
+        (ctx_gate, ctx_rlc): RlcContextPair<F>,
         inputs: impl IntoIterator<Item = AssignedValue<F>>,
     ) -> RlcFixedTrace<F> {
         let mut inputs = inputs.into_iter();
@@ -223,8 +212,7 @@ impl<F: ScalarField> RlcChip<F> {
     /// `ctx_gate` should be in later phase than `inputs`
     pub fn constrain_rlc_concat(
         &self,
-        ctx_gate: &mut Context<F>,
-        ctx_rlc: &mut Context<F>,
+        (ctx_gate, ctx_rlc): RlcContextPair<F>,
         gate: &impl GateInstructions<F>,
         inputs: impl IntoIterator<Item = (AssignedValue<F>, AssignedValue<F>, usize)>,
         (concat_rlc, concat_len): (&AssignedValue<F>, &AssignedValue<F>),
@@ -234,7 +222,8 @@ impl<F: ScalarField> RlcChip<F> {
         let (mut running_rlc, mut running_len, _) = inputs.next().unwrap();
         for (input, len, max_len) in inputs {
             running_len = gate.add(ctx_gate, running_len, len);
-            let gamma_pow = self.rlc_pow(ctx_gate, ctx_rlc, gate, len, bit_length(max_len as u64));
+            let gamma_pow =
+                self.rlc_pow((ctx_gate, ctx_rlc), gate, len, bit_length(max_len as u64));
             running_rlc = gate.mul_add(ctx_gate, running_rlc, gamma_pow, input);
         }
         ctx_gate.constrain_equal(&running_rlc, concat_rlc);
@@ -249,8 +238,7 @@ impl<F: ScalarField> RlcChip<F> {
     /// `ctx_gate` and `ctx_rlc` should be in later phase than `inputs`
     pub fn constrain_rlc_concat_var(
         &self,
-        ctx_gate: &mut Context<F>,
-        ctx_rlc: &mut Context<F>,
+        (ctx_gate, ctx_rlc): RlcContextPair<F>,
         gate: &impl GateInstructions<F>,
         inputs: impl IntoIterator<Item = (AssignedValue<F>, AssignedValue<F>, usize)>,
         (concat_rlc, concat_len): (&AssignedValue<F>, &AssignedValue<F>),
@@ -272,7 +260,8 @@ impl<F: ScalarField> RlcChip<F> {
         partial_len.push(running_len);
         for (input, len, max_len) in inputs {
             running_len = gate.add(ctx_gate, running_len, len);
-            let gamma_pow = self.rlc_pow(ctx_gate, ctx_rlc, gate, len, bit_length(max_len as u64));
+            let gamma_pow =
+                self.rlc_pow((ctx_gate, ctx_rlc), gate, len, bit_length(max_len as u64));
             running_rlc = gate.mul_add(ctx_gate, running_rlc, gamma_pow, input);
             partial_len.push(running_len);
             partial_rlc.push(running_rlc);
@@ -294,10 +283,8 @@ impl<F: ScalarField> RlcChip<F> {
     /// Updates `gamma_pow_cached` to contain assigned values for `gamma^{2^i}` for `i = 0,...,cache_bits - 1` where `gamma` is the challenge value
     pub fn load_rlc_cache(
         &self,
-        ctx_gate: &mut Context<F>,
-        ctx_rlc: &mut Context<F>,
+        (ctx_gate, ctx_rlc): RlcContextPair<F>,
         gate: &impl GateInstructions<F>,
-        gamma: F,
         cache_bits: usize,
     ) {
         if cache_bits <= self.gamma_pow_cached().len() {
@@ -305,7 +292,7 @@ impl<F: ScalarField> RlcChip<F> {
         }
         let mut gamma_pow_cached = self.gamma_pow_cached.write().unwrap();
         if gamma_pow_cached.is_empty() {
-            let gamma_assigned = self.load_gamma(ctx_rlc, gamma);
+            let gamma_assigned = self.load_gamma(ctx_rlc, *self.gamma());
             gamma_pow_cached.push(gamma_assigned);
         };
 
@@ -319,8 +306,7 @@ impl<F: ScalarField> RlcChip<F> {
     /// Computes `gamma^pow` where `gamma` is the challenge value.
     pub fn rlc_pow(
         &self,
-        ctx_gate: &mut Context<F>,
-        ctx_rlc: &mut Context<F>,
+        (ctx_gate, ctx_rlc): RlcContextPair<F>,
         gate: &impl GateInstructions<F>,
         pow: AssignedValue<F>,
         mut pow_bits: usize,
@@ -328,7 +314,7 @@ impl<F: ScalarField> RlcChip<F> {
         if pow_bits == 0 {
             pow_bits = 1;
         }
-        self.load_rlc_cache(ctx_gate, ctx_rlc, gate, *self.gamma(), pow_bits);
+        self.load_rlc_cache((ctx_gate, ctx_rlc), gate, pow_bits);
 
         let bits = gate.num_to_bits(ctx_gate, pow, pow_bits);
         let mut out = None;
@@ -345,6 +331,38 @@ impl<F: ScalarField> RlcChip<F> {
     }
 }
 
+// to deal with selecting / comparing RLC of variable length strings
+
+#[derive(Clone, Debug)]
+pub struct RlcVar<F: ScalarField> {
+    pub rlc_val: AssignedValue<F>,
+    pub len: AssignedValue<F>,
+}
+
+impl<F: ScalarField> From<RlcTrace<F>> for RlcVar<F> {
+    fn from(trace: RlcTrace<F>) -> Self {
+        RlcVar { rlc_val: trace.rlc_val, len: trace.len }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct RlcVarPtr<'a, F: ScalarField> {
+    pub rlc_val: &'a AssignedValue<F>,
+    pub len: &'a AssignedValue<F>,
+}
+
+impl<'a, F: ScalarField> From<&'a RlcTrace<F>> for RlcVarPtr<'a, F> {
+    fn from(trace: &'a RlcTrace<F>) -> Self {
+        RlcVarPtr { rlc_val: &trace.rlc_val, len: &trace.len }
+    }
+}
+
+impl<'a, F: ScalarField> From<&'a RlcVar<F>> for RlcVarPtr<'a, F> {
+    fn from(trace: &'a RlcVar<F>) -> RlcVarPtr<'a, F> {
+        RlcVarPtr { rlc_val: &trace.rlc_val, len: &trace.len }
+    }
+}
+
 /// Define the dynamic RLC: `RLC(a, l) = \sum_{i = 0}^{l - 1} a_i r^{l - 1 - i}`
 /// where `a` is a variable length vector of length `l`.
 ///
@@ -353,9 +371,11 @@ impl<F: ScalarField> RlcChip<F> {
 pub fn rlc_is_equal<F: ScalarField>(
     ctx_gate: &mut Context<F>,
     gate: &impl GateInstructions<F>,
-    a: RlcTrace<F>,
-    b: RlcTrace<F>,
+    a: impl Into<RlcVar<F>>,
+    b: impl Into<RlcVar<F>>,
 ) -> AssignedValue<F> {
+    let a = a.into();
+    let b = b.into();
     let len_is_equal = gate.is_equal(ctx_gate, a.len, b.len);
     let rlc_is_equal = gate.is_equal(ctx_gate, a.rlc_val, b.rlc_val);
     gate.and(ctx_gate, len_is_equal, rlc_is_equal)
@@ -363,8 +383,8 @@ pub fn rlc_is_equal<F: ScalarField>(
 
 pub fn rlc_constrain_equal<'a, F: ScalarField>(
     ctx: &mut Context<F>,
-    a: impl Into<RlcTraceRef<'a, F>>,
-    b: impl Into<RlcTraceRef<'a, F>>,
+    a: impl Into<RlcVarPtr<'a, F>>,
+    b: impl Into<RlcVarPtr<'a, F>>,
 ) {
     let a = a.into();
     let b = b.into();
@@ -375,23 +395,34 @@ pub fn rlc_constrain_equal<'a, F: ScalarField>(
 pub fn rlc_select<F: ScalarField>(
     ctx_gate: &mut Context<F>,
     gate: &impl GateInstructions<F>,
-    a: RlcTrace<F>,
-    b: RlcTrace<F>,
+    a: impl Into<RlcVar<F>>,
+    b: impl Into<RlcVar<F>>,
     condition: AssignedValue<F>,
-) -> RlcTrace<F> {
+) -> RlcVar<F> {
+    let a = a.into();
+    let b = b.into();
     let len = gate.select(ctx_gate, a.len, b.len, condition);
     let rlc_val = gate.select(ctx_gate, a.rlc_val, b.rlc_val, condition);
-    RlcTrace { rlc_val, len }
+    RlcVar { rlc_val, len }
 }
 
-pub fn rlc_select_from_idx<F: ScalarField>(
+pub fn rlc_select_from_idx<F: ScalarField, R>(
     ctx_gate: &mut Context<F>,
     gate: &impl GateInstructions<F>,
-    a: impl IntoIterator<Item = RlcTrace<F>>,
+    a: impl IntoIterator<Item = R>,
     idx: AssignedValue<F>,
-) -> RlcTrace<F> {
-    let (a_len, a_rlc): (Vec<_>, Vec<_>) = a.into_iter().map(|a| (a.len, a.rlc_val)).unzip();
+) -> RlcVar<F>
+where
+    R: Into<RlcVar<F>>,
+{
+    let (a_len, a_rlc): (Vec<_>, Vec<_>) = a
+        .into_iter()
+        .map(|a| {
+            let a = a.into();
+            (a.len, a.rlc_val)
+        })
+        .unzip();
     let len = gate.select_from_idx(ctx_gate, a_len, idx);
     let rlc_val = gate.select_from_idx(ctx_gate, a_rlc, idx);
-    RlcTrace { rlc_val, len }
+    RlcVar { rlc_val, len }
 }
