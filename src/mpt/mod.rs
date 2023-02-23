@@ -187,40 +187,6 @@ lazy_static! {
 }
 
 #[derive(Clone, Debug)]
-pub struct MPTConfig<F: Field> {
-    pub rlp: RlpConfig<F>,
-    pub keccak: KeccakConfig<F>,
-}
-
-impl<F: Field> MPTConfig<F> {
-    pub fn configure(
-        meta: &mut ConstraintSystem<F>,
-        params: EthConfigParams,
-        context_id: usize,
-    ) -> Self {
-        let degree = params.degree;
-        let mut rlp = RlpConfig::configure(
-            meta,
-            params.num_rlc_columns,
-            &params.num_range_advice,
-            &params.num_lookup_advice,
-            params.num_fixed,
-            8, // always want 8 to range check bytes
-            context_id,
-            degree as usize,
-        );
-        set_var("KECCAK_DEGREE", degree.to_string());
-        set_var("KECCAK_ROWS", params.keccak_rows_per_round.to_string());
-        set_var("UNUSABLE_ROWS", params.unusable_rows.to_string());
-        let keccak = KeccakConfig::new(meta, rlp.rlc.gamma);
-        #[cfg(feature = "display")]
-        println!("Unusable rows: {}", meta.minimum_rows());
-        rlp.range.gate.max_rows = (1 << degree) - meta.minimum_rows();
-        Self { rlp, keccak }
-    }
-}
-
-#[derive(Clone, Debug)]
 pub struct MPTChip<'v, F: Field> {
     pub rlp: RlpChip<'v, F>,
     pub keccak: KeccakChip<'v, F>,

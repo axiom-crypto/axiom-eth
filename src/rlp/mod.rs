@@ -185,13 +185,12 @@ impl<F: ScalarField> RlpConfig<F> {
 
 #[derive(Debug)]
 pub struct RlpChip<'range, F: ScalarField> {
-    pub rlc: Option<RlcChip<F>>, // We use this chip in FirstPhase when there is no RlcChip
+    pub rlc: Option<&'range RlcChip<F>>, // We use this chip in FirstPhase when there is no RlcChip
     pub range: &'range RangeChip<F>,
 }
 
 impl<'range, F: ScalarField> RlpChip<'range, F> {
-    pub fn new(range: &'range RangeChip<F>, gamma: Option<F>) -> Self {
-        let rlc = gamma.map(RlcChip::new);
+    pub fn new(range: &'range RangeChip<F>, rlc: Option<&'range RlcChip<F>>) -> Self {
         Self { rlc, range }
     }
 

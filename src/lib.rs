@@ -2,7 +2,7 @@
 #![feature(trait_alias)]
 
 //pub mod block_header;
-// pub mod keccak;
+pub mod keccak;
 //pub mod mpt;
 pub mod rlp;
 //pub mod storage;
@@ -11,11 +11,12 @@ pub mod util;
 #[cfg(feature = "providers")]
 pub mod providers;
 
-/*
+use std::env::set_var;
+
 use crate::rlp::{
     rlc::{RlcChip, RlcConfig},
     RlpChip, RlpConfig,
-};*/
+};
 use halo2_base::{
     gates::{flex_gate::FlexGateConfig, range::RangeConfig},
     halo2_proofs::{
@@ -25,9 +26,9 @@ use halo2_base::{
     },
     Context,
 };
-// use keccak::KeccakChip;
+use keccak::KeccakChip;
 // use mpt::{MPTChip, MPTConfig};
-// use util::EthConfigParams;
+use util::EthConfigParams;
 pub use zkevm_keccak::util::eth_types::Field;
 use zkevm_keccak::KeccakConfig;
 
@@ -44,6 +45,35 @@ impl std::fmt::Display for Network {
             Network::Mainnet => write!(f, "mainnet"),
             Network::Goerli => write!(f, "goerli"),
         }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct MPTConfig<F: Field> {
+    pub rlp: RlpConfig<F>,
+    pub keccak: KeccakConfig<F>,
+}
+
+impl<F: Field> MPTConfig<F> {
+    pub fn configure(meta: &mut ConstraintSystem<F>, params: EthConfigParams) -> Self {
+        let degree = params.degree;
+        let mut rlp = RlpConfig::configure(
+            meta,
+            params.num_rlc_columns,
+            &params.num_range_advice,
+            &params.num_lookup_advice,
+            params.num_fixed,
+            8, // always want 8 to range check bytes
+            degree as usize,
+        );
+        set_var("KECCAK_DEGREE", degree.to_string());
+        set_var("KECCAK_ROWS", params.keccak_rows_per_round.to_string());
+        let keccak = KeccakConfig::new(meta, rlp.rlc.gamma);
+        set_var("UNUSABLE_ROWS", meta.minimum_rows().to_string());
+        #[cfg(feature = "display")]
+        println!("Unusable rows: {}", meta.minimum_rows());
+        rlp.range.gate.max_rows = (1 << degree) - meta.minimum_rows();
+        Self { rlp, keccak }
     }
 }
 

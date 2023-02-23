@@ -15,6 +15,7 @@ use std::{
     sync::{RwLock, RwLockReadGuard},
 };
 
+pub const FIRST_PHASE: usize = 0;
 pub const RLC_PHASE: usize = 1;
 
 #[derive(Clone, Copy, Debug)]
@@ -168,7 +169,7 @@ impl<F: ScalarField> RlcChip<F> {
     /// Same as [`compute_rlc`] but now the input is of known fixed length.
     pub fn compute_rlc_fixed_len(
         &self,
-        (ctx_gate, ctx_rlc): RlcContextPair<F>,
+        ctx_rlc: &mut Context<F>,
         inputs: impl IntoIterator<Item = AssignedValue<F>>,
     ) -> RlcFixedTrace<F> {
         let mut inputs = inputs.into_iter();
@@ -188,7 +189,7 @@ impl<F: ScalarField> RlcChip<F> {
             };
             RlcFixedTrace { rlc_val, len }
         } else {
-            RlcFixedTrace { rlc_val: ctx_gate.load_zero(), len: 0 }
+            RlcFixedTrace { rlc_val: ctx_rlc.load_zero(), len: 0 }
         }
     }
 
