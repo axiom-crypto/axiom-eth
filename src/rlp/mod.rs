@@ -183,7 +183,7 @@ impl<F: ScalarField> RlpConfig<F> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct RlpChip<'range, F: ScalarField> {
     pub rlc: Option<&'range RlcChip<F>>, // We use this chip in FirstPhase when there is no RlcChip
     pub range: &'range RangeChip<F>,

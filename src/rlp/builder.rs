@@ -1,5 +1,4 @@
 use std::{
-    cell::RefCell,
     collections::{HashMap, HashSet},
     iter, mem,
 };
@@ -11,20 +10,17 @@ use halo2_base::{
             KeygenAssignments as GateKeygenAssignments, MultiPhaseThreadBreakPoints,
             ThreadBreakPoints,
         },
-        flex_gate::{FlexGateConfig, GateStrategy},
+        flex_gate::FlexGateConfig,
     },
     halo2_proofs::{
-        circuit::{self, Layouter, Region, SimpleFloorPlanner, Value},
-        plonk::{Advice, Circuit, Column, ConstraintSystem, Error, Selector},
+        circuit::{self, Region, Value},
+        plonk::{Advice, Column, Selector},
     },
     utils::ScalarField,
-    Context, SKIP_FIRST_PASS,
+    Context,
 };
 
-use super::{
-    rlc::{RlcChip, RlcConfig, RlcContextPair, FIRST_PHASE, RLC_PHASE},
-    RlcGateConfig, RlpConfig,
-};
+use super::rlc::{RlcChip, RlcConfig, RlcContextPair, FIRST_PHASE, RLC_PHASE};
 use crate::util::EthConfigParams;
 
 #[derive(Clone, Debug, Default)]
@@ -140,7 +136,7 @@ impl<F: ScalarField> RlcThreadBuilder<F> {
         #[cfg(feature = "display")]
         {
             println!("RLC Chip | {total_rlc_advice} advice cells");
-            log::info!("Auto-calculated config params:\n {params:#?}");
+            log::info!("RlcThreadBuilder auto-calculated config params:\n {params:#?}");
         }
         std::env::set_var("ETH_CONFIG_PARAMS", serde_json::to_string(&params).unwrap());
         params
@@ -162,6 +158,9 @@ impl<F: ScalarField> RlcThreadBuilder<F> {
         }: KeygenAssignments<F>,
     ) -> KeygenAssignments<F> {
         assert!(!self.witness_gen_only());
+        if rlc.basic_gates.is_empty() {
+            return KeygenAssignments { assigned_advices, assigned_constants, break_points };
+        }
         let use_unknown = self.use_unknown();
         let max_rows = gate.max_rows;
 
@@ -315,6 +314,7 @@ pub fn assign_prover_phase0<F: ScalarField>(
 }
 
 // re-usable function for phase 1 synthesize in prover mode
+#[allow(clippy::too_many_arguments)]
 pub fn assign_prover_phase1<F: ScalarField>(
     region: &mut Region<F>,
     gate: &FlexGateConfig<F>,

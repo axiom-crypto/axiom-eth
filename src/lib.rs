@@ -3,7 +3,7 @@
 
 //pub mod block_header;
 pub mod keccak;
-//pub mod mpt;
+pub mod mpt;
 pub mod rlp;
 //pub mod storage;
 pub mod util;
@@ -27,7 +27,7 @@ use halo2_base::{
     Context,
 };
 use keccak::KeccakChip;
-// use mpt::{MPTChip, MPTConfig};
+use mpt::MPTChip;
 use util::EthConfigParams;
 pub use zkevm_keccak::util::eth_types::Field;
 use zkevm_keccak::KeccakConfig;

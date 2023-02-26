@@ -68,8 +68,8 @@ fn test_keccak_circuit<F: Field>(
     }
     let circuit = KeccakCircuitBuilder::new(
         builder,
-        keccak,
-        range,
+        Arc::new(Mutex::new(keccak)),
+        Arc::new(range),
         |_: &mut RlcThreadBuilder<F>, _: &RlcChip<F>, _: (FixedLenRLCs<F>, VarLenRLCs<F>)| {},
     );
     if !prover {

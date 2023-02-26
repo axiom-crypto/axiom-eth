@@ -199,9 +199,9 @@ impl<F: ScalarField> RlcChip<F> {
     /// * Prop: For sequences b^0, \ldots, b^{k-1} with l(b^i) = l_i and
     ///     RLC(a, l) = RLC(b^0, l_0) * r^{l_1 + ... + l_{k - 1}}
     ///                 + RLC(b^1, l_1) * r^{l_2 + ... + l_{k - 1}}
-    ///                 ... + RLC(b^k, l_k), and
+    ///                 ... + RLC(b^{k - 1}, l_{k - 1}), and
     ///     l = l_0 + ... + l_{k - 1},
-    ///   then a = b^1 || ... || b^k.
+    ///   then a = b^0 || ... || b^{k - 1}.
     /// * Pf: View both sides as polynomials in r.
     //
     /// Assumes:
@@ -334,7 +334,7 @@ impl<F: ScalarField> RlcChip<F> {
 
 // to deal with selecting / comparing RLC of variable length strings
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct RlcVar<F: ScalarField> {
     pub rlc_val: AssignedValue<F>,
     pub len: AssignedValue<F>,
@@ -346,7 +346,7 @@ impl<F: ScalarField> From<RlcTrace<F>> for RlcVar<F> {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct RlcVarPtr<'a, F: ScalarField> {
     pub rlc_val: &'a AssignedValue<F>,
     pub len: &'a AssignedValue<F>,

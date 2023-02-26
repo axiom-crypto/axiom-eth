@@ -11,7 +11,7 @@ use halo2_base::{
 };
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
-use std::{env::var, fs::File, iter};
+use std::{env::var, fs::File, iter, path::Path};
 
 pub(crate) const NUM_BYTES_IN_U128: usize = 16;
 
@@ -31,6 +31,10 @@ pub struct EthConfigParams {
 }
 
 impl EthConfigParams {
+    pub fn from_path<P: AsRef<Path>>(path: P) -> Self {
+        serde_json::from_reader(File::open(&path).expect("path does not exist")).unwrap()
+    }
+
     pub fn get_header() -> Self {
         let path =
             var("BLOCK_HEADER_CONFIG").unwrap_or_else(|_| "configs/block_header.json".to_string());
