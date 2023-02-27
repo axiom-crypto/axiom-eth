@@ -99,7 +99,7 @@ pub struct RlpFieldWitness<F: ScalarField> {
 
     pub field_len: AssignedValue<F>,
     pub field_cells: Vec<AssignedValue<F>>,
-    max_field_len: usize,
+    pub max_field_len: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -368,6 +368,8 @@ impl<'range, F: ScalarField> RlpChip<'range, F> {
     }
 
     /// Use RLC to constrain the parsed RLP field witness. This MUST be done in `SecondPhase`.
+    ///
+    /// WARNING: this is not thread-safe if `load_rlc_cache` needs to be updated.
     pub fn decompose_rlp_field_phase1(
         &self,
         (ctx_gate, ctx_rlc): RlcContextPair<F>,
@@ -385,12 +387,15 @@ impl<'range, F: ScalarField> RlpChip<'range, F> {
             max_field_len,
         } = witness;
         let rlc = self.rlc();
+
+        rlc.load_rlc_cache((ctx_gate, ctx_rlc), self.gate(), bit_length(rlp_field.len() as u64));
+
         let len_rlc = rlc.compute_rlc((ctx_gate, ctx_rlc), self.gate(), len_cells, len_len);
         let field_rlc = rlc.compute_rlc((ctx_gate, ctx_rlc), self.gate(), field_cells, field_len);
         let rlp_field_rlc = rlc.compute_rlc((ctx_gate, ctx_rlc), self.gate(), rlp_field, rlp_len);
 
         rlc.constrain_rlc_concat(
-            (ctx_gate, ctx_rlc),
+            ctx_gate,
             self.gate(),
             [
                 (prefix, prefix_len, 1),
@@ -549,6 +554,8 @@ impl<'range, F: ScalarField> RlpChip<'range, F> {
     /// Use RLC to constrain the parsed RLP array witness. This MUST be done in `SecondPhase`.
     ///
     /// We do not make any guarantees on the values in the original RLP sequence beyond the parsed length for the total payload
+    ///
+    /// WARNING: this is not thread-safe if `load_rlc_cache` needs to be updated
     pub fn decompose_rlp_array_phase1(
         &self,
         (ctx_gate, ctx_rlc): RlcContextPair<F>,
@@ -582,6 +589,8 @@ impl<'range, F: ScalarField> RlpChip<'range, F> {
             });
         }
 
+        rlc.load_rlc_cache((ctx_gate, ctx_rlc), self.gate(), bit_length(rlp_array.len() as u64));
+
         let prefix = rlp_array[0];
         let one = ctx_gate.load_constant(F::one());
         let rlp_rlc = rlc.compute_rlc((ctx_gate, ctx_rlc), self.gate(), rlp_array, rlp_len);
@@ -596,12 +605,7 @@ impl<'range, F: ScalarField> RlpChip<'range, F> {
                 ]
             }));
 
-        rlc.constrain_rlc_concat(
-            (ctx_gate, ctx_rlc),
-            self.gate(),
-            inputs,
-            (&rlp_rlc.rlc_val, &rlp_rlc.len),
-        );
+        rlc.constrain_rlc_concat(ctx_gate, self.gate(), inputs, (&rlp_rlc.rlc_val, &rlp_rlc.len));
 
         // We do not constrain the witness values of trailing elements in `rlp_array` beyond `rlp_len`. To do so, uncomment below:
         /*

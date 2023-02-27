@@ -213,7 +213,7 @@ impl<F: ScalarField> RlcChip<F> {
     /// `ctx_gate` should be in later phase than `inputs`
     pub fn constrain_rlc_concat(
         &self,
-        (ctx_gate, ctx_rlc): RlcContextPair<F>,
+        ctx_gate: &mut Context<F>, // ctx_gate in SecondPhase
         gate: &impl GateInstructions<F>,
         inputs: impl IntoIterator<Item = (AssignedValue<F>, AssignedValue<F>, usize)>,
         (concat_rlc, concat_len): (&AssignedValue<F>, &AssignedValue<F>),
@@ -223,8 +223,7 @@ impl<F: ScalarField> RlcChip<F> {
         let (mut running_rlc, mut running_len, _) = inputs.next().unwrap();
         for (input, len, max_len) in inputs {
             running_len = gate.add(ctx_gate, running_len, len);
-            let gamma_pow =
-                self.rlc_pow((ctx_gate, ctx_rlc), gate, len, bit_length(max_len as u64));
+            let gamma_pow = self.rlc_pow(ctx_gate, gate, len, bit_length(max_len as u64));
             running_rlc = gate.mul_add(ctx_gate, running_rlc, gamma_pow, input);
         }
         ctx_gate.constrain_equal(&running_rlc, concat_rlc);
@@ -239,7 +238,7 @@ impl<F: ScalarField> RlcChip<F> {
     /// `ctx_gate` and `ctx_rlc` should be in later phase than `inputs`
     pub fn constrain_rlc_concat_var(
         &self,
-        (ctx_gate, ctx_rlc): RlcContextPair<F>,
+        ctx_gate: &mut Context<F>,
         gate: &impl GateInstructions<F>,
         inputs: impl IntoIterator<Item = (AssignedValue<F>, AssignedValue<F>, usize)>,
         (concat_rlc, concat_len): (&AssignedValue<F>, &AssignedValue<F>),
@@ -261,8 +260,7 @@ impl<F: ScalarField> RlcChip<F> {
         partial_len.push(running_len);
         for (input, len, max_len) in inputs {
             running_len = gate.add(ctx_gate, running_len, len);
-            let gamma_pow =
-                self.rlc_pow((ctx_gate, ctx_rlc), gate, len, bit_length(max_len as u64));
+            let gamma_pow = self.rlc_pow(ctx_gate, gate, len, bit_length(max_len as u64));
             running_rlc = gate.mul_add(ctx_gate, running_rlc, gamma_pow, input);
             partial_len.push(running_len);
             partial_rlc.push(running_rlc);
@@ -282,6 +280,8 @@ impl<F: ScalarField> RlcChip<F> {
     }
 
     /// Updates `gamma_pow_cached` to contain assigned values for `gamma^{2^i}` for `i = 0,...,cache_bits - 1` where `gamma` is the challenge value
+    ///
+    /// WARNING: this must be called in a deterministic way. It is NOT thread-safe, even though the compiler thinks it is.
     pub fn load_rlc_cache(
         &self,
         (ctx_gate, ctx_rlc): RlcContextPair<F>,
@@ -291,6 +291,11 @@ impl<F: ScalarField> RlcChip<F> {
         if cache_bits <= self.gamma_pow_cached().len() {
             return;
         }
+        log::debug!(
+            "Loading RLC cache ({} bits) with existing {} bits",
+            cache_bits,
+            self.gamma_pow_cached().len()
+        );
         let mut gamma_pow_cached = self.gamma_pow_cached.write().unwrap();
         if gamma_pow_cached.is_empty() {
             let gamma_assigned = self.load_gamma(ctx_rlc, *self.gamma());
@@ -307,7 +312,7 @@ impl<F: ScalarField> RlcChip<F> {
     /// Computes `gamma^pow` where `gamma` is the challenge value.
     pub fn rlc_pow(
         &self,
-        (ctx_gate, ctx_rlc): RlcContextPair<F>,
+        ctx_gate: &mut Context<F>, // ctx_gate in SecondPhase
         gate: &impl GateInstructions<F>,
         pow: AssignedValue<F>,
         mut pow_bits: usize,
@@ -315,7 +320,7 @@ impl<F: ScalarField> RlcChip<F> {
         if pow_bits == 0 {
             pow_bits = 1;
         }
-        self.load_rlc_cache((ctx_gate, ctx_rlc), gate, pow_bits);
+        assert!(pow_bits <= self.gamma_pow_cached().len());
 
         let bits = gate.num_to_bits(ctx_gate, pow, pow_bits);
         let mut out = None;

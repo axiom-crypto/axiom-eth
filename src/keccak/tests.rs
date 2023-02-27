@@ -46,7 +46,7 @@ fn test_keccak_circuit<F: Field>(
 ) -> KeccakCircuitBuilder<F, impl FnSynthesize<F>> {
     let prover = builder.witness_gen_only();
     let range = RangeChip::default(8);
-    let mut keccak = KeccakChip::default();
+    let keccak = SharedKeccakChip::default();
     let ctx = builder.gate_builder.main(0);
     let mut rng = StdRng::from_seed([0u8; 32]);
     for (_idx, input) in inputs.into_iter().enumerate() {
@@ -61,16 +61,17 @@ fn test_keccak_circuit<F: Field>(
         let len = ctx.load_witness(F::from(len as u64));
 
         let _hash = if var_len {
-            keccak.keccak_var_len(ctx, &range, bytes_assigned, Some(bytes), len, 0)
+            keccak.borrow_mut().keccak_var_len(ctx, &range, bytes_assigned, Some(bytes), len, 0)
         } else {
-            keccak.keccak_fixed_len(ctx, &range.gate, bytes_assigned, Some(bytes))
+            keccak.borrow_mut().keccak_fixed_len(ctx, &range.gate, bytes_assigned, Some(bytes))
         };
     }
     let circuit = KeccakCircuitBuilder::new(
         builder,
-        Arc::new(Mutex::new(keccak)),
-        Arc::new(range),
-        |_: &mut RlcThreadBuilder<F>, _: &RlcChip<F>, _: (FixedLenRLCs<F>, VarLenRLCs<F>)| {},
+        keccak,
+        range,
+        None,
+        |_: &mut RlcThreadBuilder<F>, _: RlpChip<F>, _: (FixedLenRLCs<F>, VarLenRLCs<F>)| {},
     );
     if !prover {
         let unusable_rows =

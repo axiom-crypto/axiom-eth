@@ -1,10 +1,8 @@
 use super::*;
 use crate::{
     halo2_proofs::{
-        circuit::{Layouter, SimpleFloorPlanner},
         dev::MockProver,
         halo2curves::bn256::{Bn256, Fr, G1Affine},
-        plonk::{Circuit, ConstraintSystem, Error},
         poly::commitment::ParamsProver,
         poly::kzg::{
             commitment::KZGCommitmentScheme,
@@ -22,18 +20,15 @@ use crate::{
 use ark_std::{end_timer, start_timer};
 use halo2_base::{
     halo2_proofs::plonk::{create_proof, keygen_pk, keygen_vk, verify_proof},
-    utils::{fs::gen_srs, ScalarField},
-    Context, SKIP_FIRST_PASS,
+    utils::fs::gen_srs,
 };
 use hex::FromHex;
 use rand_core::OsRng;
 use std::{
+    cell::RefCell,
     env::{set_var, var},
     fs::File,
     io::{BufReader, Write},
-    marker::PhantomData,
-    rc::Rc,
-    sync::Arc,
 };
 use test_log::test;
 
@@ -43,13 +38,14 @@ fn test_mpt_circuit<F: Field>(
     inputs: MPTFixedKeyInput,
 ) -> KeccakCircuitBuilder<F, impl FnSynthesize<F>> {
     let prover = builder.witness_gen_only();
-    let range = Arc::new(RangeChip::default(8));
-    let keccak = SharedKeccakChip::default();
-    let mpt = MPTChip::new(RlpChip::new(&range, None), Arc::clone(&keccak));
+    let range = RangeChip::default(8);
+    let mut keccak = KeccakChip::default();
+    let mpt = EthChip::new(RlpChip::new(&range, None), None);
     let ctx = builder.gate_builder.main(0);
     let mpt_proof = inputs.assign(ctx);
     let mpt_witness = mpt.parse_mpt_inclusion_fixed_key_phase0(
         ctx,
+        &mut keccak,
         mpt_proof,
         32,
         inputs.value_max_byte_len,
@@ -58,13 +54,14 @@ fn test_mpt_circuit<F: Field>(
 
     let circuit = KeccakCircuitBuilder::new(
         builder,
-        mpt.keccak,
-        Arc::clone(&range),
+        RefCell::new(keccak),
+        range,
+        None,
         move |builder: &mut RlcThreadBuilder<F>,
-              rlc: &RlcChip<F>,
+              rlp: RlpChip<F>,
               keccak_rlcs: (FixedLenRLCs<F>, VarLenRLCs<F>)| {
             // hard to tell rust that &range lives long enough, so just remake the MPTChip
-            let mut mpt = MPTChip::new(RlpChip::new(&range, Some(rlc)), keccak);
+            let mut mpt = EthChip::new(rlp, None);
             mpt.keccak_rlcs = Some(keccak_rlcs);
             let (ctx_gate, ctx_rlc) = builder.rlc_ctx_pair();
             mpt.parse_mpt_inclusion_fixed_key_phase1((ctx_gate, ctx_rlc), mpt_witness);
@@ -154,10 +151,7 @@ fn bench_mpt_inclusion_fixed() -> Result<(), Box<dyn std::error::Error>> {
         // create a proof
         let proof_time = start_timer!(|| "Create proof SHPLONK");
         let circuit = test_mpt_circuit(k, RlcThreadBuilder::<Fr>::prover(), default_input());
-        assert_eq!(
-            circuit.keccak.lock().unwrap().num_rows_per_round,
-            bench_params.keccak_rows_per_round
-        );
+        assert_eq!(circuit.keccak.borrow().num_rows_per_round, bench_params.keccak_rows_per_round);
         *circuit.break_points.borrow_mut() = break_points;
         let mut transcript = Blake2bWrite::<_, _, Challenge255<_>>::init(vec![]);
         create_proof::<

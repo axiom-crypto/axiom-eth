@@ -15,10 +15,11 @@ use crate::{
     halo2_proofs::circuit::Region,
     rlp::{
         builder::{
-            assign_prover_phase0, assign_prover_phase1, assign_threads_rlc, KeygenAssignments,
-            RlcThreadBreakPoints, RlcThreadBuilder,
+            assign_prover_phase0, assign_prover_phase1, KeygenAssignments, RlcThreadBreakPoints,
+            RlcThreadBuilder,
         },
         rlc::{RlcChip, RlcFixedTrace, RlcTrace, RLC_PHASE},
+        RlpChip,
     },
     util::EthConfigParams,
     MPTConfig,
@@ -38,13 +39,7 @@ use halo2_base::{
 };
 use itertools::Itertools;
 use rayon::prelude::*;
-use std::{
-    cell::RefCell,
-    collections::HashMap,
-    env::set_var,
-    iter, mem,
-    sync::{Arc, Mutex},
-};
+use std::{cell::RefCell, collections::HashMap, env::set_var, iter, mem};
 pub(crate) use zkevm_keccak::KeccakConfig;
 use zkevm_keccak::{
     keccak_packed_multi::{
@@ -91,8 +86,7 @@ pub struct KeccakVarLenQuery<F: Field> {
     pub output_assigned: Vec<AssignedValue<F>>,
 }
 
-// KeccakChip is shared with MPTChip, which we want to be thread-safe for parallelism
-pub(crate) type SharedKeccakChip<F> = Arc<Mutex<KeccakChip<F>>>;
+pub(crate) type SharedKeccakChip<F> = RefCell<KeccakChip<F>>;
 
 /// `KeccakChip` plays the role both of the chip and something like a `KeccakThreadBuilder` in that it keeps a
 /// list of the keccak queries that need to be linked with the external zkEVM keccak chip.
@@ -638,7 +632,7 @@ pub(crate) fn rows_per_round(max_rows: usize, num_keccak_f: usize) -> usize {
 
 /// We need a more custom synthesize function to work with the outputs of keccak RLCs.
 pub trait FnSynthesize<F> =
-    FnOnce(&mut RlcThreadBuilder<F>, &RlcChip<F>, (FixedLenRLCs<F>, VarLenRLCs<F>)) + Clone;
+    FnOnce(&mut RlcThreadBuilder<F>, RlpChip<F>, (FixedLenRLCs<F>, VarLenRLCs<F>)) + Clone;
 
 pub struct KeccakCircuitBuilder<F: Field, FnPhase1>
 where
@@ -648,7 +642,7 @@ where
     pub break_points: RefCell<RlcThreadBreakPoints>,
     pub synthesize_phase1: RefCell<Option<FnPhase1>>,
     pub keccak: SharedKeccakChip<F>,
-    pub range: Arc<RangeChip<F>>,
+    pub range: RangeChip<F>,
 }
 
 impl<F: Field, FnPhase1> KeccakCircuitBuilder<F, FnPhase1>
@@ -658,29 +652,13 @@ where
     pub fn new(
         builder: RlcThreadBuilder<F>,
         keccak: SharedKeccakChip<F>,
-        range: Arc<RangeChip<F>>,
+        range: RangeChip<F>,
+        break_points: Option<RlcThreadBreakPoints>,
         synthesize_phase1: FnPhase1,
     ) -> Self {
         Self {
             builder: RefCell::new(builder),
-            break_points: RefCell::new(RlcThreadBreakPoints::default()),
-            synthesize_phase1: RefCell::new(Some(synthesize_phase1)),
-            keccak,
-            range,
-        }
-    }
-
-    pub fn prover(
-        builder: RlcThreadBuilder<F>,
-        keccak: SharedKeccakChip<F>,
-        range: Arc<RangeChip<F>>,
-        break_points: RlcThreadBreakPoints,
-        synthesize_phase1: FnPhase1,
-    ) -> Self {
-        assert!(builder.witness_gen_only());
-        Self {
-            builder: RefCell::new(builder),
-            break_points: RefCell::new(break_points),
+            break_points: RefCell::new(break_points.unwrap_or_default()),
             synthesize_phase1: RefCell::new(Some(synthesize_phase1)),
             keccak,
             range,
@@ -688,10 +666,15 @@ where
     }
 
     /// Does a dry run of multi-phase synthesize to calculate optimal configuration parameters
+    ///
+    /// Beware: the `KECCAK_ROWS` is calculated based on the `minimum_rows = UNUSABLE_ROWS`,
+    /// however at configuration time the `minimum_rows` will depend on `KECCAK_ROWS`.
+    /// If you then reset `minimum_rows` to this smaller number, it might auto-configure
+    /// to a higher `KECCAK_ROWS`, which now requires higher `minimum_rows`...
     pub fn config(&self, k: usize, minimum_rows: Option<usize>) -> EthConfigParams {
         // clone everything so we don't alter the circuit in any way for later calls
         let mut builder = self.builder.borrow().clone();
-        let mut keccak = self.keccak.lock().unwrap().clone();
+        let mut keccak = self.keccak.borrow().clone();
         let optimal_rows_per_round =
             rows_per_round((1 << k) - minimum_rows.unwrap_or(0), keccak.capacity());
         // we don't want to actually call `keccak.assign_phase{0,1}` so we fake the output
@@ -704,6 +687,7 @@ where
         ];
         let table_output_rlcs = table_input_rlcs.clone();
         let rlc_chip = RlcChip::new(F::zero());
+        let rlp_chip = RlpChip::new(&self.range, Some(&rlc_chip));
         let keccak_rlcs = keccak.process_phase1(
             &mut builder,
             &rlc_chip,
@@ -712,10 +696,10 @@ where
             table_output_rlcs,
         );
         let f = self.synthesize_phase1.borrow().clone().expect("synthesize_phase1 should exist");
-        f(&mut builder, &rlc_chip, keccak_rlcs);
+        f(&mut builder, rlp_chip, keccak_rlcs);
         let mut params = builder.config(k, minimum_rows);
         params.keccak_rows_per_round = std::cmp::min(optimal_rows_per_round, 50); // empirically more than 50 rows per round makes the rotation offsets too large
-        self.keccak.lock().unwrap().num_rows_per_round = params.keccak_rows_per_round;
+        self.keccak.borrow_mut().num_rows_per_round = params.keccak_rows_per_round;
         #[cfg(feature = "display")]
         log::info!("KeccakCircuitBuilder auto-calculated config params: {:#?}", params);
         set_var("ETH_CONFIG_PARAMS", serde_json::to_string(&params).unwrap());
@@ -731,6 +715,9 @@ where
         config: &MPTConfig<F>,
         layouter: &mut impl Layouter<F>,
     ) -> HashMap<(usize, usize), (circuit::Cell, usize)> {
+        config.rlp.range.load_lookup_table(layouter).expect("load range lookup table");
+        config.keccak.load_aux_tables(layouter).expect("load keccak lookup tables");
+
         let mut first_pass = SKIP_FIRST_PASS;
         #[cfg(feature = "halo2-axiom")]
         let witness_gen_only = self.builder.borrow().witness_gen_only();
@@ -756,7 +743,7 @@ where
                     }
                     if !witness_gen_only {
                         let mut builder = self.builder.borrow().clone();
-                        let mut keccak = self.keccak.lock().unwrap().clone();
+                        let mut keccak = self.keccak.borrow().clone();
                         let f = self
                             .synthesize_phase1
                             .borrow()
@@ -788,7 +775,8 @@ where
                             assigned_advices: keccak_advices,
                             ..Default::default()
                         };
-                        f(&mut builder, &rlc_chip, keccak_rlcs);
+                        let rlp_chip = RlpChip::new(&self.range, Some(&rlc_chip));
+                        f(&mut builder, rlp_chip, keccak_rlcs);
                         assignments = builder.assign_all(
                             &config.rlp.range.gate,
                             &config.rlp.range.lookup_advice,
@@ -810,7 +798,7 @@ where
                             break_points,
                         );
                         let squeeze_digests =
-                            self.keccak.lock().unwrap().assign_phase0(&mut region, &config.keccak);
+                            self.keccak.borrow().assign_phase0(&mut region, &config.keccak);
                         // == END OF FIRST PHASE ==
                         // this is a special backend API function (in halo2-axiom only) that computes the KZG commitments for all columns in FirstPhase and performs Fiat-Shamir on them to return the challenge value
                         region.next_phase();
@@ -824,7 +812,7 @@ where
                         let rlc_chip =
                             RlcChip::new(gamma.expect("Could not get challenge in second phase"));
                         let (_, table_input_rlcs, table_output_rlcs) =
-                            self.keccak.lock().unwrap().assign_phase1(
+                            self.keccak.borrow().assign_phase1(
                                 &mut region,
                                 &config.keccak.keccak_table,
                                 squeeze_digests,
@@ -832,7 +820,7 @@ where
                                 None,
                             );
                         // Constrain RLCs so keccak chip witnesses are actually correct
-                        let keccak_rlcs = self.keccak.lock().unwrap().process_phase1(
+                        let keccak_rlcs = self.keccak.borrow_mut().process_phase1(
                             builder,
                             &rlc_chip,
                             &self.range,
@@ -850,7 +838,8 @@ where
                             builder,
                             break_points,
                             |builder: &mut RlcThreadBuilder<F>, rlc_chip: &RlcChip<F>| {
-                                f(builder, rlc_chip, keccak_rlcs);
+                                let rlp_chip = RlpChip::new(&self.range, Some(rlc_chip));
+                                f(builder, rlp_chip, keccak_rlcs);
                             },
                         );
                     }
@@ -862,10 +851,7 @@ where
     }
 }
 
-impl<F: Field, FnPhase1> Circuit<F> for KeccakCircuitBuilder<F, FnPhase1>
-where
-    FnPhase1: FnSynthesize<F>,
-{
+impl<F: Field, FnPhase1: FnSynthesize<F>> Circuit<F> for KeccakCircuitBuilder<F, FnPhase1> {
     type Config = MPTConfig<F>;
     type FloorPlanner = SimpleFloorPlanner;
 
@@ -884,8 +870,6 @@ where
         config: Self::Config,
         mut layouter: impl Layouter<F>,
     ) -> Result<(), Error> {
-        config.rlp.range.load_lookup_table(&mut layouter).expect("load range lookup table");
-        config.keccak.load_aux_tables(&mut layouter).expect("load keccak lookup tables");
         self.two_phase_synthesize(&config, &mut layouter);
         Ok(())
     }

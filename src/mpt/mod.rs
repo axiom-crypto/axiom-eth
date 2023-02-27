@@ -1,5 +1,5 @@
 use crate::{
-    keccak::{self, KeccakChip, SharedKeccakChip},
+    keccak::{self, KeccakChip},
     rlp::{
         max_rlp_len_len,
         rlc::{
@@ -21,7 +21,7 @@ use halo2_base::{
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use rlp::Rlp;
-use std::{cmp::max, iter::once, sync::MutexGuard};
+use std::{cmp::max, iter::once};
 
 #[cfg(test)]
 mod tests;
@@ -197,19 +197,21 @@ lazy_static! {
 }
 
 /// Thread-safe chip for performing Merkle Patricia Trie (MPT) inclusion proofs.
+// renaming MPTChip -> EthChip to avoid confusion
 #[derive(Clone, Debug)]
-pub struct MPTChip<'chip, F: Field> {
+pub struct EthChip<'chip, F: Field> {
     pub rlp: RlpChip<'chip, F>,
-    /// `KeccakChip` that can be mutably borrowed with smart pointer saved in this chip mostly for convenience.
-    /// This should only be used in `FirstPhase`, and the user should _not_ use it in `SecondPhase`.
-    keccak: SharedKeccakChip<F>,
     /// The Keccak RLCs will be available at the start of `SecondPhase`. These must be manually loaded.
     keccak_rlcs: Option<(keccak::FixedLenRLCs<F>, keccak::VarLenRLCs<F>)>,
+    // we explicitly do not include KeccakChip in MPTChip because it is not thread-safe; the queries in KeccakChip must be added in a deterministic way, which is not guaranteed if parallelism is enabled
 }
 
-impl<'chip, F: Field> MPTChip<'chip, F> {
-    pub fn new(rlp: RlpChip<'chip, F>, keccak: SharedKeccakChip<F>) -> Self {
-        Self { rlp, keccak, keccak_rlcs: None }
+impl<'chip, F: Field> EthChip<'chip, F> {
+    pub fn new(
+        rlp: RlpChip<'chip, F>,
+        keccak_rlcs: Option<(keccak::FixedLenRLCs<F>, keccak::VarLenRLCs<F>)>,
+    ) -> Self {
+        Self { rlp, keccak_rlcs }
     }
 
     pub fn gate(&self) -> &GateChip<F> {
@@ -226,10 +228,6 @@ impl<'chip, F: Field> MPTChip<'chip, F> {
 
     pub fn rlp(&self) -> &RlpChip<F> {
         &self.rlp
-    }
-
-    pub fn keccak(&self) -> MutexGuard<KeccakChip<F>> {
-        self.keccak.lock().unwrap()
     }
 
     pub fn keccak_fixed_len_rlcs(&self) -> &keccak::FixedLenRLCs<F> {
@@ -269,12 +267,13 @@ impl<'chip, F: Field> MPTChip<'chip, F> {
     /// Assumes that `bytes` is non-empty.
     pub fn mpt_hash_phase0(
         &self,
-        ctx: &mut Context<F>, // ctx in FirstPhase
+        ctx: &mut Context<F>,       // ctx_gate in FirstPhase
+        keccak: &mut KeccakChip<F>, // we explicitly do not include KeccakChip in MPTChip because it is not thread-safe; the queries in KeccakChip must be added in a deterministic way, which is not guaranteed if parallelism is enabled
         bytes: AssignedBytes<F>,
         len: AssignedValue<F>,
     ) -> usize {
         assert!(!bytes.is_empty());
-        self.keccak().keccak_var_len(ctx, self.range(), bytes, None, len, 0usize)
+        keccak.keccak_var_len(ctx, self.range(), bytes, None, len, 0usize)
     }
 
     /// When one node is referenced inside another node, what is included is H(rlp.encode(x)), where H(x) = keccak256(x) if len(x) >= 32 else x and rlp.encode is the RLP encoding function.
@@ -304,6 +303,7 @@ impl<'chip, F: Field> MPTChip<'chip, F> {
     pub fn parse_leaf_phase0(
         &self,
         ctx: &mut Context<F>,
+        keccak: &mut KeccakChip<F>,
         leaf_bytes: AssignedBytes<F>,
         max_key_bytes: usize,
         max_value_bytes: usize,
@@ -315,7 +315,7 @@ impl<'chip, F: Field> MPTChip<'chip, F> {
             self.rlp.decompose_rlp_array_phase0(ctx, leaf_bytes, &max_field_bytes, false);
         // TODO: remove unnecessary clones somehow?
         let leaf_hash_query_idx =
-            self.mpt_hash_phase0(ctx, rlp_witness.rlp_array.clone(), rlp_witness.rlp_len);
+            self.mpt_hash_phase0(ctx, keccak, rlp_witness.rlp_array.clone(), rlp_witness.rlp_len);
         LeafTraceWitness { rlp: rlp_witness, leaf_hash_query_idx }
     }
 
@@ -334,6 +334,7 @@ impl<'chip, F: Field> MPTChip<'chip, F> {
     pub fn parse_ext_phase0(
         &self,
         ctx: &mut Context<F>,
+        keccak: &mut KeccakChip<F>,
         ext_bytes: AssignedBytes<F>,
         max_key_bytes: usize,
     ) -> ExtensionTraceWitness<F> {
@@ -345,7 +346,7 @@ impl<'chip, F: Field> MPTChip<'chip, F> {
         let rlp_witness =
             self.rlp.decompose_rlp_array_phase0(ctx, ext_bytes, &max_field_bytes, false);
         let ext_hash_query_idx =
-            self.mpt_hash_phase0(ctx, rlp_witness.rlp_array.clone(), rlp_witness.rlp_len);
+            self.mpt_hash_phase0(ctx, keccak, rlp_witness.rlp_array.clone(), rlp_witness.rlp_len);
         ExtensionTraceWitness { rlp: rlp_witness, ext_hash_query_idx }
     }
 
@@ -364,6 +365,7 @@ impl<'chip, F: Field> MPTChip<'chip, F> {
     pub fn parse_nonterminal_branch_phase0(
         &self,
         ctx: &mut Context<F>,
+        keccak: &mut KeccakChip<F>,
         branch_bytes: AssignedBytes<F>,
     ) -> BranchTraceWitness<F> {
         let (max_field_bytes, max_branch_bytes) = max_branch_lens();
@@ -374,7 +376,7 @@ impl<'chip, F: Field> MPTChip<'chip, F> {
         let rlp_witness =
             self.rlp.decompose_rlp_array_phase0(ctx, branch_bytes, &max_field_bytes, false);
         let branch_hash_query_idx =
-            self.mpt_hash_phase0(ctx, rlp_witness.rlp_array.clone(), rlp_witness.rlp_len);
+            self.mpt_hash_phase0(ctx, keccak, rlp_witness.rlp_array.clone(), rlp_witness.rlp_len);
         BranchTraceWitness { rlp: rlp_witness, branch_hash_query_idx }
     }
 
@@ -402,6 +404,7 @@ impl<'chip, F: Field> MPTChip<'chip, F> {
     pub fn parse_mpt_inclusion_fixed_key_phase0(
         &self,
         ctx: &mut Context<F>,
+        keccak: &mut KeccakChip<F>,
         proof: MPTFixedKeyProof<F>,
         key_byte_len: usize,
         value_max_byte_len: usize,
@@ -474,7 +477,7 @@ impl<'chip, F: Field> MPTChip<'chip, F> {
          * RLP Branch    for select(nodes[idx], dummy_branch[idx], node_types[idx])
          */
         let leaf_parsed =
-            self.parse_leaf_phase0(ctx, proof.leaf_bytes.clone(), key_byte_len, value_max_byte_len);
+            self.parse_leaf_phase0(ctx, keccak, proof.leaf_bytes, key_byte_len, value_max_byte_len);
         let mut exts_parsed = Vec::with_capacity(max_depth - 1);
         let mut branches_parsed = Vec::with_capacity(max_depth - 1);
         for node in proof.nodes.iter() {
@@ -492,10 +495,10 @@ impl<'chip, F: Field> MPTChip<'chip, F> {
                 })
                 .unzip();
 
-            let ext_parsed = self.parse_ext_phase0(ctx, ext_in, key_byte_len);
+            let ext_parsed = self.parse_ext_phase0(ctx, keccak, ext_in, key_byte_len);
             exts_parsed.push(ext_parsed);
 
-            let branch_parsed = self.parse_nonterminal_branch_phase0(ctx, branch_in);
+            let branch_parsed = self.parse_nonterminal_branch_phase0(ctx, keccak, branch_in);
             branches_parsed.push(branch_parsed);
         }
 
@@ -622,7 +625,7 @@ impl<'chip, F: Field> MPTChip<'chip, F> {
         rlc_constrain_equal(ctx_gate, &key_frag_leaf_bytes_rlc, &leaf_parsed.key_path.field_trace);
 
         // Check key fragments concatenate to key using hex RLC
-        let key_hex_rlc = self.rlp.rlc().compute_rlc_fixed_len(ctx_rlc, key_hexs);
+        let key_hex_rlc = self.rlc().compute_rlc_fixed_len(ctx_rlc, key_hexs);
         let (fragment_rlcs, fragment_first_nibble): (Vec<_>, Vec<_>) = witness
             .key_frag
             .into_iter()
@@ -640,11 +643,16 @@ impl<'chip, F: Field> MPTChip<'chip, F> {
                 )
             })
             .unzip();
+        self.rlc().load_rlc_cache(
+            (ctx_gate, ctx_rlc),
+            self.gate(),
+            bit_length(2 * witness.key_byte_len as u64),
+        );
         let assigned_len =
             ctx_gate.load_constant(self.gate().get_field_element(key_hex_rlc.len as u64));
 
-        self.rlp.rlc().constrain_rlc_concat_var(
-            (ctx_gate, ctx_rlc),
+        self.rlc().constrain_rlc_concat_var(
+            ctx_gate,
             self.gate(),
             fragment_rlcs.into_iter().map(|f| (f.rlc_val, f.len, f.max_len)),
             (&key_hex_rlc.rlc_val, &assigned_len),

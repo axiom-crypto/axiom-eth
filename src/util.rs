@@ -1,3 +1,5 @@
+use crate::rlp::builder::RlcThreadBreakPoints;
+
 use super::Field;
 use ethers_core::{
     types::{Address, H256, U256},
@@ -11,7 +13,12 @@ use halo2_base::{
 };
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
-use std::{env::var, fs::File, iter, path::Path};
+use std::{
+    env::{set_var, var},
+    fs::File,
+    iter,
+    path::Path,
+};
 
 pub(crate) const NUM_BYTES_IN_U128: usize = 16;
 
@@ -34,7 +41,7 @@ impl EthConfigParams {
     pub fn from_path<P: AsRef<Path>>(path: P) -> Self {
         serde_json::from_reader(File::open(&path).expect("path does not exist")).unwrap()
     }
-
+    /* MAYBE DELETE
     pub fn get_header() -> Self {
         let path =
             var("BLOCK_HEADER_CONFIG").unwrap_or_else(|_| "configs/block_header.json".to_string());
@@ -49,6 +56,25 @@ impl EthConfigParams {
             File::open(&path).unwrap_or_else(|e| panic!("{path} does not exist. {e:?}")),
         )
         .unwrap()
+    }
+    */
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct EthConfigPinning {
+    pub params: EthConfigParams,
+    pub break_points: RlcThreadBreakPoints,
+}
+
+impl EthConfigPinning {
+    pub fn from_path<P: AsRef<Path>>(path: P) -> Self {
+        serde_json::from_reader(File::open(&path).expect("path does not exist")).unwrap()
+    }
+
+    pub fn load(self) -> RlcThreadBreakPoints {
+        set_var("ETH_CONFIG_PARAMS", serde_json::to_string(&self.params).unwrap());
+        set_var("KECCAK_ROWS", self.params.keccak_rows_per_round.to_string());
+        self.break_points
     }
 }
 

@@ -19,11 +19,12 @@ use halo2_base::{
     utils::ScalarField,
     Context,
 };
+use serde::{Deserialize, Serialize};
 
 use super::rlc::{RlcChip, RlcConfig, RlcContextPair, FIRST_PHASE, RLC_PHASE};
 use crate::util::EthConfigParams;
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct RlcThreadBreakPoints {
     pub gate: MultiPhaseThreadBreakPoints,
     pub rlc: ThreadBreakPoints,

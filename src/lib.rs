@@ -1,7 +1,7 @@
 #![feature(int_log)]
 #![feature(trait_alias)]
 
-//pub mod block_header;
+pub mod block_header;
 pub mod keccak;
 pub mod mpt;
 pub mod rlp;
@@ -11,26 +11,28 @@ pub mod util;
 #[cfg(feature = "providers")]
 pub mod providers;
 
-use std::env::set_var;
-
 use crate::rlp::{
-    rlc::{RlcChip, RlcConfig},
-    RlpChip, RlpConfig,
+    builder::{RlcThreadBreakPoints, RlcThreadBuilder},
+    rlc::RlcConfig,
+    RlpConfig,
 };
 use halo2_base::{
-    gates::{flex_gate::FlexGateConfig, range::RangeConfig},
+    gates::{flex_gate::FlexGateConfig, range::RangeConfig, RangeChip},
     halo2_proofs::{
         self,
-        circuit::Value,
-        plonk::{Column, ConstraintSystem, Instance},
+        circuit::{Layouter, SimpleFloorPlanner},
+        plonk::{Circuit, Column, ConstraintSystem, Error, Instance},
     },
-    Context,
+    AssignedValue,
 };
-use keccak::KeccakChip;
-use mpt::MPTChip;
+use keccak::{FnSynthesize, KeccakCircuitBuilder, SharedKeccakChip};
+pub use mpt::EthChip;
+use std::env::set_var;
 use util::EthConfigParams;
 pub use zkevm_keccak::util::eth_types::Field;
 use zkevm_keccak::KeccakConfig;
+
+pub(crate) const ETH_LOOKUP_BITS: usize = 8; // always want 8 to range check bytes
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
@@ -63,7 +65,7 @@ impl<F: Field> MPTConfig<F> {
             &params.num_range_advice,
             &params.num_lookup_advice,
             params.num_fixed,
-            8, // always want 8 to range check bytes
+            ETH_LOOKUP_BITS,
             degree as usize,
         );
         set_var("KECCAK_DEGREE", degree.to_string());
@@ -77,21 +79,16 @@ impl<F: Field> MPTConfig<F> {
     }
 }
 
-/* uncomment when done refactor
 #[derive(Clone, Debug)]
 /// Config shared for block header and storage proof circuits
 pub struct EthConfig<F: Field> {
-    pub mpt: MPTConfig<F>,
+    mpt: MPTConfig<F>,
     pub instance: Column<Instance>,
 }
 
 impl<F: Field> EthConfig<F> {
-    pub fn configure(
-        meta: &mut ConstraintSystem<F>,
-        params: impl Into<EthConfigParams>,
-        context_id: usize,
-    ) -> Self {
-        let mpt = MPTConfig::configure(meta, params.into(), context_id);
+    pub fn configure(meta: &mut ConstraintSystem<F>, params: impl Into<EthConfigParams>) -> Self {
+        let mpt = MPTConfig::configure(meta, params.into());
         let instance = meta.instance_column();
         meta.enable_equality(instance);
         Self { mpt, instance }
@@ -112,52 +109,92 @@ impl<F: Field> EthConfig<F> {
     pub fn keccak(&self) -> &KeccakConfig<F> {
         &self.mpt.keccak
     }
-}
-
-#[derive(Clone, Debug)]
-pub struct EthChip<'v, F: Field> {
-    pub mpt: MPTChip<'v, F>,
-}
-
-impl<'v, F: Field> EthChip<'v, F> {
-    pub fn new(config: EthConfig<F>, gamma: Value<F>) -> Self {
-        Self { mpt: MPTChip::new(config.mpt, gamma) }
-    }
-
-    pub fn gate(&self) -> &FlexGateConfig<F> {
-        self.mpt.gate()
-    }
-    pub fn range(&self) -> &RangeConfig<F> {
-        self.mpt.range()
-    }
-    pub fn rlc(&self) -> &RlcChip<'v, F> {
-        self.mpt.rlc()
-    }
-    pub fn rlp(&self) -> &RlpChip<'v, F> {
-        self.mpt.rlp()
-    }
-    pub fn keccak(&self) -> &KeccakChip<'v, F> {
-        self.mpt.keccak()
-    }
-    pub fn keccak_mut(&mut self) -> &mut KeccakChip<'v, F> {
-        &mut self.mpt.keccak
-    }
-
-    pub fn get_challenge(&mut self, ctx: &mut Context<F>) {
-        self.mpt.get_challenge(ctx);
-    }
-
-    /// Call this to finalize `FirstPhase`
-    /// Generates and assign witnesses for keccak.
-    /// Assign cells to range check to special advice columns with lookup enabled.
-    pub fn assign_phase0(&mut self, ctx: &mut Context<F>) {
-        self.mpt.keccak.assign_phase0(&mut ctx.region);
-        self.range().finalize(ctx);
-    }
-
-    /// Call this at the beginning of `SecondPhase` if you want to use keccak RLCs for other purposes
-    pub fn keccak_assign_phase1(&mut self, ctx: &mut Context<F>) {
-        self.mpt.keccak.assign_phase1(ctx, &mut self.mpt.rlp.rlc, &self.mpt.rlp.range);
+    pub fn mpt(&self) -> &MPTConfig<F> {
+        &self.mpt
     }
 }
-*/
+
+/// This is an extension of [`KeccakCircuitBuilder`] that adds support for public instances (aka public inputs+outputs)
+///
+/// The intended design is that [`KeccakCircuitBuilder`] is constructed and populated. In the process, the builder produces some assigned instances, which are supplied as `assigned_instances` to this struct.
+/// The [`Circuit`] implementation for this struct will then expose these instances and constrain them using the Halo2 API.
+pub struct EthCircuitBuilder<F: Field, FnPhase1: FnSynthesize<F>> {
+    pub circuit: KeccakCircuitBuilder<F, FnPhase1>,
+    pub assigned_instances: Vec<AssignedValue<F>>,
+}
+
+impl<F: Field, FnPhase1: FnSynthesize<F>> EthCircuitBuilder<F, FnPhase1> {
+    pub fn new(
+        assigned_instances: Vec<AssignedValue<F>>,
+        builder: RlcThreadBuilder<F>,
+        keccak: SharedKeccakChip<F>,
+        range: RangeChip<F>,
+        break_points: Option<RlcThreadBreakPoints>,
+        synthesize_phase1: FnPhase1,
+    ) -> Self {
+        Self {
+            assigned_instances,
+            circuit: KeccakCircuitBuilder::new(
+                builder,
+                keccak,
+                range,
+                break_points,
+                synthesize_phase1,
+            ),
+        }
+    }
+
+    pub fn config(&self, k: usize, minimum_rows: Option<usize>) -> EthConfigParams {
+        self.circuit.config(k, minimum_rows)
+    }
+
+    pub fn break_points(&self) -> RlcThreadBreakPoints {
+        self.circuit.break_points.borrow().clone()
+    }
+
+    pub fn instance_count(&self) -> usize {
+        self.assigned_instances.len()
+    }
+
+    pub fn instance(&self) -> Vec<F> {
+        self.assigned_instances.iter().map(|v| *v.value()).collect()
+    }
+}
+
+impl<F: Field, FnPhase1: FnSynthesize<F>> Circuit<F> for EthCircuitBuilder<F, FnPhase1> {
+    type Config = EthConfig<F>;
+    type FloorPlanner = SimpleFloorPlanner;
+
+    fn without_witnesses(&self) -> Self {
+        unimplemented!()
+    }
+
+    fn configure(meta: &mut ConstraintSystem<F>) -> Self::Config {
+        let params: EthConfigParams =
+            serde_json::from_str(&std::env::var("ETH_CONFIG_PARAMS").unwrap()).unwrap();
+        EthConfig::configure(meta, params)
+    }
+
+    fn synthesize(
+        &self,
+        config: Self::Config,
+        mut layouter: impl Layouter<F>,
+    ) -> Result<(), Error> {
+        // we later `take` the builder, so we need to save this value
+        let witness_gen_only = self.circuit.builder.borrow().witness_gen_only();
+        let assigned_advices = self.circuit.two_phase_synthesize(&config.mpt, &mut layouter);
+
+        if !witness_gen_only {
+            // expose public instances
+            let mut layouter = layouter.namespace(|| "expose");
+            for (i, instance) in self.assigned_instances.iter().enumerate() {
+                let cell = instance.cell.unwrap();
+                let (cell, _) = assigned_advices
+                    .get(&(cell.context_id, cell.offset))
+                    .expect("instance not assigned");
+                layouter.constrain_instance(*cell, config.instance, i);
+            }
+        }
+        Ok(())
+    }
+}
