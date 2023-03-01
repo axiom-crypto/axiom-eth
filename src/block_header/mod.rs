@@ -90,8 +90,8 @@ pub struct EthBlockHeaderTrace<F: Field> {
     pub extra_data: RlpFieldTrace<F>,
     pub mix_hash: RlpFieldTrace<F>,
     pub nonce: RlpFieldTrace<F>,
-    pub basefee: Option<RlpFieldTrace<F>>,
-
+    pub basefee: RlpFieldTrace<F>, // this is 0 (or undefined) for pre-EIP1559 (London) blocks
+    // the user will have to separately determine whether the block is EIP1559 or not
     pub block_hash: RlcFixedTrace<F>,
 
     // pub prefix: AssignedValue<F>,
@@ -233,12 +233,11 @@ impl<'chip, F: Field> EthBlockHeaderChip<F> for EthChip<'chip, F> {
         ctx: RlcContextPair<F>,
         witness: EthBlockHeaderTraceWitness<F>,
     ) -> EthBlockHeaderTrace<F> {
-        let mut trace = self.rlp().decompose_rlp_array_phase1(ctx, witness.rlp_witness, true);
+        let trace = self.rlp().decompose_rlp_array_phase1(ctx, witness.rlp_witness, true);
         let block_hash = self.keccak_var_len_rlcs()[witness.block_hash_query_idx].1;
 
         // Base fee per unit gas only after London
-        let basefee = trace.field_trace.pop();
-        let [parent_hash, ommers_hash, beneficiary, state_root, transactions_root, receipts_root, logs_bloom, difficulty, number, gas_limit, gas_used, timestamp, extra_data, mix_hash, nonce]: [RlpFieldTrace<F>; 15] =
+        let [parent_hash, ommers_hash, beneficiary, state_root, transactions_root, receipts_root, logs_bloom, difficulty, number, gas_limit, gas_used, timestamp, extra_data, mix_hash, nonce, basefee]: [RlpFieldTrace<F>; 16] =
             trace.field_trace.try_into().unwrap();
 
         EthBlockHeaderTrace {
