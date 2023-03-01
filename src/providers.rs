@@ -198,6 +198,7 @@ pub struct ProcessedBlock {
 ///       * endBlockNumber (u32)
 ///       * merkleRoots (Vec<H256>)
 ///   * where merkleRoots is a length `max_depth + 1` vector representing a merkle mountain range, ordered largest mountain first
+// second tuple `instance` is only used for debugging now
 pub fn get_blocks_input(
     provider: &Provider<Http>,
     start_block_number: u32,

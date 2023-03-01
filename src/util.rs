@@ -6,13 +6,18 @@ use ethers_core::{
     utils::keccak256,
 };
 use halo2_base::{
-    gates::{GateInstructions, RangeChip, RangeInstructions},
+    gates::{
+        builder::{FlexGateConfigParams, MultiPhaseThreadBreakPoints},
+        flex_gate::{FlexGateConfig, GateStrategy},
+        GateInstructions, RangeChip, RangeInstructions,
+    },
     utils::{bit_length, decompose, decompose_fe_to_u64_limbs, BigPrimeField, ScalarField},
     AssignedValue, Context,
     QuantumCell::{Constant, Witness},
 };
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
+use snark_verifier_sdk::halo2::aggregation::AggregationConfigParams;
 use std::{
     env::{set_var, var},
     fs::File,
@@ -35,6 +40,8 @@ pub struct EthConfigParams {
     // for keccak chip you should know the number of unusable rows beforehand
     pub unusable_rows: usize,
     pub keccak_rows_per_round: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lookup_bits: Option<usize>,
 }
 
 impl EthConfigParams {
@@ -74,7 +81,57 @@ impl EthConfigPinning {
     pub fn load(self) -> RlcThreadBreakPoints {
         set_var("ETH_CONFIG_PARAMS", serde_json::to_string(&self.params).unwrap());
         set_var("KECCAK_ROWS", self.params.keccak_rows_per_round.to_string());
+        if let Some(bits) = self.params.lookup_bits {
+            set_var("LOOKUP_BITS", bits.to_string());
+        }
         self.break_points
+    }
+
+    pub fn from_var(break_points: RlcThreadBreakPoints) -> Self {
+        let params: EthConfigParams =
+            serde_json::from_str(&var("ETH_CONFIG_PARAMS").unwrap()).unwrap();
+        Self { params, break_points }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct AggregationConfigPinning {
+    pub params: AggregationConfigParams,
+    pub break_points: MultiPhaseThreadBreakPoints,
+}
+
+impl AggregationConfigPinning {
+    pub fn from_path<P: AsRef<Path>>(path: P) -> Self {
+        serde_json::from_reader(File::open(&path).expect("path does not exist")).unwrap()
+    }
+
+    pub fn load(self) -> RlcThreadBreakPoints {
+        let gate_params = FlexGateConfigParams {
+            k: self.params.degree as usize,
+            num_advice_per_phase: vec![self.params.num_advice],
+            num_lookup_advice_per_phase: vec![self.params.num_lookup_advice],
+            strategy: GateStrategy::Vertical,
+            num_fixed: self.params.num_fixed,
+        };
+        set_var("FLEX_GATE_CONFIG_PARAMS", serde_json::to_string(&gate_params).unwrap());
+        set_var("LOOKUP_BITS", self.params.lookup_bits.to_string());
+        RlcThreadBreakPoints { gate: self.break_points, rlc: vec![] }
+    }
+
+    pub fn from_var(break_points: MultiPhaseThreadBreakPoints) -> Self {
+        let params: FlexGateConfigParams =
+            serde_json::from_str(&var("FLEX_GATE_CONFIG_PARAMS").unwrap()).unwrap();
+        let lookup_bits = var("LOOKUP_BITS").unwrap().parse().unwrap();
+        Self {
+            params: AggregationConfigParams {
+                degree: params.k as u32,
+                num_advice: params.num_advice_per_phase[0],
+                num_lookup_advice: params.num_lookup_advice_per_phase[0],
+                num_fixed: params.num_fixed,
+                lookup_bits,
+            },
+            break_points,
+        }
     }
 }
 

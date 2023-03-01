@@ -133,6 +133,22 @@ pub struct MPTFixedKeyProofWitness<F: Field> {
     pub key_hexs: AssignedNibbles<F>,
 }
 
+impl<F: Field> MPTFixedKeyProofWitness<F> {
+    /// Shifts all keccak query indices by `shift`. This is necessary when
+    /// joining parallel (multi-threaded) keccak chips into one.
+    ///
+    /// Currently all indices are with respect to `keccak.var_len_queries` (see [`EthChip::mpt_hash_phase0`]).
+    pub fn shift_query_indices(&mut self, shift: usize) {
+        self.leaf_parsed.leaf_hash_query_idx += shift;
+        for ext in self.exts_parsed.iter_mut() {
+            ext.ext_hash_query_idx += shift;
+        }
+        for branch in self.branches_parsed.iter_mut() {
+            branch.branch_hash_query_idx += shift;
+        }
+    }
+}
+
 #[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub struct MPTVarKeyProof<F: Field> {
@@ -885,14 +901,12 @@ lazy_static! {
 }
 
 impl MPTFixedKeyInput {
-    pub fn assign<F: Field>(&self, ctx: &mut Context<F>) -> MPTFixedKeyProof<F> {
-        let Self { path, value, root_hash, proof, value_max_byte_len, max_depth } = self;
+    pub fn assign<F: Field>(self, ctx: &mut Context<F>) -> MPTFixedKeyProof<F> {
+        let Self { path, mut value, root_hash, mut proof, value_max_byte_len, max_depth } = self;
         let depth = proof.len();
-        assert!(depth <= *max_depth);
-        let mut value = value.clone();
-        let mut proof = proof.clone();
-        let value_max_byte_len = *value_max_byte_len;
-        let max_depth = *max_depth;
+        assert!(depth <= max_depth);
+        let value_max_byte_len = value_max_byte_len;
+        let max_depth = max_depth;
         let bytes_to_nibbles = |bytes: &[u8]| {
             let mut nibbles = Vec::with_capacity(bytes.len() * 2);
             for byte in bytes {

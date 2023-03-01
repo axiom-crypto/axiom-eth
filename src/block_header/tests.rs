@@ -289,12 +289,13 @@ pub fn test_multi_goerli_header_prover() {
 
 #[cfg(all(feature = "aggregation", feature = "providers"))]
 mod aggregation {
+    use super::test;
     use super::*;
-    use crate::block_header::helpers::{CircuitType, Finality, Sequencer, Task};
+    use crate::block_header::sequencer::{CircuitType, Finality, Sequencer, Task};
 
     #[test]
     fn test_goerli_header_chain_provider() {
-        let mut sequencer = Sequencer::new(Network::Goerli);
+        let mut sequencer = Sequencer::new(Network::Goerli, false);
         sequencer.get_snark(Task::new(
             0x765fb3,
             0x765fb3 + 7,
@@ -305,7 +306,7 @@ mod aggregation {
     #[test]
     #[ignore = "requires over 32G memory"]
     fn test_goerli_header_chain_with_aggregation() {
-        let mut sequencer = Sequencer::new(Network::Goerli);
+        let mut sequencer = Sequencer::new(Network::Goerli, false);
         sequencer.get_snark(Task::new(
             0x765fb3,
             0x765fb3 + 11,
@@ -314,11 +315,12 @@ mod aggregation {
     }
 
     #[test]
+    #[ignore = "requires over 32G memory"]
     fn test_goerli_header_chain_final_aggregation() {
-        let mut sequencer = Sequencer::new(Network::Goerli);
+        let mut sequencer = Sequencer::new(Network::Goerli, false);
         sequencer.get_snark(Task::new(
             0x765fb3,
-            0x765fb3 + 11,
+            0x765fb3 + 9,
             CircuitType::new(4, 3, Finality::Merkle),
         ));
     }
@@ -326,7 +328,7 @@ mod aggregation {
     #[cfg(feature = "evm")]
     #[test]
     fn test_goerli_header_chain_for_evm() {
-        let mut sequencer = Sequencer::new(Network::Goerli);
+        let mut sequencer = Sequencer::new(Network::Goerli, false);
         sequencer.get_snark(Task::new(
             0x765fb3,
             0x765fb3 + 11,

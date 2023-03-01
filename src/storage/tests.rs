@@ -21,14 +21,15 @@ use ethers_core::utils::keccak256;
 use halo2_base::utils::fs::gen_srs;
 use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
-use snark_verifier_sdk::halo2::aggregation::AggregationConfigParams;
 use std::{
     env::set_var,
-    fs::{self, File},
+    fs::File,
     io::{BufReader, Write},
 };
+use test_log::test;
 
 fn get_test_circuit<F: Field>(network: Network, num_slots: usize) -> EthBlockStorageCircuit<F> {
+    assert!(num_slots <= 10);
     let infura_id =
         std::fs::read_to_string("scripts/input_gen/INFURA_ID").expect("Infura ID not found");
     let provider_url = match network {
@@ -52,12 +53,14 @@ fn get_test_circuit<F: Field>(network: Network, num_slots: usize) -> EthBlockSto
         }
     }
     let slot_nums = vec![0u64, 1u64, 2u64, 3u64, 6u64, 8u64];
-    let mut slots = (0..4).map(|x| {
-        let mut bytes = [0u8; 64];
-        bytes[31] = x;
-        bytes[63] = 10;
-        H256::from_slice(&keccak256(bytes))
-    }).collect::<Vec<_>>();
+    let mut slots = (0..4)
+        .map(|x| {
+            let mut bytes = [0u8; 64];
+            bytes[31] = x;
+            bytes[63] = 10;
+            H256::from_slice(&keccak256(bytes))
+        })
+        .collect::<Vec<_>>();
     slots.extend(slot_nums.iter().map(|x| H256::from_low_u64_be(*x)));
     EthBlockStorageCircuit::from_provider(
         &provider,
@@ -72,16 +75,18 @@ fn get_test_circuit<F: Field>(network: Network, num_slots: usize) -> EthBlockSto
 
 #[test]
 pub fn test_mock_single_eip1186() -> Result<(), Box<dyn std::error::Error>> {
-    set_var("STORAGE_CONFIG", "configs/tests/storage.json");
-    let k = EthConfigParams::get_storage().degree;
+    let params = EthConfigParams::from_path("configs/tests/storage.json");
+    set_var("ETH_CONFIG_PARAMS", serde_json::to_string(&params).unwrap());
+    let k = params.degree;
 
-    let circuit = get_test_circuit::<Fr>(Network::Mainnet, 1);
+    let input = get_test_circuit::<Fr>(Network::Mainnet, 1);
+    let circuit = input.create_circuit(RlcThreadBuilder::mock(), None);
     MockProver::run(k, &circuit, vec![circuit.instance()]).unwrap().assert_satisfied();
     Ok(())
 }
 
 #[derive(Serialize, Deserialize)]
-struct BenchParams(EthConfigParams, usize);
+struct BenchParams(EthConfigParams, usize); // (params, num_slots)
 
 #[test]
 pub fn bench_eip1186() -> Result<(), Box<dyn std::error::Error>> {
@@ -98,18 +103,21 @@ pub fn bench_eip1186() -> Result<(), Box<dyn std::error::Error>> {
             bench_params.0.degree
         );
 
-        set_var("STORAGE_CONFIG", "configs/bench/storage_tmp.json");
-        let mut f = File::create("configs/bench/storage_tmp.json")?;
-        write!(f, "{}", serde_json::to_string(&bench_params.0).unwrap())?;
-        let circuit = get_test_circuit::<Fr>(Network::Mainnet, bench_params.1);
-        let instance = circuit.instance();
+        set_var("ETH_CONFIG_PARAMS", serde_json::to_string(&bench_params.0).unwrap());
+        let input = get_test_circuit::<Fr>(Network::Mainnet, bench_params.1);
+        let instance = input.instance();
+        let circuit = input.clone().create_circuit(RlcThreadBuilder::keygen(), None);
 
         let params = gen_srs(bench_params.0.degree);
         let vk = keygen_vk(&params, &circuit)?;
         let pk = keygen_pk(&params, vk, &circuit)?;
+        let break_points = circuit.circuit.break_points.take();
 
         // create a proof
-        let proof_time = start_timer!(|| "SHPLONK");
+        let proof_time = start_timer!(|| "create proof SHPLONK");
+        let phase0_time = start_timer!(|| "phase 0 synthesize");
+        let circuit = input.create_circuit(RlcThreadBuilder::prover(), Some(break_points));
+        end_timer!(phase0_time);
         let mut transcript = Blake2bWrite::<_, _, Challenge255<_>>::init(vec![]);
         create_proof::<
             KZGCommitmentScheme<Bn256>,
@@ -118,7 +126,7 @@ pub fn bench_eip1186() -> Result<(), Box<dyn std::error::Error>> {
             _,
             Blake2bWrite<Vec<u8>, G1Affine, Challenge255<G1Affine>>,
             _,
-        >(&params, &pk, &[circuit.clone()], &[&[&instance]], OsRng, &mut transcript)?;
+        >(&params, &pk, &[circuit], &[&[&instance]], OsRng, &mut transcript)?;
         let proof = transcript.finalize();
         end_timer!(proof_time);
 
@@ -136,23 +144,24 @@ pub fn bench_eip1186() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap();
         end_timer!(verify_time);
 
-        fs::remove_file("configs/bench/storage_tmp.json")?;
         let keccak_advice = std::env::var("KECCAK_ADVICE_COLUMNS")
             .unwrap_or_else(|_| "0".to_string())
             .parse::<usize>()
             .unwrap();
+        let bench_params: EthConfigParams =
+            serde_json::from_str(var("ETH_CONFIG_PARAMS").unwrap().as_str()).unwrap();
         writeln!(
             fs_results,
             "{},{},{},{:?},{:?},{},{:.2}s,{:?}",
-            bench_params.0.degree,
-            bench_params.0.num_rlc_columns
-                + bench_params.0.num_range_advice.iter().sum::<usize>()
-                + bench_params.0.num_lookup_advice.iter().sum::<usize>()
+            bench_params.degree,
+            bench_params.num_rlc_columns
+                + bench_params.num_range_advice.iter().sum::<usize>()
+                + bench_params.num_lookup_advice.iter().sum::<usize>()
                 + keccak_advice,
-            bench_params.0.num_rlc_columns,
-            bench_params.0.num_range_advice,
-            bench_params.0.num_lookup_advice,
-            bench_params.0.num_fixed,
+            bench_params.num_rlc_columns,
+            bench_params.num_range_advice,
+            bench_params.num_lookup_advice,
+            bench_params.num_fixed,
             proof_time.time.elapsed().as_secs_f64(),
             verify_time.time.elapsed()
         )
@@ -162,19 +171,20 @@ pub fn bench_eip1186() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
+#[cfg(feature = "evm")]
 pub fn bench_evm_eip1186() -> Result<(), Box<dyn std::error::Error>> {
-    use std::{fs, path::Path};
-
-    use rand::SeedableRng;
+    use crate::block_header::sequencer::custom_gen_evm_verifier_shplonk;
+    use halo2_base::gates::builder::CircuitBuilderStage;
     use snark_verifier_sdk::{
-        evm::{evm_verify, gen_evm_proof_shplonk, gen_evm_verifier_shplonk, write_calldata},
+        evm::{evm_verify, gen_evm_proof_shplonk, write_calldata},
         gen_pk,
         halo2::{
-            aggregation::{load_verify_circuit_degree, PublicAggregationCircuit},
-            gen_snark_shplonk, 
+            aggregation::{AggregationCircuit, AggregationConfigParams},
+            gen_snark_shplonk,
         },
-        CircuitExt,
-    };    
+        CircuitExt, SHPLONK,
+    };
+    use std::{fs, path::Path};
     let bench_params_file = File::open("configs/bench/storage.json").unwrap();
     let evm_params_file = File::open("configs/bench/storage_evm.json").unwrap();
     std::fs::create_dir_all("data/bench")?;
@@ -184,77 +194,88 @@ pub fn bench_evm_eip1186() -> Result<(), Box<dyn std::error::Error>> {
     let bench_params_reader = BufReader::new(bench_params_file);
     let bench_params: Vec<BenchParams> = serde_json::from_reader(bench_params_reader).unwrap();
     let evm_params_reader = BufReader::new(evm_params_file);
-    let evm_params: Vec<AggregationConfigParams> = serde_json::from_reader(evm_params_reader).unwrap();    
+    let evm_params: Vec<AggregationConfigParams> =
+        serde_json::from_reader(evm_params_reader).unwrap();
     for (bench_params, evm_params) in bench_params.iter().zip(evm_params.iter()) {
         println!(
             "---------------------- degree = {} ------------------------------",
             bench_params.0.degree
         );
 
-        set_var("STORAGE_CONFIG", "configs/bench/storage_tmp.json");
-        let mut f = File::create("configs/bench/storage_tmp.json")?;
-        write!(f, "{}", serde_json::to_string(&bench_params.0).unwrap())?;
-        let mut rng = rand_chacha::ChaChaRng::from_seed([0; 32]);
+        set_var("ETH_CONFIG_PARAMS", serde_json::to_string(&bench_params.0).unwrap());
 
         let (storage_snark, storage_proof_time) = {
-            let k = EthConfigParams::get_storage().degree;
-            let circuit = get_test_circuit::<Fr>(Network::Mainnet, bench_params.1);
+            let k = bench_params.0.degree;
+            let input = get_test_circuit::<Fr>(Network::Mainnet, bench_params.1);
+            let circuit = input.clone().create_circuit(RlcThreadBuilder::keygen(), None);
             let params = gen_srs(k);
             let pk = gen_pk(&params, &circuit, None);
+            let break_points = circuit.circuit.break_points.take();
             let storage_proof_time = start_timer!(|| "Storage Proof SHPLONK");
-            let snark = gen_snark_shplonk(&params, &pk, circuit, &mut rng, None::<&str>);
+            let circuit = input.create_circuit(RlcThreadBuilder::prover(), Some(break_points));
+            let snark = gen_snark_shplonk(&params, &pk, circuit, None::<&str>);
             end_timer!(storage_proof_time);
             (snark, storage_proof_time)
         };
 
-        set_var("VERIFY_CONFIG", "configs/bench/storage_evm_tmp.json");
-        let mut f = File::create("configs/bench/storage_evm_tmp.json")?;
-        write!(f, "{}", serde_json::to_string(&evm_params).unwrap())?;        
-        let k = load_verify_circuit_degree();
+        let k = evm_params.degree;
         let params = gen_srs(k);
-        let evm_circuit = PublicAggregationCircuit::new(
+        set_var("LOOKUP_BITS", evm_params.lookup_bits.to_string());
+        let evm_circuit = AggregationCircuit::public::<SHPLONK>(
+            CircuitBuilderStage::Keygen,
+            None,
+            evm_params.lookup_bits,
+            &params,
+            vec![storage_snark.clone()],
+            false,
+        );
+        evm_circuit.config(k, Some(10));
+        let pk = gen_pk(&params, &evm_circuit, None);
+        let break_points = evm_circuit.break_points();
+
+        let instances = evm_circuit.instances();
+        let evm_proof_time = start_timer!(|| "EVM Proof SHPLONK");
+        let pf_circuit = AggregationCircuit::public::<SHPLONK>(
+            CircuitBuilderStage::Prover,
+            Some(break_points),
+            evm_params.lookup_bits,
             &params,
             vec![storage_snark],
             false,
-            &mut rng,
         );
-        let pk = gen_pk(&params, &evm_circuit, None);
-    
-        let instances = evm_circuit.instances();
-        let num_instances = instances[0].len();
-        let evm_proof_time = start_timer!(|| "EVM Proof SHPLONK");
-        let proof = gen_evm_proof_shplonk(&params, &pk, evm_circuit, instances.clone(), &mut rng);
+        let proof = gen_evm_proof_shplonk(&params, &pk, pf_circuit, instances.clone());
         end_timer!(evm_proof_time);
         fs::create_dir_all("data/storage").unwrap();
         write_calldata(&instances, &proof, Path::new("data/storage/test.calldata")).unwrap();
-    
-        let deployment_code = gen_evm_verifier_shplonk::<PublicAggregationCircuit>(
+
+        let deployment_code = custom_gen_evm_verifier_shplonk(
             &params,
             pk.get_vk(),
-            vec![num_instances],
+            &evm_circuit,
             Some(Path::new("data/storage/test.yul")),
         );
-    
+
         // this verifies proof in EVM and outputs gas cost (if successful)
         evm_verify(deployment_code, instances, proof);
 
-        fs::remove_file("configs/bench/storage_tmp.json")?;
         let keccak_advice = std::env::var("KECCAK_ADVICE_COLUMNS")
             .unwrap_or_else(|_| "0".to_string())
             .parse::<usize>()
             .unwrap();
+        let bench_params: EthConfigParams =
+            serde_json::from_str(var("ETH_CONFIG_PARAMS").unwrap().as_str()).unwrap();
         writeln!(
             fs_results,
             "{},{},{},{:?},{:?},{},{:.2}s,{:?}",
-            bench_params.0.degree,
-            bench_params.0.num_rlc_columns
-                + bench_params.0.num_range_advice.iter().sum::<usize>()
-                + bench_params.0.num_lookup_advice.iter().sum::<usize>()
+            bench_params.degree,
+            bench_params.num_rlc_columns
+                + bench_params.num_range_advice.iter().sum::<usize>()
+                + bench_params.num_lookup_advice.iter().sum::<usize>()
                 + keccak_advice,
-            bench_params.0.num_rlc_columns,
-            bench_params.0.num_range_advice,
-            bench_params.0.num_lookup_advice,
-            bench_params.0.num_fixed,
+            bench_params.num_rlc_columns,
+            bench_params.num_range_advice,
+            bench_params.num_lookup_advice,
+            bench_params.num_fixed,
             storage_proof_time.time.elapsed().as_secs_f64(),
             evm_proof_time.time.elapsed()
         )
@@ -262,58 +283,3 @@ pub fn bench_evm_eip1186() -> Result<(), Box<dyn std::error::Error>> {
     }
     Ok(())
 }
-
-#[cfg(feature = "evm")]
-#[test]
-pub fn test_evm_single_eip1186() {
-    use std::{fs, path::Path};
-
-    use rand::SeedableRng;
-    use snark_verifier_sdk::{
-        evm::{evm_verify, gen_evm_proof_shplonk, gen_evm_verifier_shplonk, write_calldata},
-        gen_pk,
-        halo2::{
-            aggregation::{load_verify_circuit_degree, PublicAggregationCircuit},
-            gen_snark_shplonk,
-        },
-        CircuitExt,
-    };
-    let mut rng = rand_chacha::ChaChaRng::from_seed([0; 32]);
-
-    set_var("STORAGE_CONFIG", "configs/tests/storage.json");
-    let storage_snark = {
-        let k = EthConfigParams::get_storage().degree;
-        let circuit = get_test_circuit::<Fr>(Network::Mainnet, 1);
-        let params = gen_srs(k);
-        let pk = gen_pk(&params, &circuit, None);
-        gen_snark_shplonk(&params, &pk, circuit, &mut rng, None::<&str>)
-    };
-
-    std::env::set_var("VERIFY_CONFIG", "./configs/tests/storage_evm.json");
-    let k = load_verify_circuit_degree();
-    let params = gen_srs(k);
-    let evm_circuit = PublicAggregationCircuit::new(
-        &params,
-        vec![storage_snark],
-        false,
-        &mut rng,
-    );
-    let pk = gen_pk(&params, &evm_circuit, None);
-
-    let instances = evm_circuit.instances();
-    let num_instances = instances[0].len();
-    let proof = gen_evm_proof_shplonk(&params, &pk, evm_circuit, instances.clone(), &mut rng);
-    fs::create_dir_all("data/storage").unwrap();
-    write_calldata(&instances, &proof, Path::new("data/storage/test.calldata")).unwrap();
-
-    let deployment_code = gen_evm_verifier_shplonk::<PublicAggregationCircuit>(
-        &params,
-        pk.get_vk(),
-        vec![num_instances],
-        Some(Path::new("data/storage/test.yul")),
-    );
-
-    // this verifies proof in EVM and outputs gas cost (if successful)
-    evm_verify(deployment_code, instances, proof);
-}
-

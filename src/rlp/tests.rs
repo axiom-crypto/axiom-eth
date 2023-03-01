@@ -29,7 +29,7 @@ mod rlc {
                 commitment::ParamsProver,
                 kzg::{
                     commitment::{KZGCommitmentScheme, ParamsKZG},
-                    multiopen::{ProverGWC, ProverSHPLONK, VerifierGWC, VerifierSHPLONK},
+                    multiopen::{ProverSHPLONK, VerifierSHPLONK},
                     strategy::SingleStrategy,
                 },
             },
@@ -72,7 +72,7 @@ mod rlc {
             assert_eq!(real_rlc, rlc_val);
         };
 
-        RlcCircuitBuilder::new(builder, synthesize_phase1)
+        RlcCircuitBuilder::new(builder, None, synthesize_phase1)
     }
 
     fn compute_rlc_acc<F: ScalarField>(msg: &[F], r: F) -> F {
@@ -190,7 +190,7 @@ mod rlp {
             let (ctx_gate, ctx_rlc) = b.rlc_ctx_pair();
             chip.decompose_rlp_field_phase1((ctx_gate, ctx_rlc), witness);
         };
-        let circuit = RlpCircuitBuilder::new(builder, f);
+        let circuit = RlpCircuitBuilder::new(builder, None, f);
         // auto-configure circuit if not in prover mode for convenience
         if !prover {
             circuit.config(DEGREE as usize, Some(6));
@@ -213,6 +213,7 @@ mod rlp {
 
         let circuit = RlpCircuitBuilder::new(
             builder,
+            None,
             move |builder: &mut RlcThreadBuilder<F>, rlc: &RlcChip<F>| {
                 let chip = RlpChip::new(&range, Some(rlc));
                 // closure captures `witness` variable
@@ -310,23 +311,14 @@ impl<F: ScalarField, FnPhase1> RlcCircuitBuilder<F, FnPhase1>
 where
     FnPhase1: FnSynthesize<F>,
 {
-    pub fn new(builder: RlcThreadBuilder<F>, synthesize_phase1: FnPhase1) -> Self {
-        Self {
-            builder: RefCell::new(builder),
-            break_points: RefCell::new(RlcThreadBreakPoints::default()),
-            synthesize_phase1: RefCell::new(Some(synthesize_phase1)),
-        }
-    }
-
-    pub fn prover(
+    pub fn new(
         builder: RlcThreadBuilder<F>,
-        break_points: RlcThreadBreakPoints,
+        break_points: Option<RlcThreadBreakPoints>,
         synthesize_phase1: FnPhase1,
     ) -> Self {
-        assert!(builder.witness_gen_only());
         Self {
             builder: RefCell::new(builder),
-            break_points: RefCell::new(break_points),
+            break_points: RefCell::new(break_points.unwrap_or_default()),
             synthesize_phase1: RefCell::new(Some(synthesize_phase1)),
         }
     }
@@ -453,6 +445,7 @@ where
             num_fixed,
             unusable_rows: _,
             keccak_rows_per_round: _,
+            lookup_bits: _,
         } = serde_json::from_str(&std::env::var("ETH_CONFIG_PARAMS").unwrap()).unwrap();
         let mut gate = FlexGateConfig::configure(
             meta,
@@ -486,16 +479,12 @@ impl<F: ScalarField, FnPhase1> RlpCircuitBuilder<F, FnPhase1>
 where
     FnPhase1: FnSynthesize<F>,
 {
-    pub fn new(builder: RlcThreadBuilder<F>, synthesize_phase1: FnPhase1) -> Self {
-        Self(RlcCircuitBuilder::new(builder, synthesize_phase1))
-    }
-
-    pub fn prover(
+    pub fn new(
         builder: RlcThreadBuilder<F>,
-        break_points: RlcThreadBreakPoints,
+        break_points: Option<RlcThreadBreakPoints>,
         synthesize_phase1: FnPhase1,
     ) -> Self {
-        Self(RlcCircuitBuilder::prover(builder, break_points, synthesize_phase1))
+        Self(RlcCircuitBuilder::new(builder, break_points, synthesize_phase1))
     }
 
     pub fn config(&self, k: usize, minimum_rows: Option<usize>) -> EthConfigParams {
@@ -523,6 +512,7 @@ where
             num_fixed,
             unusable_rows: _,
             keccak_rows_per_round: _,
+            lookup_bits: _,
         } = serde_json::from_str(&std::env::var("ETH_CONFIG_PARAMS").unwrap()).unwrap();
         let lookup_bits = std::env::var("LOOKUP_BITS").unwrap().parse().unwrap();
         RlpConfig::configure(

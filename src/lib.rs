@@ -5,7 +5,7 @@ pub mod block_header;
 pub mod keccak;
 pub mod mpt;
 pub mod rlp;
-//pub mod storage;
+pub mod storage;
 pub mod util;
 
 #[cfg(feature = "providers")]
@@ -27,7 +27,7 @@ use halo2_base::{
 };
 use keccak::{FnSynthesize, KeccakCircuitBuilder, SharedKeccakChip};
 pub use mpt::EthChip;
-use std::env::set_var;
+use std::env::{set_var, var};
 use util::EthConfigParams;
 pub use zkevm_keccak::util::eth_types::Field;
 use zkevm_keccak::KeccakConfig;
@@ -65,7 +65,7 @@ impl<F: Field> MPTConfig<F> {
             &params.num_range_advice,
             &params.num_lookup_advice,
             params.num_fixed,
-            ETH_LOOKUP_BITS,
+            params.lookup_bits.unwrap_or(ETH_LOOKUP_BITS),
             degree as usize,
         );
         set_var("KECCAK_DEGREE", degree.to_string());
@@ -196,5 +196,17 @@ impl<F: Field, FnPhase1: FnSynthesize<F>> Circuit<F> for EthCircuitBuilder<F, Fn
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(feature = "aggregation")]
+impl<F: Field, FnPhase1: FnSynthesize<F>> snark_verifier_sdk::CircuitExt<F>
+    for EthCircuitBuilder<F, FnPhase1>
+{
+    fn num_instance(&self) -> Vec<usize> {
+        vec![self.instance_count()]
+    }
+    fn instances(&self) -> Vec<Vec<F>> {
+        vec![self.instance()]
     }
 }

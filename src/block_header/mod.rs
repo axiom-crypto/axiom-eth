@@ -33,7 +33,7 @@ use std::{cell::RefCell, env::var};
 #[cfg(feature = "aggregation")]
 pub mod aggregation;
 #[cfg(all(feature = "aggregation", feature = "providers"))]
-pub mod helpers;
+pub mod sequencer;
 #[cfg(test)]
 mod tests;
 
@@ -644,6 +644,12 @@ impl<F: Field> EthBlockHeaderChainCircuit<F> {
             block_rlp.resize(header_rlp_max_bytes, 0u8);
         }
 
-        Self { inputs: block_rlps, num_blocks, instance, max_depth, network, _marker: PhantomData }
+        Self {
+            header_rlp_encodings: block_rlps,
+            num_blocks,
+            max_depth,
+            network,
+            _marker: PhantomData,
+        }
     }
 }

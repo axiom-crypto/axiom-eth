@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use super::rlc::{RlcChip, RlcConfig, RlcContextPair, FIRST_PHASE, RLC_PHASE};
 use crate::util::EthConfigParams;
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RlcThreadBreakPoints {
     pub gate: MultiPhaseThreadBreakPoints,
     pub rlc: ThreadBreakPoints,
@@ -133,6 +133,7 @@ impl<F: ScalarField> RlcThreadBuilder<F> {
             num_fixed,
             unusable_rows: minimum_rows.unwrap_or(0),
             keccak_rows_per_round: 0,
+            lookup_bits: None,
         };
         #[cfg(feature = "display")]
         {

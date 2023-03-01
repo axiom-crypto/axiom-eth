@@ -42,14 +42,16 @@ fn test_mpt_circuit<F: Field>(
     let mut keccak = KeccakChip::default();
     let mpt = EthChip::new(RlpChip::new(&range, None), None);
     let ctx = builder.gate_builder.main(0);
+    let value_max_byte_len = inputs.value_max_byte_len;
+    let max_depth = inputs.max_depth;
     let mpt_proof = inputs.assign(ctx);
     let mpt_witness = mpt.parse_mpt_inclusion_fixed_key_phase0(
         ctx,
         &mut keccak,
         mpt_proof,
         32,
-        inputs.value_max_byte_len,
-        inputs.max_depth,
+        value_max_byte_len,
+        max_depth,
     );
 
     let circuit = KeccakCircuitBuilder::new(
