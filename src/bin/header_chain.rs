@@ -1,7 +1,7 @@
 #[cfg(feature = "display")]
 use ark_std::{end_timer, start_timer};
 use axiom_eth::{
-    block_header::helpers::{CircuitType, Finality, Sequencer, Task},
+    block_header::sequencer::{CircuitType, Finality, Sequencer, Task},
     Network,
 };
 use clap::{Parser, ValueEnum};
@@ -31,6 +31,8 @@ struct Cli {
     calldata: bool,
     #[cfg_attr(feature = "evm", arg(long = "create-contract"))]
     create_contract: bool,
+    #[arg(long = "readonly")]
+    readonly: bool,
 }
 
 #[derive(Clone, Debug, ValueEnum)]
@@ -60,7 +62,7 @@ fn main() {
     let args = Cli::parse();
     let initial_depth = args.initial_depth.unwrap_or(args.max_depth);
 
-    let mut sequencer = Sequencer::new(args.network);
+    let mut sequencer = Sequencer::new(args.network, args.readonly);
 
     #[cfg(feature = "display")]
     let start = start_timer!(|| format!(

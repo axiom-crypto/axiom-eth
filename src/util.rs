@@ -1,21 +1,29 @@
+use crate::rlp::builder::RlcThreadBreakPoints;
+
 use super::Field;
 use ethers_core::{
     types::{Address, H256, U256},
     utils::keccak256,
 };
 use halo2_base::{
-    gates::{range::RangeConfig, GateInstructions, RangeInstructions},
-    halo2_proofs::circuit::Value,
-    utils::{
-        bit_length, decompose, decompose_fe_to_u64_limbs, value_to_option, BigPrimeField,
-        PrimeField, ScalarField,
+    gates::{
+        builder::{FlexGateConfigParams, MultiPhaseThreadBreakPoints},
+        flex_gate::{FlexGateConfig, GateStrategy},
+        GateInstructions, RangeChip, RangeInstructions,
     },
+    utils::{bit_length, decompose, decompose_fe_to_u64_limbs, BigPrimeField, ScalarField},
     AssignedValue, Context,
-    QuantumCell::{Constant, Existing, Witness},
+    QuantumCell::{Constant, Witness},
 };
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
-use std::{env::var, fs::File};
+use snark_verifier_sdk::halo2::aggregation::AggregationConfigParams;
+use std::{
+    env::{set_var, var},
+    fs::File,
+    iter,
+    path::Path,
+};
 
 pub(crate) const NUM_BYTES_IN_U128: usize = 16;
 
@@ -32,9 +40,15 @@ pub struct EthConfigParams {
     // for keccak chip you should know the number of unusable rows beforehand
     pub unusable_rows: usize,
     pub keccak_rows_per_round: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lookup_bits: Option<usize>,
 }
 
 impl EthConfigParams {
+    pub fn from_path<P: AsRef<Path>>(path: P) -> Self {
+        serde_json::from_reader(File::open(&path).expect("path does not exist")).unwrap()
+    }
+    /* MAYBE DELETE
     pub fn get_header() -> Self {
         let path =
             var("BLOCK_HEADER_CONFIG").unwrap_or_else(|_| "configs/block_header.json".to_string());
@@ -50,9 +64,78 @@ impl EthConfigParams {
         )
         .unwrap()
     }
+    */
 }
 
-pub(crate) type AssignedH256<'v, F> = [AssignedValue<'v, F>; 2]; // H256 as hi-lo (u128, u128)
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct EthConfigPinning {
+    pub params: EthConfigParams,
+    pub break_points: RlcThreadBreakPoints,
+}
+
+impl EthConfigPinning {
+    pub fn from_path<P: AsRef<Path>>(path: P) -> Self {
+        serde_json::from_reader(File::open(&path).expect("path does not exist")).unwrap()
+    }
+
+    pub fn load(self) -> RlcThreadBreakPoints {
+        set_var("ETH_CONFIG_PARAMS", serde_json::to_string(&self.params).unwrap());
+        set_var("KECCAK_ROWS", self.params.keccak_rows_per_round.to_string());
+        if let Some(bits) = self.params.lookup_bits {
+            set_var("LOOKUP_BITS", bits.to_string());
+        }
+        self.break_points
+    }
+
+    pub fn from_var(break_points: RlcThreadBreakPoints) -> Self {
+        let params: EthConfigParams =
+            serde_json::from_str(&var("ETH_CONFIG_PARAMS").unwrap()).unwrap();
+        Self { params, break_points }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct AggregationConfigPinning {
+    pub params: AggregationConfigParams,
+    pub break_points: MultiPhaseThreadBreakPoints,
+}
+
+impl AggregationConfigPinning {
+    pub fn from_path<P: AsRef<Path>>(path: P) -> Self {
+        serde_json::from_reader(File::open(&path).expect("path does not exist")).unwrap()
+    }
+
+    pub fn load(self) -> RlcThreadBreakPoints {
+        let gate_params = FlexGateConfigParams {
+            k: self.params.degree as usize,
+            num_advice_per_phase: vec![self.params.num_advice],
+            num_lookup_advice_per_phase: vec![self.params.num_lookup_advice],
+            strategy: GateStrategy::Vertical,
+            num_fixed: self.params.num_fixed,
+        };
+        set_var("FLEX_GATE_CONFIG_PARAMS", serde_json::to_string(&gate_params).unwrap());
+        set_var("LOOKUP_BITS", self.params.lookup_bits.to_string());
+        RlcThreadBreakPoints { gate: self.break_points, rlc: vec![] }
+    }
+
+    pub fn from_var(break_points: MultiPhaseThreadBreakPoints) -> Self {
+        let params: FlexGateConfigParams =
+            serde_json::from_str(&var("FLEX_GATE_CONFIG_PARAMS").unwrap()).unwrap();
+        let lookup_bits = var("LOOKUP_BITS").unwrap().parse().unwrap();
+        Self {
+            params: AggregationConfigParams {
+                degree: params.k as u32,
+                num_advice: params.num_advice_per_phase[0],
+                num_lookup_advice: params.num_lookup_advice_per_phase[0],
+                num_fixed: params.num_fixed,
+                lookup_bits,
+            },
+            break_points,
+        }
+    }
+}
+
+pub(crate) type AssignedH256<F> = [AssignedValue<F>; 2]; // H256 as hi-lo (u128, u128)
 
 pub fn get_merkle_mountain_range(leaves: &[H256], max_depth: usize) -> Vec<H256> {
     let num_leaves = leaves.len();
@@ -158,27 +241,27 @@ pub fn decode_field_to_addr<F: Field>(fe: &F) -> Address {
 // circuit utils:
 
 /// Assumes that `bytes` have witnesses that are bytes.
-pub fn bytes_be_to_u128<'v, F: PrimeField>(
-    ctx: &mut Context<'_, F>,
+pub fn bytes_be_to_u128<F: BigPrimeField>(
+    ctx: &mut Context<F>,
     gate: &impl GateInstructions<F>,
-    bytes: &[AssignedValue<'v, F>],
-) -> Vec<AssignedValue<'v, F>> {
+    bytes: &[AssignedValue<F>],
+) -> Vec<AssignedValue<F>> {
     limbs_be_to_u128(ctx, gate, bytes, 8)
 }
 
-pub(crate) fn limbs_be_to_u128<'v, F: PrimeField>(
-    ctx: &mut Context<'_, F>,
+pub(crate) fn limbs_be_to_u128<F: BigPrimeField>(
+    ctx: &mut Context<F>,
     gate: &impl GateInstructions<F>,
-    limbs: &[AssignedValue<'v, F>],
+    limbs: &[AssignedValue<F>],
     limb_bits: usize,
-) -> Vec<AssignedValue<'v, F>> {
+) -> Vec<AssignedValue<F>> {
     assert_eq!(128 % limb_bits, 0);
     limbs
         .chunks(128 / limb_bits)
         .map(|chunk| {
             gate.inner_product(
                 ctx,
-                chunk.iter().rev().map(Existing),
+                chunk.iter().rev().copied(),
                 (0..chunk.len()).map(|idx| Constant(gate.pow_of_two()[limb_bits * idx])),
             )
         })
@@ -186,33 +269,26 @@ pub(crate) fn limbs_be_to_u128<'v, F: PrimeField>(
 }
 
 // `num` in u64
-pub fn num_to_bytes_be<'v, F: ScalarField>(
-    ctx: &mut Context<'v, F>,
-    range: &RangeConfig<F>,
-    num: &AssignedValue<'v, F>,
+pub fn num_to_bytes_be<F: ScalarField>(
+    ctx: &mut Context<F>,
+    range: &RangeChip<F>,
+    num: &AssignedValue<F>,
     num_bytes: usize,
-) -> Vec<AssignedValue<'v, F>> {
+) -> Vec<AssignedValue<F>> {
     let mut bytes = Vec::with_capacity(num_bytes);
-    let pows = range.gate().pow_of_two().iter().step_by(8).take(num_bytes).map(|x| Constant(*x));
-    let acc = match value_to_option(num.value()) {
-        Some(num) => {
-            let byte_vals = decompose_fe_to_u64_limbs(num, num_bytes, 8)
-                .into_iter()
-                .map(|x| Witness(Value::known(F::from(x))));
-            range.gate.inner_product_left(ctx, byte_vals, pows, &mut bytes)
-        }
-        _ => range.gate.inner_product_left(
-            ctx,
-            vec![Witness(Value::unknown()); num_bytes],
-            pows,
-            &mut bytes,
-        ),
-    };
+    // mostly copied from RangeChip::range_check
+    let pows = range.gate.pow_of_two().iter().step_by(8).take(num_bytes).map(|x| Constant(*x));
+    let byte_vals =
+        decompose_fe_to_u64_limbs(num.value(), num_bytes, 8).into_iter().map(F::from).map(Witness);
+    let row_offset = ctx.advice.len() as isize;
+    let acc = range.gate.inner_product(ctx, byte_vals, pows);
     ctx.constrain_equal(&acc, num);
-    for byte in &bytes {
+
+    for i in (0..num_bytes - 1).rev().map(|i| 1 + 3 * i as isize).chain(iter::once(0)) {
+        let byte = ctx.get(row_offset + i);
         range.range_check(ctx, byte, 8);
+        bytes.push(byte);
     }
-    bytes.reverse();
     bytes
 }
 
@@ -221,13 +297,13 @@ pub fn num_to_bytes_be<'v, F: ScalarField>(
 /// zero pad it on the left.
 ///
 /// Assumes `0 < len <= max_len <= out_len`.
-pub fn bytes_be_var_to_fixed<'v, F: ScalarField>(
-    ctx: &mut Context<'_, F>,
+pub fn bytes_be_var_to_fixed<F: ScalarField>(
+    ctx: &mut Context<F>,
     gate: &impl GateInstructions<F>,
-    bytes: &[AssignedValue<'v, F>],
-    len: &AssignedValue<'v, F>,
+    bytes: &[AssignedValue<F>],
+    len: AssignedValue<F>,
     out_len: usize,
-) -> Vec<AssignedValue<'v, F>> {
+) -> Vec<AssignedValue<F>> {
     debug_assert!(bytes.len() <= out_len);
     debug_assert!(bit_length(out_len as u64) < F::CAPACITY as usize);
 
@@ -237,62 +313,70 @@ pub fn bytes_be_var_to_fixed<'v, F: ScalarField>(
     // out[idx] = 1{ len >= out_len - idx } * bytes[idx + len - out_len]
     (0..out_len)
         .map(|idx| {
-            let byte_idx = gate.sub(ctx, Existing(len), Constant(F::from((out_len - idx) as u64)));
+            let byte_idx =
+                gate.sub(ctx, len, Constant(gate.get_field_element((out_len - idx) as u64)));
             // If `len - (out_len - idx) < 0` then the `F` value will be >= `bytes.len()` provided that `out_len` is not too big -- namely `bit_length(out_len) <= F::CAPACITY - 1`
             // Thus select_from_idx at idx < 0 will return 0
-            gate.select_from_idx(ctx, bytes.iter().map(|x| Existing(x)), Existing(&byte_idx))
+            gate.select_from_idx(ctx, bytes.iter().copied(), byte_idx)
         })
         .collect()
 }
 
-pub fn uint_to_bytes_be<'v, F: BigPrimeField>(
-    ctx: &mut Context<'v, F>,
-    range: &RangeConfig<F>,
-    uint: &AssignedValue<'v, F>,
+/// See [`num_to_bytes_be`] for details. Here `uint` can now be any uint that fits into `F`.
+pub fn uint_to_bytes_be<F: BigPrimeField>(
+    ctx: &mut Context<F>,
+    range: &RangeChip<F>,
+    uint: &AssignedValue<F>,
     num_bytes: usize,
-) -> Vec<AssignedValue<'v, F>> {
-    let mut bytes_le = uint_to_bytes_le(ctx, range, uint, num_bytes);
-    bytes_le.reverse();
-    bytes_le
-}
-
-pub fn uint_to_bytes_le<'v, F: BigPrimeField>(
-    ctx: &mut Context<'v, F>,
-    range: &RangeConfig<F>,
-    uint: &AssignedValue<'v, F>,
-    num_bytes: usize,
-) -> Vec<AssignedValue<'v, F>> {
+) -> Vec<AssignedValue<F>> {
     let mut bytes = Vec::with_capacity(num_bytes);
-    let pows = range.gate().pow_of_two().iter().step_by(8).take(num_bytes).map(|x| Constant(*x));
-    let acc = match value_to_option(uint.value()) {
-        Some(uint) => {
-            let byte_vals =
-                decompose(uint, num_bytes, 8).into_iter().map(|x| Witness(Value::known(x)));
-            range.gate.inner_product_left(ctx, byte_vals, pows, &mut bytes)
-        }
-        _ => range.gate.inner_product_left(
-            ctx,
-            vec![Witness(Value::unknown()); num_bytes],
-            pows,
-            &mut bytes,
-        ),
-    };
+    // mostly copied from RangeChip::range_check
+    let pows = range.gate.pow_of_two().iter().step_by(8).take(num_bytes).map(|x| Constant(*x));
+    let byte_vals = decompose(uint.value(), num_bytes, 8).into_iter().map(Witness);
+    let row_offset = ctx.advice.len() as isize;
+    let acc = range.gate.inner_product(ctx, byte_vals, pows);
     ctx.constrain_equal(&acc, uint);
-    for byte in &bytes {
+
+    for i in (0..num_bytes - 1).rev().map(|i| 1 + 3 * i as isize).chain(iter::once(0)) {
+        let byte = ctx.get(row_offset + i);
         range.range_check(ctx, byte, 8);
+        bytes.push(byte);
     }
     bytes
 }
 
-pub fn bytes_be_to_uint<'v, F: ScalarField>(
-    ctx: &mut Context<'_, F>,
-    gate: &impl GateInstructions<F>,
-    input: &[AssignedValue<'v, F>],
+/// See [`num_to_bytes_be`] for details. Here `uint` can now be any uint that fits into `F`.
+pub fn uint_to_bytes_le<F: BigPrimeField>(
+    ctx: &mut Context<F>,
+    range: &RangeChip<F>,
+    uint: &AssignedValue<F>,
     num_bytes: usize,
-) -> AssignedValue<'v, F> {
+) -> Vec<AssignedValue<F>> {
+    let mut bytes = Vec::with_capacity(num_bytes);
+    // mostly copied from RangeChip::range_check
+    let pows = range.gate.pow_of_two().iter().step_by(8).take(num_bytes).map(|x| Constant(*x));
+    let byte_vals = decompose(uint.value(), num_bytes, 8).into_iter().map(Witness);
+    let row_offset = ctx.advice.len() as isize;
+    let acc = range.gate.inner_product(ctx, byte_vals, pows);
+    ctx.constrain_equal(&acc, uint);
+
+    for i in iter::once(0).chain((0..num_bytes - 1).map(|i| 1 + 3 * i as isize)) {
+        let byte = ctx.get(row_offset + i);
+        range.range_check(ctx, byte, 8);
+        bytes.push(byte);
+    }
+    bytes
+}
+
+pub fn bytes_be_to_uint<F: ScalarField>(
+    ctx: &mut Context<F>,
+    gate: &impl GateInstructions<F>,
+    input: &[AssignedValue<F>],
+    num_bytes: usize,
+) -> AssignedValue<F> {
     gate.inner_product(
         ctx,
-        input[..num_bytes].iter().rev().map(Existing),
+        input[..num_bytes].iter().rev().copied(),
         (0..num_bytes).map(|idx| Constant(gate.pow_of_two()[8 * idx])),
     )
 }

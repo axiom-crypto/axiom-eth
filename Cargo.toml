@@ -1,6 +1,6 @@
 [package]
 name = "axiom-eth"
-version = "0.0.1"
+version = "0.1.0"
 edition = "2021"
 autobins = false
 
@@ -16,6 +16,7 @@ serde_json = { version = "1.0", default-features = false }
 rayon = "1.6.1"
 
 # misc
+log = "0.4"
 ark-std = { version = "0.3.0", features = ["print-trace"], optional = true }
 clap = { version = "4.0.13", features = ["derive"], optional = true }
 clap-num = { version = "1.0.2", optional = true }
@@ -24,8 +25,8 @@ base64 = { version = "0.21", optional = true }
 serde_with = { version = "2.2", optional = true }
 
 # halo2
-halo2-base = { git = "https://github.com/axiom-crypto/halo2-lib.git", tag = "v0.2.2", default-features = false }
-zkevm-keccak = { git = "https://github.com/axiom-crypto/halo2-lib.git", tag = "v0.2.2", default-features = false }
+halo2-base = { git = "https://github.com/axiom-crypto/halo2-lib", branch = "axiom-dev-0301", default-features = false }
+zkevm-keccak = { git = "https://github.com/axiom-crypto/halo2-lib", branch = "axiom-dev-0301", default-features = false }
 
 # crypto
 rlp = "0.5.2"
@@ -35,8 +36,8 @@ rand = "0.8"
 rand_chacha = "0.3.1"
 
 # aggregation 
-snark-verifier = { git = "https://github.com/axiom-crypto/snark-verifier.git", tag = "v2023_01_30", default-features = false, features = ["loader_halo2"], optional = true }
-snark-verifier-sdk = { git = "https://github.com/axiom-crypto/snark-verifier.git", tag = "v2023_01_30", default-features = false, features = ["loader_halo2"], optional = true }
+snark-verifier = { git = "https://github.com/axiom-crypto/snark-verifier.git", branch = "axiom-dev-0301", default-features = false, features = ["loader_halo2"], optional = true }
+snark-verifier-sdk = { git = "https://github.com/axiom-crypto/snark-verifier.git", branch = "axiom-dev-0301", default-features = false, features = ["loader_halo2"], optional = true }
 
 # generating circuit inputs from blockchain
 ethers-providers = { version = "1.0.2", optional = true }  
@@ -47,9 +48,10 @@ hex = "0.4.3"
 ark-std = { version = "0.3.0", features = ["print-trace"] }
 log = "0.4"
 env_logger = "0.10"
+test-log = "0.2.11"
 
 [features]
-default = ["evm", "aggregation", "clap", "halo2-axiom", "halo2-base/jemallocator"]
+default = ["halo2-axiom", "halo2-base/jemallocator", "display", "aggregation", "clap", "evm"]
 aggregation = ["dep:snark-verifier", "snark-verifier-sdk", "providers"]
 evm = ["snark-verifier-sdk?/loader_evm", "aggregation"]
 providers = ["dep:ethers-providers", "dep:tokio", "dep:bincode", "dep:base64", "dep:serde_with"]
@@ -58,3 +60,37 @@ clap = ["dep:clap", "dep:clap-num"]
 # EXACTLY one of halo2-pse / halo2-axiom should always be turned on
 halo2-pse = ["zkevm-keccak/halo2-pse", "snark-verifier-sdk?/halo2-pse"]
 halo2-axiom = ["zkevm-keccak/halo2-axiom", "snark-verifier-sdk?/halo2-axiom"]
+
+[profile.dev]
+opt-level = 3
+debug = 1 # change to 0 or 2 for more or less debug info
+overflow-checks = true
+incremental = true
+
+# Local "release" mode, more optimized than dev but faster to compile than release
+[profile.local]
+inherits = "dev"
+opt-level = 3
+# Set this to 1 or 2 to get more useful backtraces
+debug = 1
+debug-assertions = false
+panic = 'unwind'
+# better recompile times
+incremental = true
+lto = "thin"
+codegen-units = 16
+
+[profile.release]
+opt-level = 3
+debug = false
+debug-assertions = false
+lto = "fat" 
+# `codegen-units = 1` can lead to WORSE performance - always bench to find best profile for your machine!
+# codegen-units = 1
+panic = "abort"
+incremental = false
+
+# For performance profiling
+[profile.flamegraph]
+inherits = "release"
+debug = true
