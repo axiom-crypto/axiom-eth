@@ -5,23 +5,23 @@ use super::{
     EthBlockHeaderChainCircuit,
 };
 use crate::{
+    keccak::FnSynthesize,
     providers::{GOERLI_PROVIDER_URL, MAINNET_PROVIDER_URL},
     rlp::builder::{RlcThreadBreakPoints, RlcThreadBuilder},
-    util::{AggregationConfigPinning, EthConfigPinning},
-    Network, ETH_LOOKUP_BITS,
+    util::{AggregationConfigPinning, EthConfigPinning, Halo2ConfigPinning},
+    EthCircuitBuilder, Field, Network,
 };
 use core::cmp::min;
 use ethers_providers::{Http, Provider};
 use halo2_base::{
-    gates::builder::CircuitBuilderStage,
+    gates::builder::{CircuitBuilderStage, MultiPhaseThreadBreakPoints},
     halo2_proofs::{
         halo2curves::bn256::{Bn256, Fr, G1Affine},
         plonk::{Circuit, ProvingKey, VerifyingKey},
-        poly::kzg::commitment::ParamsKZG,
+        poly::{commitment::Params, kzg::commitment::ParamsKZG},
     },
     utils::fs::{gen_srs, read_params},
 };
-use serde_json::to_writer_pretty;
 #[cfg(feature = "evm")]
 use snark_verifier_sdk::evm::{gen_evm_proof_shplonk, gen_evm_verifier_shplonk};
 use snark_verifier_sdk::{
@@ -121,6 +121,15 @@ impl Task {
     }
 }
 
+/// Aggregates snarks and re-exposes previous public inputs.
+///
+/// If `has_prev_accumulators` is true, then it assumes all previous snarks are already aggregation circuits and does not re-expose the old accumulators as public inputs.
+#[derive(Clone, Debug)]
+pub struct PublicAggregationCircuit {
+    pub snarks: Vec<Snark>,
+    pub has_prev_accumulators: bool,
+}
+
 /// The public/private inputs for various circuits.
 /// These are used to create a circuit later (it is debatable whether these should be called circuits at all).
 #[derive(Clone, Debug)]
@@ -128,14 +137,62 @@ pub enum AnyCircuit {
     Initial(EthBlockHeaderChainCircuit<Fr>),
     Intermediate(EthBlockHeaderChainAggregationCircuit),
     Final(EthBlockHeaderChainFinalAggregationCircuit),
-    ForEvm(Vec<Snark>),
+    ForEvm(PublicAggregationCircuit),
+}
+
+impl AnyCircuit {
+    fn read_or_create_pk(
+        self,
+        params: &ParamsKZG<Bn256>,
+        pk_path: impl AsRef<Path>,
+        pinning_path: impl AsRef<Path>,
+        read_only: bool,
+    ) -> ProvingKey<G1Affine> {
+        // does almost the same thing for each circuit type; don't know how to get around this with rust
+        match self {
+            AnyCircuit::Initial(pre_circuit) => {
+                pre_circuit.read_or_create_pk(params, pk_path, pinning_path, read_only)
+            }
+            AnyCircuit::Intermediate(pre_circuit) => {
+                pre_circuit.read_or_create_pk(params, pk_path, pinning_path, read_only)
+            }
+            AnyCircuit::Final(pre_circuit) => {
+                pre_circuit.read_or_create_pk(params, pk_path, pinning_path, read_only)
+            }
+            AnyCircuit::ForEvm(pre_circuit) => {
+                pre_circuit.read_or_create_pk(params, pk_path, pinning_path, read_only)
+            }
+        }
+    }
+
+    fn gen_snark_shplonk(
+        self,
+        params: &ParamsKZG<Bn256>,
+        pk: &ProvingKey<G1Affine>,
+        pinning_path: impl AsRef<Path>,
+        path: Option<impl AsRef<Path>>,
+    ) -> Snark {
+        match self {
+            AnyCircuit::Initial(pre_circuit) => {
+                pre_circuit.gen_snark_shplonk(params, pk, pinning_path, path)
+            }
+            AnyCircuit::Intermediate(pre_circuit) => {
+                pre_circuit.gen_snark_shplonk(params, pk, pinning_path, path)
+            }
+            AnyCircuit::Final(pre_circuit) => {
+                pre_circuit.gen_snark_shplonk(params, pk, pinning_path, path)
+            }
+            AnyCircuit::ForEvm(pre_circuit) => {
+                pre_circuit.gen_snark_shplonk(params, pk, pinning_path, path)
+            }
+        }
+    }
 }
 
 pub struct Sequencer {
     pub pkeys: HashMap<CircuitType, ProvingKey<G1Affine>>,
     pub params_k: HashMap<CircuitType, u32>,
     pub params: HashMap<u32, ParamsKZG<Bn256>>,
-    // pub rng: ChaCha20Rng,
     pub provider: Provider<Http>,
     pub network: Network,
     read_only: bool,
@@ -161,8 +218,8 @@ impl Sequencer {
         }
     }
 
-    /// Loads environmental variables and returns the degree of the circuit and pinning.
-    pub fn set_env(&self, circuit_type: CircuitType) -> (u32, RlcThreadBreakPoints) {
+    /// The path to the file with the circuit configuration pinning.
+    pub fn pinning_path(&self, circuit_type: CircuitType) -> String {
         let network = self.network;
         let CircuitType { depth, initial_depth, finality } = circuit_type;
         let fname_prefix = if depth == initial_depth {
@@ -171,80 +228,46 @@ impl Sequencer {
             format!("configs/headers/{network}_{depth}_{initial_depth}")
         };
         if depth == initial_depth {
-            let pinning = EthConfigPinning::from_path(format!("{fname_prefix}.json"));
-            (pinning.params.degree, pinning.load())
+            format!("{fname_prefix}.json")
         } else {
             match finality {
                 Finality::None => {
-                    let pinning =
-                        AggregationConfigPinning::from_path(format!("{fname_prefix}.json"));
-                    (pinning.params.degree, pinning.load())
+                    format!("{fname_prefix}.json")
                 }
                 Finality::Merkle => {
-                    let pinning = EthConfigPinning::from_path(format!("{fname_prefix}_final.json"));
-                    (pinning.params.degree, pinning.load())
+                    format!("{fname_prefix}_final.json")
                 }
                 Finality::Evm(round) => {
-                    let pinning = AggregationConfigPinning::from_path(format!(
-                        "{fname_prefix}_for_evm_{round}.json"
-                    ));
-                    (pinning.params.degree, pinning.load())
+                    format!("{fname_prefix}_for_evm_{round}.json")
                 }
+            }
+        }
+    }
+
+    /// Returns the degree of the circuit from file
+    pub fn get_degree(&self, circuit_type: CircuitType) -> u32 {
+        let path = self.pinning_path(circuit_type);
+        let CircuitType { depth, initial_depth, finality } = circuit_type;
+        if depth == initial_depth {
+            EthConfigPinning::from_path(path).params.degree
+        } else {
+            match finality {
+                Finality::None | Finality::Evm(_) => {
+                    AggregationConfigPinning::from_path(path).params.degree
+                }
+                Finality::Merkle => EthConfigPinning::from_path(path).params.degree,
             }
         }
     }
 
     /// Read (or generate) the universal trusted setup by reading configuration file.
     /// Loads environmental variables and returns the degree of the circuit and pinning.
-    pub fn get_params(&mut self, circuit_type: CircuitType) -> (u32, RlcThreadBreakPoints) {
-        let (k, break_points) = self.set_env(circuit_type);
+    pub fn get_params(&mut self, circuit_type: CircuitType) -> u32 {
+        let k = self.get_degree(circuit_type);
         let read_only = self.read_only;
         self.params.entry(k).or_insert_with(|| if read_only { read_params(k) } else { gen_srs(k) });
         self.params_k.insert(circuit_type, k);
-        (k, break_points)
-    }
-
-    // auto-update config parameter json files when read_only = false
-    fn update_config(&self, circuit_type: CircuitType, break_points: RlcThreadBreakPoints) {
-        let network = self.network;
-        let CircuitType { depth, initial_depth, finality } = circuit_type;
-        let fname_prefix = if depth == initial_depth {
-            format!("configs/headers/{network}_{depth}")
-        } else {
-            format!("configs/headers/{network}_{depth}_{initial_depth}")
-        };
-        if depth == initial_depth {
-            let pinning = EthConfigPinning::from_var(break_points);
-            to_writer_pretty(File::create(format!("{fname_prefix}.json")).unwrap(), &pinning)
-                .unwrap();
-        } else {
-            match finality {
-                Finality::None => {
-                    let pinning = AggregationConfigPinning::from_var(break_points.gate);
-                    to_writer_pretty(
-                        File::create(format!("{fname_prefix}.json")).unwrap(),
-                        &pinning,
-                    )
-                    .unwrap();
-                }
-                Finality::Merkle => {
-                    let pinning = EthConfigPinning::from_var(break_points);
-                    to_writer_pretty(
-                        File::create(format!("{fname_prefix}_final.json")).unwrap(),
-                        &pinning,
-                    )
-                    .unwrap();
-                }
-                Finality::Evm(round) => {
-                    let pinning = AggregationConfigPinning::from_var(break_points.gate);
-                    to_writer_pretty(
-                        File::create(format!("{fname_prefix}_for_evm_{round}.json")).unwrap(),
-                        &pinning,
-                    )
-                    .unwrap();
-                }
-            }
-        };
+        k
     }
 
     // recursively generates necessary snarks to create circuit
@@ -253,7 +276,6 @@ impl Sequencer {
         let CircuitType { depth, initial_depth, finality } = circuit_type;
         assert!(end - start < 1 << depth);
         if depth == initial_depth {
-            // set environmental vars
             let circuit = EthBlockHeaderChainCircuit::from_provider(
                 &self.provider,
                 self.network,
@@ -294,7 +316,10 @@ impl Sequencer {
                     );
                     AnyCircuit::Final(circuit)
                 }
-                Finality::Evm(_) => AnyCircuit::ForEvm(snarks),
+                Finality::Evm(_) => AnyCircuit::ForEvm(PublicAggregationCircuit {
+                    snarks,
+                    has_prev_accumulators: true,
+                }),
             }
         }
     }
@@ -305,224 +330,66 @@ impl Sequencer {
         if let Ok(snark) = task.read_snark(network) {
             return snark;
         }
-        let circuit_input = self.get_circuit(task);
-        let circuit_type = task.circuit_type;
-        let (k, mut break_points) = self.get_params(circuit_type);
-        let params = &self.params[&k];
-        let pk_name = circuit_type.pkey_name(network);
-        let pk_path = Some(Path::new(&pk_name));
-        let lookup_bits =
-            var("LOOKUP_BITS").unwrap_or_else(|_| ETH_LOOKUP_BITS.to_string()).parse().unwrap();
         let read_only = self.read_only;
+        let circuit_type = task.circuit_type;
+        let pre_circuit = self.get_circuit(task);
+
+        let k = self.get_params(circuit_type);
+        let params = &self.params[&k];
+
+        let pk_name = circuit_type.pkey_name(network);
+        let pinning_path = self.pinning_path(circuit_type);
 
         let pk = if let Some(pk) = self.pkeys.get(&circuit_type) {
             pk
         } else {
-            // as you can see we do the same thing for each circuit, but because `Circuit` is
-            // not an object-safe trait we can't put it in a `Box`
-            let pk = match circuit_input.clone() {
-                AnyCircuit::Initial(input) => {
-                    let circuit = input.create_circuit(RlcThreadBuilder::keygen(), None);
-                    if read_only {
-                        readonly_pk(&pk_name, &circuit)
-                    } else {
-                        let pk = gen_pk(params, &circuit, pk_path);
-                        // if pk exists already then no break points are generated, so we should use existing break points
-                        let tmp = circuit.circuit.break_points.take();
-                        if tmp != Default::default() {
-                            break_points = tmp;
-                        }
-                        pk
-                    }
-                }
-                AnyCircuit::Intermediate(input) => {
-                    let circuit = input.create_circuit(
-                        CircuitBuilderStage::Keygen,
-                        None,
-                        lookup_bits,
-                        params,
-                    );
-                    if read_only {
-                        readonly_pk(&pk_name, &circuit)
-                    } else {
-                        let pk = gen_pk(params, &circuit, pk_path);
-                        let tmp = circuit.inner.circuit.0.break_points.take();
-                        if !tmp.is_empty() && !tmp[0].is_empty() {
-                            break_points.gate = tmp;
-                        }
-                        pk
-                    }
-                }
-                AnyCircuit::Final(input) => {
-                    let circuit = input.create_circuit(
-                        CircuitBuilderStage::Keygen,
-                        None,
-                        lookup_bits,
-                        params,
-                    );
-                    if read_only {
-                        readonly_pk(&pk_name, &circuit)
-                    } else {
-                        let pk = gen_pk(params, &circuit, pk_path);
-                        let tmp = circuit.circuit.break_points.take();
-                        if tmp != Default::default() {
-                            break_points = tmp;
-                        }
-                        pk
-                    }
-                }
-                AnyCircuit::ForEvm(snarks) => {
-                    let circuit = AggregationCircuit::public::<SHPLONK>(
-                        CircuitBuilderStage::Keygen,
-                        None,
-                        lookup_bits,
-                        params,
-                        snarks,
-                        true,
-                    );
-                    if read_only {
-                        readonly_pk(&pk_name, &circuit)
-                    } else {
-                        circuit.config(
-                            k,
-                            Some(
-                                var("MINIMUM_ROWS")
-                                    .unwrap_or_else(|_| "10".to_string())
-                                    .parse()
-                                    .unwrap(),
-                            ),
-                        );
-                        let pk = gen_pk(params, &circuit, pk_path);
-                        let tmp = circuit.inner.circuit.0.break_points.take();
-                        if !tmp.is_empty() && !tmp[0].is_empty() {
-                            break_points.gate = tmp;
-                        }
-                        pk
-                    }
-                }
-            };
+            let pk =
+                pre_circuit.clone().read_or_create_pk(params, pk_name, &pinning_path, read_only);
             self.pkeys.insert(circuit_type, pk);
-            if read_only {
-                // for extra safety, to make sure pk auto-config did not change the config parameters, we reload env vars
-                self.set_env(circuit_type);
-            }
-            self.pkeys.get(&circuit_type).unwrap()
+            &self.pkeys[&circuit_type]
         };
-        if !read_only {
-            self.update_config(circuit_type, break_points.clone());
-        }
         let snark_path = Some(task.snark_name(network));
-        match circuit_input {
-            AnyCircuit::Initial(input) => {
-                let circuit = input.create_circuit(RlcThreadBuilder::prover(), Some(break_points));
-                gen_snark_shplonk(params, pk, circuit, snark_path)
-            }
-            AnyCircuit::Intermediate(input) => {
-                let circuit = input.create_circuit(
-                    CircuitBuilderStage::Prover,
-                    Some(break_points.gate),
-                    lookup_bits,
-                    params,
-                );
-                gen_snark_shplonk(params, pk, circuit, snark_path)
-            }
-            AnyCircuit::Final(input) => {
-                let circuit = input.create_circuit(
-                    CircuitBuilderStage::Prover,
-                    Some(break_points),
-                    lookup_bits,
-                    params,
-                );
-                gen_snark_shplonk(params, pk, circuit, snark_path)
-            }
-            AnyCircuit::ForEvm(snarks) => {
-                let circuit = AggregationCircuit::public::<SHPLONK>(
-                    // shplonk is for previous round of snarks
-                    CircuitBuilderStage::Prover,
-                    Some(break_points.gate),
-                    lookup_bits,
-                    params,
-                    snarks,
-                    true,
-                );
-                gen_snark_shplonk(params, pk, circuit, snark_path)
-            }
-        }
+        pre_circuit.gen_snark_shplonk(params, pk, &pinning_path, snark_path)
     }
 
     #[cfg(feature = "evm")]
     pub fn get_calldata(&mut self, task: Task, generate_smart_contract: bool) -> Vec<u8> {
         let network = self.network;
-        let circuit_type = task.circuit_type;
+        let Task { start, end, circuit_type } = task;
+        let CircuitType { depth, initial_depth, finality: _ } = circuit_type;
         assert!(matches!(circuit_type.finality, Finality::Evm(_)));
         let fname = format!(
-            "data/headers/{}_{}_{}_{:06x}_{:06x}.calldata",
-            network, circuit_type.depth, circuit_type.initial_depth, task.start, task.end
+            "data/headers/{network}_{depth}_{initial_depth}_{start:06x}_{end:06x}.calldata",
         );
         if let Ok(calldata) = std::fs::read(&fname) {
             return calldata;
         }
-        let circuit_input = self.get_circuit(task);
-        let (k, mut break_points) = self.get_params(circuit_type);
-        let params = &self.params[&k];
-        let pk_name = circuit_type.pkey_name(self.network);
-        let pk_path = Some(Path::new(&pk_name));
-        let lookup_bits =
-            var("LOOKUP_BITS").unwrap_or_else(|_| ETH_LOOKUP_BITS.to_string()).parse().unwrap();
         let read_only = self.read_only;
-        if let AnyCircuit::ForEvm(snarks) = circuit_input {
-            let get_pk = self.pkeys.get(&circuit_type).is_none();
+
+        let pre_circuit = self.get_circuit(task);
+        let k = self.get_params(circuit_type);
+        let params = &self.params[&k];
+
+        let pk_name = circuit_type.pkey_name(self.network);
+        let pinning_path = self.pinning_path(circuit_type);
+
+        if let AnyCircuit::ForEvm(pre_circuit) = pre_circuit {
+            let pk = self.pkeys.entry(circuit_type).or_insert_with(|| {
+                pre_circuit.clone().read_or_create_pk(params, pk_name, &pinning_path, read_only)
+            });
             let mut deployment_code = None;
-            if get_pk || generate_smart_contract {
-                let circuit = AggregationCircuit::public::<SHPLONK>(
-                    CircuitBuilderStage::Keygen,
-                    None,
-                    lookup_bits,
+            if generate_smart_contract {
+                let circuit =
+                    pre_circuit.clone().create_circuit(CircuitBuilderStage::Keygen, None, params);
+                let deploy_code = custom_gen_evm_verifier_shplonk(
                     params,
-                    snarks.clone(),
-                    true,
+                    pk.get_vk(),
+                    &circuit,
+                    Some(format!("data/headers/{network}_{depth}_{initial_depth}.yul",)),
                 );
-                circuit.config(
-                    k,
-                    Some(var("MINIMUM_ROWS").unwrap_or_else(|_| "10".to_string()).parse().unwrap()),
-                );
-                if get_pk {
-                    let pk = if read_only {
-                        readonly_pk(&pk_name, &circuit)
-                    } else {
-                        let pk = gen_pk(params, &circuit, pk_path);
-                        let tmp = circuit.inner.circuit.0.break_points.take();
-                        if !tmp.is_empty() && !tmp[0].is_empty() {
-                            break_points.gate = tmp;
-                        }
-                        pk
-                    };
-                    self.pkeys.insert(circuit_type, pk);
-                }
-                if generate_smart_contract {
-                    let pk = self.pkeys.get(&circuit_type).unwrap();
-                    let deploy_code = custom_gen_evm_verifier_shplonk(
-                        params,
-                        pk.get_vk(),
-                        &circuit,
-                        Some(Path::new(&format!(
-                            "data/headers/{}_{}_{}.yul",
-                            self.network, circuit_type.depth, circuit_type.initial_depth
-                        ))),
-                    );
-                    deployment_code = Some(deploy_code);
-                }
+                deployment_code = Some(deploy_code);
             }
-            let pk = self.pkeys.get(&circuit_type).unwrap();
-            let circuit = AggregationCircuit::public::<SHPLONK>(
-                CircuitBuilderStage::Prover,
-                Some(break_points.gate),
-                lookup_bits,
-                params,
-                snarks,
-                true,
-            );
-            write_calldata_generic(params, pk, circuit, &fname, deployment_code)
+            pre_circuit.gen_calldata(params, pk, pinning_path, fname, deployment_code)
         } else {
             unreachable!()
         }
@@ -555,8 +422,12 @@ fn write_calldata_generic<ConcreteCircuit: CircuitExt<Fr>>(
 
 // need to trick rust into inferring type of the circuit because `C` involves closures
 // this is not ideal...
-fn readonly_pk<C: Circuit<Fr>>(fname: &str, _: &C) -> ProvingKey<G1Affine> {
-    read_pk::<C>(Path::new(fname)).expect("proving key should exist")
+fn custom_read_pk<C, P>(fname: P, _: &C) -> ProvingKey<G1Affine>
+where
+    C: Circuit<Fr>,
+    P: AsRef<Path>,
+{
+    read_pk::<C>(fname.as_ref()).expect("proving key should exist")
 }
 
 // also for type inference
@@ -564,52 +435,200 @@ pub fn custom_gen_evm_verifier_shplonk<C: CircuitExt<Fr>>(
     params: &ParamsKZG<Bn256>,
     vk: &VerifyingKey<G1Affine>,
     circuit: &C,
-    path: Option<&Path>,
+    path: Option<impl AsRef<Path>>,
 ) -> Vec<u8> {
-    gen_evm_verifier_shplonk::<C>(params, vk, circuit.num_instance(), path)
+    gen_evm_verifier_shplonk::<C>(
+        params,
+        vk,
+        circuit.num_instance(),
+        path.as_ref().map(|p| p.as_ref()),
+    )
 }
 
-// Given
-// - a JSON-RPC provider
-// - choice of EVM network
-// - a range of block numbers
-// - a universal trusted setup,
-//
-// this function will generate a ZK proof for the block header chain between blocks `start_block_number` and `end_block_number` inclusive.
-//
-// If a proving key is provided, it will be used to generate the proof. Otherwise, a new proving key will be generated.
-//
-// The SNARK's public instance will include a merkle mountain range up to depth `max_depth`.
-//
-// This SNARK does not use aggregation: it uses a single `EthBlockHeaderChainCircle` circuit,
-// so it may not be suitable for large block ranges.
+pub trait PreCircuit: Sized {
+    type Pinning: Halo2ConfigPinning;
 
-// Given
-// - a JSON-RPC provider
-// - choice of EVM network
-// - a range of block numbers
-// - a universal trusted setup,
-//
-// this function will generate a ZK proof for the block header chain between blocks `start_block_number` and `end_block_number` inclusive. The public instances are NOT finalized,
-// as the merkle mountain range is not fully computed.
-//
-// If a proving key is provided, it will be used to generate the proof. Otherwise, a new proving key will be generated.
-//
-// This SNARK uses recursive aggregation between depth `max_depth` and `initial_depth + 1`. At `initial_depth` it falls back to the `EthBlockHeaderChainCircle` circuit.
-// At each depth, it will try to load snarks of the previous depth from disk, and if it can't find them, it will generate them.
+    fn create_circuit(
+        self,
+        stage: CircuitBuilderStage,
+        break_points: Option<<Self::Pinning as Halo2ConfigPinning>::BreakPoints>,
+        params: &ParamsKZG<Bn256>,
+    ) -> impl PinnableCircuit<Fr>;
 
-// Given
-// - a JSON-RPC provider
-// - choice of EVM network
-// - a range of block numbers
-// - a universal trusted setup,
-//
-// this function will generate a ZK proof for the block header chain between blocks `start_block_number` and `end_block_number` inclusive. The public output is FINALIZED, with
-// a complete merkle mountain range.
-//
-// If a proving key is provided, it will be used to generate the proof. Otherwise, a new proving key will be generated.
-//
-// This SNARK uses recursive aggregation between depth `max_depth` and `initial_depth + 1`. At `initial_depth` it falls back to the `EthBlockHeaderChainCircle` circuit.
-// At each depth, it will try to load snarks of the previous depth from disk, and if it can't find them, it will generate them.
-//
-// Note: we assume that `params` is the correct size for the circuit.
+    /// Reads the proving key for the pre-circuit.
+    /// If `read_only` is true, then it is assumed that the proving key exists and can be read from `path` (otherwise the program will panic).
+    fn read_pk(self, params: &ParamsKZG<Bn256>, path: impl AsRef<Path>) -> ProvingKey<G1Affine> {
+        let circuit = self.create_circuit(CircuitBuilderStage::Keygen, None, params);
+        custom_read_pk(path, &circuit)
+    }
+
+    fn create_pk(
+        self,
+        params: &ParamsKZG<Bn256>,
+        pinning_path: impl AsRef<Path>,
+    ) -> ProvingKey<G1Affine> {
+        let circuit = self.create_circuit(CircuitBuilderStage::Keygen, None, params);
+        let pk = gen_pk(params, &circuit, None);
+        circuit.write_pinning(pinning_path);
+
+        pk
+    }
+
+    fn read_or_create_pk(
+        self,
+        params: &ParamsKZG<Bn256>,
+        pk_path: impl AsRef<Path>,
+        pinning_path: impl AsRef<Path>,
+        read_only: bool,
+    ) -> ProvingKey<G1Affine> {
+        if read_only {
+            self.read_pk(params, pk_path)
+        } else {
+            self.create_pk(params, pinning_path)
+        }
+    }
+
+    fn gen_snark_shplonk(
+        self,
+        params: &ParamsKZG<Bn256>,
+        pk: &ProvingKey<G1Affine>,
+        pinning_path: impl AsRef<Path>,
+        path: Option<impl AsRef<Path>>,
+    ) -> Snark {
+        let pinning = Self::Pinning::from_path(pinning_path);
+        let break_points = pinning.break_points();
+        let circuit = self.create_circuit(CircuitBuilderStage::Prover, Some(break_points), params);
+        gen_snark_shplonk(params, pk, circuit, path)
+    }
+
+    #[cfg(feature = "evm")]
+    fn gen_calldata(
+        self,
+        params: &ParamsKZG<Bn256>,
+        pk: &ProvingKey<G1Affine>,
+        pinning_path: impl AsRef<Path>,
+        path: impl AsRef<Path>,
+        deployment_code: Option<Vec<u8>>,
+    ) -> Vec<u8> {
+        let pinning = Self::Pinning::from_path(pinning_path);
+        let break_points = pinning.break_points();
+        let circuit = self.create_circuit(CircuitBuilderStage::Prover, Some(break_points), params);
+        write_calldata_generic(params, pk, circuit, path, deployment_code)
+    }
+}
+
+impl PreCircuit for EthBlockHeaderChainCircuit<Fr> {
+    type Pinning = EthConfigPinning;
+
+    fn create_circuit(
+        self,
+        stage: CircuitBuilderStage,
+        break_points: Option<RlcThreadBreakPoints>,
+        _: &ParamsKZG<Bn256>,
+    ) -> impl PinnableCircuit<Fr> {
+        let builder = match stage {
+            CircuitBuilderStage::Prover => RlcThreadBuilder::new(true),
+            _ => RlcThreadBuilder::new(false),
+        };
+        EthBlockHeaderChainCircuit::create_circuit(self, builder, break_points)
+    }
+}
+
+impl PreCircuit for EthBlockHeaderChainAggregationCircuit {
+    type Pinning = AggregationConfigPinning;
+
+    fn create_circuit(
+        self,
+        stage: CircuitBuilderStage,
+        break_points: Option<MultiPhaseThreadBreakPoints>,
+        params: &ParamsKZG<Bn256>,
+    ) -> impl PinnableCircuit<Fr> {
+        let lookup_bits = var("LOOKUP_BITS").expect("LOOKUP_BITS is not set").parse().unwrap();
+        EthBlockHeaderChainAggregationCircuit::create_circuit(
+            self,
+            stage,
+            break_points,
+            lookup_bits,
+            params,
+        )
+    }
+}
+
+impl PreCircuit for EthBlockHeaderChainFinalAggregationCircuit {
+    type Pinning = EthConfigPinning;
+
+    fn create_circuit(
+        self,
+        stage: CircuitBuilderStage,
+        break_points: Option<RlcThreadBreakPoints>,
+        params: &ParamsKZG<Bn256>,
+    ) -> impl PinnableCircuit<Fr> {
+        let lookup_bits = var("LOOKUP_BITS").expect("LOOKUP_BITS is not set").parse().unwrap();
+        EthBlockHeaderChainFinalAggregationCircuit::create_circuit(
+            self,
+            stage,
+            break_points,
+            lookup_bits,
+            params,
+        )
+    }
+}
+
+impl PreCircuit for PublicAggregationCircuit {
+    type Pinning = AggregationConfigPinning;
+
+    fn create_circuit(
+        self,
+        stage: CircuitBuilderStage,
+        break_points: Option<MultiPhaseThreadBreakPoints>,
+        params: &ParamsKZG<Bn256>,
+    ) -> impl PinnableCircuit<Fr> {
+        let lookup_bits = var("LOOKUP_BITS").expect("LOOKUP_BITS is not set").parse().unwrap();
+        let circuit = AggregationCircuit::public::<SHPLONK>(
+            stage,
+            break_points,
+            lookup_bits,
+            params,
+            self.snarks,
+            self.has_prev_accumulators,
+        );
+        match stage {
+            CircuitBuilderStage::Prover => {}
+            _ => {
+                circuit.config(
+                    params.k(),
+                    Some(var("MINIMUM_ROWS").unwrap_or_else(|_| "10".to_string()).parse().unwrap()),
+                );
+            }
+        }
+        circuit
+    }
+}
+
+pub trait PinnableCircuit<F: ff::Field>: CircuitExt<F> {
+    type Pinning: Halo2ConfigPinning;
+
+    fn break_points(&self) -> <Self::Pinning as Halo2ConfigPinning>::BreakPoints;
+
+    fn write_pinning(&self, path: impl AsRef<Path>) {
+        let break_points = self.break_points();
+        let pinning: Self::Pinning = Halo2ConfigPinning::from_var(break_points);
+        serde_json::to_writer_pretty(File::create(path).unwrap(), &pinning).unwrap();
+    }
+}
+
+impl<F: Field, FnPhase1: FnSynthesize<F>> PinnableCircuit<F> for EthCircuitBuilder<F, FnPhase1> {
+    type Pinning = EthConfigPinning;
+
+    fn break_points(&self) -> RlcThreadBreakPoints {
+        self.circuit.break_points.borrow().clone()
+    }
+}
+
+impl PinnableCircuit<Fr> for AggregationCircuit {
+    type Pinning = AggregationConfigPinning;
+
+    fn break_points(&self) -> MultiPhaseThreadBreakPoints {
+        AggregationCircuit::break_points(self)
+    }
+}

@@ -25,6 +25,7 @@ base64 = { version = "0.21", optional = true }
 serde_with = { version = "2.2", optional = true }
 
 # halo2
+ff = "0.12"
 halo2-base = { path = "../halo2-lib/halo2-base", default-features = false }
 zkevm-keccak = { path = "../halo2-lib/hashes/zkevm-keccak", default-features = false }
 

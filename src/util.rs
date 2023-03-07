@@ -1,4 +1,4 @@
-use crate::rlp::builder::RlcThreadBreakPoints;
+use crate::{rlp::builder::RlcThreadBreakPoints, ETH_LOOKUP_BITS};
 
 use super::Field;
 use ethers_core::{
@@ -67,27 +67,46 @@ impl EthConfigParams {
     */
 }
 
+pub trait Halo2ConfigPinning: Serialize {
+    type BreakPoints;
+    /// Loads configuration parameters from a file
+    fn from_path<P: AsRef<Path>>(path: P) -> Self;
+    /// Loads configuration parameters into environment variables
+    fn set_var(&self);
+    /// Returns break points
+    fn break_points(self) -> Self::BreakPoints;
+    /// Constructs `Self` from environmental variables and break points
+    fn from_var(break_points: Self::BreakPoints) -> Self;
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EthConfigPinning {
     pub params: EthConfigParams,
     pub break_points: RlcThreadBreakPoints,
 }
 
-impl EthConfigPinning {
-    pub fn from_path<P: AsRef<Path>>(path: P) -> Self {
-        serde_json::from_reader(File::open(&path).expect("path does not exist")).unwrap()
+impl Halo2ConfigPinning for EthConfigPinning {
+    type BreakPoints = RlcThreadBreakPoints;
+
+    fn from_path<P: AsRef<Path>>(path: P) -> Self {
+        let pinning: Self =
+            serde_json::from_reader(File::open(&path).expect("path does not exist")).unwrap();
+        pinning.set_var();
+        pinning
     }
 
-    pub fn load(self) -> RlcThreadBreakPoints {
+    fn set_var(&self) {
         set_var("ETH_CONFIG_PARAMS", serde_json::to_string(&self.params).unwrap());
         set_var("KECCAK_ROWS", self.params.keccak_rows_per_round.to_string());
-        if let Some(bits) = self.params.lookup_bits {
-            set_var("LOOKUP_BITS", bits.to_string());
-        }
+        let bits = self.params.lookup_bits.unwrap_or(ETH_LOOKUP_BITS);
+        set_var("LOOKUP_BITS", bits.to_string());
+    }
+
+    fn break_points(self) -> RlcThreadBreakPoints {
         self.break_points
     }
 
-    pub fn from_var(break_points: RlcThreadBreakPoints) -> Self {
+    fn from_var(break_points: RlcThreadBreakPoints) -> Self {
         let params: EthConfigParams =
             serde_json::from_str(&var("ETH_CONFIG_PARAMS").unwrap()).unwrap();
         Self { params, break_points }
@@ -100,12 +119,17 @@ pub struct AggregationConfigPinning {
     pub break_points: MultiPhaseThreadBreakPoints,
 }
 
-impl AggregationConfigPinning {
-    pub fn from_path<P: AsRef<Path>>(path: P) -> Self {
-        serde_json::from_reader(File::open(&path).expect("path does not exist")).unwrap()
+impl Halo2ConfigPinning for AggregationConfigPinning {
+    type BreakPoints = MultiPhaseThreadBreakPoints;
+
+    fn from_path<P: AsRef<Path>>(path: P) -> Self {
+        let pinning: Self =
+            serde_json::from_reader(File::open(&path).expect("path does not exist")).unwrap();
+        pinning.set_var();
+        pinning
     }
 
-    pub fn load(self) -> RlcThreadBreakPoints {
+    fn set_var(&self) {
         let gate_params = FlexGateConfigParams {
             k: self.params.degree as usize,
             num_advice_per_phase: vec![self.params.num_advice],
@@ -115,10 +139,13 @@ impl AggregationConfigPinning {
         };
         set_var("FLEX_GATE_CONFIG_PARAMS", serde_json::to_string(&gate_params).unwrap());
         set_var("LOOKUP_BITS", self.params.lookup_bits.to_string());
-        RlcThreadBreakPoints { gate: self.break_points, rlc: vec![] }
     }
 
-    pub fn from_var(break_points: MultiPhaseThreadBreakPoints) -> Self {
+    fn break_points(self) -> MultiPhaseThreadBreakPoints {
+        self.break_points
+    }
+
+    fn from_var(break_points: MultiPhaseThreadBreakPoints) -> Self {
         let params: FlexGateConfigParams =
             serde_json::from_str(&var("FLEX_GATE_CONFIG_PARAMS").unwrap()).unwrap();
         let lookup_bits = var("LOOKUP_BITS").unwrap().parse().unwrap();

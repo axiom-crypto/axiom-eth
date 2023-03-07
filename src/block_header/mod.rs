@@ -637,7 +637,7 @@ impl<F: Field> EthBlockHeaderChainCircuit<F> {
             Network::Mainnet => MAINNET_BLOCK_HEADER_RLP_MAX_BYTES,
             Network::Goerli => GOERLI_BLOCK_HEADER_RLP_MAX_BYTES,
         };
-        let (mut block_rlps, instance) =
+        let (mut block_rlps, _) =
             crate::providers::get_blocks_input(provider, start_block_number, num_blocks, max_depth);
         for block_rlp in block_rlps.iter_mut() {
             block_rlp.resize(header_rlp_max_bytes, 0u8);
