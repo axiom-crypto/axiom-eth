@@ -1,6 +1,5 @@
-use crate::{rlp::builder::RlcThreadBreakPoints, ETH_LOOKUP_BITS};
-
 use super::Field;
+use crate::{rlp::builder::RlcThreadBreakPoints, ETH_LOOKUP_BITS};
 use ethers_core::{
     types::{Address, H256, U256},
     utils::keccak256,
@@ -8,7 +7,7 @@ use ethers_core::{
 use halo2_base::{
     gates::{
         builder::{FlexGateConfigParams, MultiPhaseThreadBreakPoints},
-        flex_gate::{FlexGateConfig, GateStrategy},
+        flex_gate::GateStrategy,
         GateInstructions, RangeChip, RangeInstructions,
     },
     utils::{bit_length, decompose, decompose_fe_to_u64_limbs, BigPrimeField, ScalarField},
@@ -24,6 +23,11 @@ use std::{
     iter,
     path::Path,
 };
+
+#[cfg(feature = "aggregation")]
+pub mod circuit;
+#[cfg(feature = "aggregation")]
+pub mod scheduler;
 
 pub(crate) const NUM_BYTES_IN_U128: usize = 16;
 
@@ -69,9 +73,9 @@ impl EthConfigParams {
 
 pub trait Halo2ConfigPinning: Serialize {
     type BreakPoints;
-    /// Loads configuration parameters from a file
+    /// Loads configuration parameters from a file and sets environmental variables.
     fn from_path<P: AsRef<Path>>(path: P) -> Self;
-    /// Loads configuration parameters into environment variables
+    /// Loads configuration parameters into environment variables.
     fn set_var(&self);
     /// Returns break points
     fn break_points(self) -> Self::BreakPoints;

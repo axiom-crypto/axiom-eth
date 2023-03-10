@@ -154,6 +154,7 @@ impl EthBlockHeaderChainAggregationCircuit {
         #[cfg(feature = "display")]
         end_timer!(timer);
 
+        #[cfg(not(feature = "production"))]
         match stage {
             CircuitBuilderStage::Prover => {}
             _ => {

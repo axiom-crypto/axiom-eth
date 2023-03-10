@@ -264,48 +264,67 @@ pub fn test_multi_goerli_header_prover() {
 
 #[cfg(all(feature = "aggregation", feature = "providers"))]
 mod aggregation {
+    use std::path::PathBuf;
+
     use super::test;
     use super::*;
-    use crate::block_header::sequencer::{CircuitType, Finality, Sequencer, Task};
+    use crate::{
+        block_header::helpers::{BlockHeaderScheduler, CircuitType, Finality, Task},
+        util::scheduler::Scheduler,
+    };
+
+    fn test_scheduler(network: Network) -> BlockHeaderScheduler {
+        BlockHeaderScheduler::new(
+            network,
+            false,
+            false,
+            PathBuf::from("configs/headers"),
+            PathBuf::from("data/headers"),
+        )
+    }
 
     #[test]
     fn test_goerli_header_chain_provider() {
-        let mut sequencer = Sequencer::new(Network::Goerli, false);
-        sequencer.get_snark(Task::new(
+        let scheduler = test_scheduler(Network::Goerli);
+        scheduler.get_snark(Task::new(
             0x765fb3,
             0x765fb3 + 7,
-            CircuitType::new(3, 3, Finality::None),
+            CircuitType::new(3, 3, Finality::None, Network::Goerli),
         ));
     }
 
     #[test]
     #[ignore = "requires over 32G memory"]
     fn test_goerli_header_chain_with_aggregation() {
-        let mut sequencer = Sequencer::new(Network::Goerli, false);
-        sequencer.get_snark(Task::new(
+        let scheduler = test_scheduler(Network::Goerli);
+        scheduler.get_snark(Task::new(
             0x765fb3,
             0x765fb3 + 11,
-            CircuitType::new(4, 3, Finality::None),
+            CircuitType::new(4, 3, Finality::None, Network::Goerli),
         ));
     }
 
     #[test]
     #[ignore = "requires over 32G memory"]
     fn test_goerli_header_chain_final_aggregation() {
-        let mut sequencer = Sequencer::new(Network::Goerli, false);
-        sequencer.get_snark(Task::new(
+        let scheduler = test_scheduler(Network::Goerli);
+        scheduler.get_snark(Task::new(
             0x765fb3,
             0x765fb3 + 9,
-            CircuitType::new(4, 3, Finality::Merkle),
+            CircuitType::new(4, 3, Finality::Merkle, Network::Goerli),
         ));
     }
 
     #[cfg(feature = "evm")]
     #[test]
     fn test_goerli_header_chain_for_evm() {
-        let mut sequencer = Sequencer::new(Network::Goerli, false);
-        sequencer.get_calldata(
-            Task::new(0x765fb3, 0x765fb3 + 11, CircuitType::new(4, 3, Finality::Evm(0))),
+        let scheduler = test_scheduler(Network::Goerli);
+        scheduler.get_calldata(
+            Task::new(
+                0x765fb3,
+                0x765fb3 + 11,
+                CircuitType::new(4, 3, Finality::Evm(0), Network::Goerli),
+            ),
             true,
         );
     }

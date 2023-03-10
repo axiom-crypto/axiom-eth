@@ -147,6 +147,7 @@ impl EthBlockHeaderChainFinalAggregationCircuit {
         );
         #[cfg(feature = "display")]
         end_timer!(timer);
+        #[cfg(not(feature = "production"))]
         if !prover {
             let config_params: EthConfigParams = serde_json::from_str(
                 var("ETH_CONFIG_PARAMS").expect("ETH_CONFIG_PARAMS is not set").as_str(),

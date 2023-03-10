@@ -1,12 +1,13 @@
 #[cfg(feature = "display")]
 use ark_std::{end_timer, start_timer};
 use axiom_eth::{
-    block_header::sequencer::{CircuitType, Finality, Sequencer, Task},
+    block_header::helpers::{BlockHeaderScheduler, CircuitType, Finality, Task},
+    util::scheduler::Scheduler,
     Network,
 };
 use clap::{Parser, ValueEnum};
 use clap_num::maybe_hex;
-use std::{cmp::min, fmt::Display};
+use std::{cmp::min, fmt::Display, path::PathBuf};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)] // Read from `Cargo.toml`
@@ -61,8 +62,18 @@ impl Display for CliFinality {
 fn main() {
     let args = Cli::parse();
     let initial_depth = args.initial_depth.unwrap_or(args.max_depth);
+    #[cfg(feature = "production")]
+    let production = true;
+    #[cfg(not(feature = "production"))]
+    let production = false;
 
-    let mut sequencer = Sequencer::new(args.network, args.readonly);
+    let scheduler = BlockHeaderScheduler::new(
+        args.network,
+        production,
+        args.readonly,
+        PathBuf::from("configs/headers"),
+        PathBuf::from("data/headers"),
+    );
 
     #[cfg(feature = "display")]
     let start = start_timer!(|| format!(
@@ -79,15 +90,15 @@ fn main() {
         CliFinality::Merkle => Finality::Merkle,
         CliFinality::Evm => Finality::Evm(args.rounds.unwrap_or(0)),
     };
-    let circuit_type = CircuitType::new(args.max_depth, initial_depth, finality);
+    let circuit_type = CircuitType::new(args.max_depth, initial_depth, finality, args.network);
     for start in (args.start_block_number..=args.end_block_number).step_by(1 << args.max_depth) {
         let end = min(start + (1 << args.max_depth) - 1, args.end_block_number);
         let task = Task::new(start, end, circuit_type);
         if args.calldata {
             #[cfg(feature = "evm")]
-            sequencer.get_calldata(task, args.create_contract);
+            scheduler.get_calldata(task, args.create_contract);
         } else {
-            sequencer.get_snark(task);
+            scheduler.get_snark(task);
         }
     }
 

@@ -301,7 +301,7 @@ impl<'chip, F: Field> EthStorageChip<F> for EthChip<'chip, F> {
                 (trace, (ctx, keccak))
             })
             .unzip();
-        // join gate contexts and keccak queries
+        // join gate contexts and keccak queries; need to shift keccak query indices because of the join
         for (trace, (ctx, mut keccak_)) in storage_trace.iter_mut().zip(ctx_keccaks.into_iter()) {
             thread_pool.threads[FIRST_PHASE].push(ctx);
             keccak.fixed_len_queries.append(&mut keccak_.fixed_len_queries);
