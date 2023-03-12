@@ -126,7 +126,7 @@ impl scheduler::Task for Task {
         let CircuitType { network: _, depth, initial_depth, finality: _ } = circuit_type;
         assert!(end - start < 1 << depth);
         if depth == initial_depth {
-            return vec![];
+            vec![]
         } else {
             let prev_type = circuit_type.prev();
             let prev_depth = prev_type.depth;
@@ -149,7 +149,7 @@ pub enum CircuitRouter {
     ForEvm(PublicAggregationCircuit),
 }
 
-pub type BlockHeaderScheduler = EthScheduler<CircuitType>;
+pub type BlockHeaderScheduler = EthScheduler<Task>;
 
 impl Scheduler for BlockHeaderScheduler {
     type Task = Task;

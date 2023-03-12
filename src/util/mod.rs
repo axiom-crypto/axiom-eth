@@ -81,6 +81,8 @@ pub trait Halo2ConfigPinning: Serialize {
     fn break_points(self) -> Self::BreakPoints;
     /// Constructs `Self` from environmental variables and break points
     fn from_var(break_points: Self::BreakPoints) -> Self;
+    /// Degree of the circuit, log_2(number of rows)
+    fn degree(&self) -> u32;
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -114,6 +116,10 @@ impl Halo2ConfigPinning for EthConfigPinning {
         let params: EthConfigParams =
             serde_json::from_str(&var("ETH_CONFIG_PARAMS").unwrap()).unwrap();
         Self { params, break_points }
+    }
+
+    fn degree(&self) -> u32 {
+        self.params.degree
     }
 }
 
@@ -163,6 +169,10 @@ impl Halo2ConfigPinning for AggregationConfigPinning {
             },
             break_points,
         }
+    }
+
+    fn degree(&self) -> u32 {
+        self.params.degree
     }
 }
 

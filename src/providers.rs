@@ -54,7 +54,8 @@ pub fn get_block_storage_input(
         .unwrap();
 
     for storage_pf in pf.storage_proof.iter() {
-        println!("key: {:?}, is_assigned_slot: {}", storage_pf.key, is_assigned_slot(&storage_pf));
+        let is_assigned = is_assigned_slot(storage_pf);
+        log::info!("key: {:?}, is_assigned_slot: {}", storage_pf.key, is_assigned);
     }
 
     let acct_pf = MPTFixedKeyInput {
@@ -113,9 +114,9 @@ pub fn is_assigned_slot(pf: &StorageProof) -> bool {
                 frag.push(path[0] % 16);
                 path_idx += 1;
             }
-            for idx in 1..path.len() {
-                frag.push(path[idx] / 16);
-                frag.push(path[idx] % 16);
+            for byte in path.iter().skip(1) {
+                frag.push(*byte / 16);
+                frag.push(*byte % 16);
                 path_idx += 2;
             }
             key_frags.extend(frag);

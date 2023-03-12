@@ -12,7 +12,9 @@ use std::{
     collections::HashMap,
     env::var,
     fmt::Debug,
+    fs,
     hash::Hash,
+    marker::PhantomData,
     path::{Path, PathBuf},
     sync::{Arc, RwLock},
 };
@@ -24,12 +26,14 @@ use crate::{
 
 use super::circuit::AnyCircuit;
 
+pub mod evm_wrapper;
+
 /// This is an identifier for a specific proof request, consisting of the circuit type together with any data necessary to create the circuit inputs.
 /// It should be thought of as a node in a DAG (directed acyclic graph), where the edges specify previous SNARKs this one depends on.
 pub trait Task: Clone + Copy + Debug {
     /// This is a tag for the type of a circuit, independent of the circuit's inputs.
     /// For example, it can be used to fetch the proving key for the circuit.
-    type CircuitType: Clone + Copy + Debug + PartialEq + Eq + Hash;
+    type CircuitType: Copy + Eq + Hash;
 
     fn circuit_type(&self) -> Self::CircuitType;
     fn type_name(circuit_type: Self::CircuitType) -> String;
@@ -40,7 +44,7 @@ pub trait Task: Clone + Copy + Debug {
 }
 
 pub trait SchedulerCommon {
-    type CircuitType: Hash;
+    type CircuitType: Hash + Eq;
 
     fn config_dir(&self) -> &Path;
     fn data_dir(&self) -> &Path;
@@ -57,7 +61,7 @@ pub trait SchedulerCommon {
 }
 
 /// A basic implementation of `SchedulerCommon` with support for ETH JSON-RPC requests.
-pub struct EthScheduler<CircuitType: Hash> {
+pub struct EthScheduler<T: Task> {
     /// In production mode, universal trusted setup is ALWAYS read-only
     production: bool,
     /// Specifies if new proving keys should be generated or not. If not production mode, then in non-read-only mode the srs is also randomly generated.
@@ -65,14 +69,16 @@ pub struct EthScheduler<CircuitType: Hash> {
     config_dir: PathBuf,
     data_dir: PathBuf,
 
-    pub pkeys: RwLock<HashMap<CircuitType, Arc<ProvingKey<G1Affine>>>>,
-    pub degree: RwLock<HashMap<CircuitType, u32>>,
+    pub pkeys: RwLock<HashMap<T::CircuitType, Arc<ProvingKey<G1Affine>>>>,
+    pub degree: RwLock<HashMap<T::CircuitType, u32>>,
     pub params: RwLock<HashMap<u32, Arc<ParamsKZG<Bn256>>>>,
     pub provider: Provider<Http>,
     pub network: Network,
+
+    _marker: PhantomData<T>,
 }
 
-impl<CircuitType: Hash> EthScheduler<CircuitType> {
+impl<T: Task> EthScheduler<T> {
     pub fn new(
         network: Network,
         production: bool,
@@ -87,7 +93,8 @@ impl<CircuitType: Hash> EthScheduler<CircuitType> {
         };
         let provider = Provider::<Http>::try_from(format!("{provider_url}{infura_id}").as_str())
             .expect("could not instantiate HTTP Provider");
-
+        fs::create_dir_all(&config_dir).expect("could not create config directory");
+        fs::create_dir_all(&data_dir).expect("could not create data directory");
         Self {
             production,
             read_only,
@@ -98,15 +105,13 @@ impl<CircuitType: Hash> EthScheduler<CircuitType> {
             params: Default::default(),
             provider,
             network,
+            _marker: PhantomData,
         }
     }
 }
 
-impl<CircuitType> SchedulerCommon for EthScheduler<CircuitType>
-where
-    CircuitType: Hash + Eq,
-{
-    type CircuitType = CircuitType;
+impl<T: Task> SchedulerCommon for EthScheduler<T> {
+    type CircuitType = T::CircuitType;
 
     fn config_dir(&self) -> &Path {
         self.config_dir.as_path()
@@ -137,6 +142,8 @@ where
     }
 }
 
+/// A scheduler that can recursively generate SNARKs for a DAG of tasks. The directed acyclic graph (DAG) is implicitly
+/// defined by the `Task` implementation and `get_circuit`. For any task, either a snark or calldata + on-chain verifier can be generated.
 pub trait Scheduler: SchedulerCommon<CircuitType = <Self::Task as Task>::CircuitType> {
     type Task: Task;
     /// The intended use is that `CircuitRouter` is an enum containing the different `PreCircuit`s that `Task` can become in the `get_circuit` function.
@@ -173,6 +180,7 @@ pub trait Scheduler: SchedulerCommon<CircuitType = <Self::Task as Task>::Circuit
 
     // recursively generates necessary circuits and snarks to create snark
     fn get_snark(&self, task: Self::Task) -> Snark {
+        #[cfg(feature = "halo2-axiom")]
         if let Ok(snark) = read_snark(self.snark_path(task)) {
             return snark;
         }
@@ -205,7 +213,6 @@ pub trait Scheduler: SchedulerCommon<CircuitType = <Self::Task as Task>::Circuit
 
     #[cfg(feature = "evm")]
     fn get_calldata(&self, task: Self::Task, generate_smart_contract: bool) -> Vec<u8> {
-        use std::fs;
         // TODO: some shared code with `get_snark`; clean up somehow
 
         let calldata_path = self.calldata_path(task);

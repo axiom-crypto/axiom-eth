@@ -103,12 +103,16 @@ pub trait PreCircuit: Sized {
     fn create_pk(
         self,
         params: &ParamsKZG<Bn256>,
+        pk_path: impl AsRef<Path>,
         pinning_path: impl AsRef<Path>,
     ) -> ProvingKey<G1Affine> {
         let circuit = self.create_circuit(CircuitBuilderStage::Keygen, None, params);
-        let pk = gen_pk(params, &circuit, None);
-        circuit.write_pinning(pinning_path);
-
+        let pk_exists = pk_path.as_ref().exists();
+        let pk = gen_pk(params, &circuit, Some(pk_path.as_ref()));
+        if !pk_exists {
+            // should only write pinning data if we created a new pkey
+            circuit.write_pinning(pinning_path);
+        }
         pk
     }
 }
@@ -124,7 +128,7 @@ impl<C: PreCircuit> AnyCircuit for C {
         if read_only {
             self.read_pk(params, pk_path)
         } else {
-            self.create_pk(params, pinning_path)
+            self.create_pk(params, pk_path, pinning_path)
         }
     }
 
@@ -173,6 +177,12 @@ impl<C: PreCircuit> AnyCircuit for C {
 pub struct PublicAggregationCircuit {
     pub snarks: Vec<Snark>,
     pub has_prev_accumulators: bool,
+}
+
+impl PublicAggregationCircuit {
+    pub fn new(snarks: Vec<Snark>, has_prev_accumulators: bool) -> Self {
+        Self { snarks, has_prev_accumulators }
+    }
 }
 
 impl PreCircuit for PublicAggregationCircuit {
