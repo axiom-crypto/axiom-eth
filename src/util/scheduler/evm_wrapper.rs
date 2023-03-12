@@ -15,7 +15,7 @@ use halo2_base::halo2_proofs::{
     poly::kzg::commitment::ParamsKZG,
 };
 use snark_verifier_sdk::Snark;
-use std::{hash::Hash, path::Path};
+use std::{hash::Hash, path::Path, sync::Arc};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Wrapper<T> {
@@ -55,7 +55,7 @@ impl<T: Task> Task for Wrapper<T> {
 pub trait SimpleTask: Task {
     type PreCircuit: PreCircuit + Clone;
 
-    fn get_circuit(&self, provider: &Provider<Http>, network: Network) -> Self::PreCircuit;
+    fn get_circuit(&self, provider: Arc<Provider<Http>>, network: Network) -> Self::PreCircuit;
 }
 
 #[derive(Clone, Debug)]
@@ -86,7 +86,7 @@ impl<T: SimpleTask> Scheduler for EvmWrapper<T> {
     fn get_circuit(&self, task: Self::Task, prev_snarks: Vec<Snark>) -> Self::CircuitRouter {
         match task {
             Wrapper::Initial(t) => {
-                let circuit = t.get_circuit(&self.provider, self.network);
+                let circuit = t.get_circuit(Arc::clone(&self.provider), self.network);
                 WrapperRouter::Initial(circuit)
             }
             Wrapper::ForEvm(_) => {

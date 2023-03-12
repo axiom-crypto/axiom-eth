@@ -72,7 +72,7 @@ pub struct EthScheduler<T: Task> {
     pub pkeys: RwLock<HashMap<T::CircuitType, Arc<ProvingKey<G1Affine>>>>,
     pub degree: RwLock<HashMap<T::CircuitType, u32>>,
     pub params: RwLock<HashMap<u32, Arc<ParamsKZG<Bn256>>>>,
-    pub provider: Provider<Http>,
+    pub provider: Arc<Provider<Http>>,
     pub network: Network,
 
     _marker: PhantomData<T>,
@@ -103,7 +103,7 @@ impl<T: Task> EthScheduler<T> {
             pkeys: Default::default(),
             degree: Default::default(),
             params: Default::default(),
-            provider,
+            provider: Arc::new(provider),
             network,
             _marker: PhantomData,
         }
