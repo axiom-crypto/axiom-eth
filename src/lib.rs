@@ -1,5 +1,6 @@
 #![feature(int_log)]
 #![feature(trait_alias)]
+#![feature(return_position_impl_trait_in_trait)]
 
 pub mod block_header;
 pub mod keccak;
@@ -34,7 +35,7 @@ use zkevm_keccak::KeccakConfig;
 
 pub(crate) const ETH_LOOKUP_BITS: usize = 8; // always want 8 to range check bytes
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
 pub enum Network {
     Mainnet,
@@ -171,7 +172,7 @@ impl<F: Field, FnPhase1: FnSynthesize<F>> Circuit<F> for EthCircuitBuilder<F, Fn
 
     fn configure(meta: &mut ConstraintSystem<F>) -> Self::Config {
         let params: EthConfigParams =
-            serde_json::from_str(&std::env::var("ETH_CONFIG_PARAMS").unwrap()).unwrap();
+            serde_json::from_str(&var("ETH_CONFIG_PARAMS").unwrap()).unwrap();
         EthConfig::configure(meta, params)
     }
 

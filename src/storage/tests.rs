@@ -173,7 +173,7 @@ pub fn bench_eip1186() -> Result<(), Box<dyn std::error::Error>> {
 #[test]
 #[cfg(feature = "evm")]
 pub fn bench_evm_eip1186() -> Result<(), Box<dyn std::error::Error>> {
-    use crate::block_header::sequencer::custom_gen_evm_verifier_shplonk;
+    use crate::util::circuit::custom_gen_evm_verifier_shplonk;
     use halo2_base::gates::builder::CircuitBuilderStage;
     use snark_verifier_sdk::{
         evm::{evm_verify, gen_evm_proof_shplonk, write_calldata},

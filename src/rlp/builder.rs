@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
+    env::var,
     iter, mem,
 };
 
@@ -133,7 +134,7 @@ impl<F: ScalarField> RlcThreadBuilder<F> {
             num_fixed,
             unusable_rows: minimum_rows.unwrap_or(0),
             keccak_rows_per_round: 0,
-            lookup_bits: None,
+            lookup_bits: var("LOOKUP_BITS").map(|s| s.parse().ok()).unwrap_or(None),
         };
         #[cfg(feature = "display")]
         {

@@ -1,14 +1,15 @@
-use crate::{keccak::SharedKeccakChip, util::EthConfigPinning};
+use crate::{
+    keccak::SharedKeccakChip,
+    util::{EthConfigPinning, Halo2ConfigPinning},
+};
 
 use super::*;
 use ark_std::{end_timer, start_timer};
 use halo2_base::{
     halo2_proofs::{
-        circuit::{Layouter, SimpleFloorPlanner},
         dev::MockProver,
         halo2curves::bn256::{Bn256, Fr, G1Affine},
         plonk::*,
-        plonk::{Circuit, ConstraintSystem, Error},
         poly::commitment::ParamsProver,
         poly::kzg::{
             commitment::{KZGCommitmentScheme, ParamsKZG},
@@ -132,7 +133,7 @@ pub fn test_one_mainnet_header_prover() -> Result<(), Box<dyn std::error::Error>
 
     let mut transcript = Blake2bWrite::<_, _, Challenge255<_>>::init(vec![]);
     let pf_time = start_timer!(|| "proof gen");
-    let break_points = pinning.load();
+    let break_points = pinning.break_points();
     let circuit = block_header_test_circuit::<Fr>(
         RlcThreadBuilder::prover(),
         vec![input_bytes],
@@ -183,32 +184,6 @@ fn get_default_goerli_header_chain_circuit() -> EthBlockHeaderChainCircuit<Fr> {
     let dummy_header_rlp = input_bytes[0].clone();
     input_bytes.extend(iter::repeat(dummy_header_rlp).take((1 << max_depth) - input_bytes.len()));
 
-    /*
-    #[derive(Deserialize)]
-    struct JsonInstance {
-        prev_hash: String,
-        end_hash: String,
-        start_block_number: String,
-        end_block_number: String,
-        mmr: Vec<String>,
-    }
-    let JsonInstance { prev_hash, end_hash, start_block_number, end_block_number, mmr } =
-        serde_json::from_reader(File::open("data/headers/default_hashes_goerli.json").unwrap())
-            .unwrap();
-    let [prev_hash, end_hash] =
-        [prev_hash, end_hash].map(|str| H256::from_slice(&Vec::from_hex(str).unwrap()));
-    let [start_block_number, end_block_number] = [start_block_number, end_block_number]
-        .map(|str| u32::from_str_radix(&str[2..], 16).unwrap());
-    let merkle_mountain_range =
-        mmr.iter().map(|str| H256::from_slice(&Vec::from_hex(str).unwrap())).collect();
-    let instance = EthBlockHeaderChainInstance {
-            prev_hash,
-            end_hash,
-            start_block_number,
-            end_block_number,
-            merkle_mountain_range,
-        };
-    */
     EthBlockHeaderChainCircuit {
         header_rlp_encodings: input_bytes,
         num_blocks: 7,
@@ -257,7 +232,7 @@ pub fn test_multi_goerli_header_prover() {
 
     let mut transcript = Blake2bWrite::<_, _, Challenge255<_>>::init(vec![]);
     let pf_time = start_timer!(|| "proof gen");
-    let break_points = pinning.load();
+    let break_points = pinning.break_points();
     let circuit = input.create_circuit(RlcThreadBuilder::prover(), Some(break_points));
     let instance = circuit.instance();
     create_proof::<
@@ -289,50 +264,68 @@ pub fn test_multi_goerli_header_prover() {
 
 #[cfg(all(feature = "aggregation", feature = "providers"))]
 mod aggregation {
+    use std::path::PathBuf;
+
     use super::test;
     use super::*;
-    use crate::block_header::sequencer::{CircuitType, Finality, Sequencer, Task};
+    use crate::{
+        block_header::helpers::{BlockHeaderScheduler, CircuitType, Finality, Task},
+        util::scheduler::Scheduler,
+    };
+
+    fn test_scheduler(network: Network) -> BlockHeaderScheduler {
+        BlockHeaderScheduler::new(
+            network,
+            false,
+            false,
+            PathBuf::from("configs/headers"),
+            PathBuf::from("data/headers"),
+        )
+    }
 
     #[test]
     fn test_goerli_header_chain_provider() {
-        let mut sequencer = Sequencer::new(Network::Goerli, false);
-        sequencer.get_snark(Task::new(
+        let scheduler = test_scheduler(Network::Goerli);
+        scheduler.get_snark(Task::new(
             0x765fb3,
             0x765fb3 + 7,
-            CircuitType::new(3, 3, Finality::None),
+            CircuitType::new(3, 3, Finality::None, Network::Goerli),
         ));
     }
 
     #[test]
     #[ignore = "requires over 32G memory"]
     fn test_goerli_header_chain_with_aggregation() {
-        let mut sequencer = Sequencer::new(Network::Goerli, false);
-        sequencer.get_snark(Task::new(
+        let scheduler = test_scheduler(Network::Goerli);
+        scheduler.get_snark(Task::new(
             0x765fb3,
             0x765fb3 + 11,
-            CircuitType::new(4, 3, Finality::None),
+            CircuitType::new(4, 3, Finality::None, Network::Goerli),
         ));
     }
 
     #[test]
     #[ignore = "requires over 32G memory"]
     fn test_goerli_header_chain_final_aggregation() {
-        let mut sequencer = Sequencer::new(Network::Goerli, false);
-        sequencer.get_snark(Task::new(
+        let scheduler = test_scheduler(Network::Goerli);
+        scheduler.get_snark(Task::new(
             0x765fb3,
             0x765fb3 + 9,
-            CircuitType::new(4, 3, Finality::Merkle),
+            CircuitType::new(4, 3, Finality::Merkle, Network::Goerli),
         ));
     }
 
     #[cfg(feature = "evm")]
     #[test]
     fn test_goerli_header_chain_for_evm() {
-        let mut sequencer = Sequencer::new(Network::Goerli, false);
-        sequencer.get_snark(Task::new(
-            0x765fb3,
-            0x765fb3 + 11,
-            CircuitType::new(4, 3, Finality::Evm(0)),
-        ));
+        let scheduler = test_scheduler(Network::Goerli);
+        scheduler.get_calldata(
+            Task::new(
+                0x765fb3,
+                0x765fb3 + 11,
+                CircuitType::new(4, 3, Finality::Evm(0), Network::Goerli),
+            ),
+            true,
+        );
     }
 }
