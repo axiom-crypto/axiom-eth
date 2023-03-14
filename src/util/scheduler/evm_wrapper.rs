@@ -154,7 +154,7 @@ impl<C: PreCircuit> AnyCircuit for WrapperRouter<C> {
         pinning_path: impl AsRef<Path>,
         path: impl AsRef<Path>,
         deployment_code: Option<Vec<u8>>,
-    ) -> Vec<u8> {
+    ) -> String {
         match self {
             Self::Initial(pre_circuit) => {
                 pre_circuit.gen_calldata(params, pk, pinning_path, path, deployment_code)

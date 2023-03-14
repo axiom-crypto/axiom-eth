@@ -52,7 +52,7 @@ env_logger = "0.10"
 test-log = "0.2.11"
 
 [features]
-default = ["halo2-axiom", "halo2-base/jemallocator", "display", "aggregation", "clap", "evm"]
+default = ["halo2-axiom", "jemallocator", "display", "aggregation", "clap", "evm"]
 aggregation = ["dep:snark-verifier", "snark-verifier-sdk", "providers"]
 evm = ["snark-verifier-sdk?/loader_evm", "aggregation"]
 providers = ["dep:ethers-providers", "dep:tokio", "dep:bincode", "dep:base64", "dep:serde_with"]
@@ -62,3 +62,4 @@ production = [] # turns off circuit auto-configure
 # EXACTLY one of halo2-pse / halo2-axiom should always be turned on
 halo2-pse = ["zkevm-keccak/halo2-pse", "snark-verifier-sdk?/halo2-pse"]
 halo2-axiom = ["zkevm-keccak/halo2-axiom", "snark-verifier-sdk?/halo2-axiom"]
+jemallocator = ["halo2-base/jemallocator"]

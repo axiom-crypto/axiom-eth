@@ -230,23 +230,15 @@ impl<F: ScalarField> RlcChip<F> {
         ctx_gate.constrain_equal(&running_len, concat_len);
     }
 
-    /// Same as `constrain_rlc_concat` but now the actual length of `inputs` to use is variable:
-    /// these are referred to as "fragments".
-    ///
-    /// Assumes 0 < num_frags <= max_num_frags.
-    ///
-    /// `ctx_gate` and `ctx_rlc` should be in later phase than `inputs`
-    pub fn constrain_rlc_concat_var(
+    // returns (rlc, len)
+    // if num_frags.value() = 0, then (rlc = 0, len = 0) because of how `select_from_idx` works (`num_frags_minus_1` will be very large)
+    fn rlc_concat_var(
         &self,
         ctx_gate: &mut Context<F>,
         gate: &impl GateInstructions<F>,
         inputs: impl IntoIterator<Item = (AssignedValue<F>, AssignedValue<F>, usize)>,
-        (concat_rlc, concat_len): (&AssignedValue<F>, &AssignedValue<F>),
         num_frags: AssignedValue<F>,
-        max_num_frags: usize,
-    ) {
-        debug_assert!(!num_frags.value().is_zero_vartime(), "num_frags must be positive.");
-
+    ) -> (AssignedValue<F>, AssignedValue<F>) {
         let mut inputs = inputs.into_iter();
         let (size, hi) = inputs.size_hint();
         // size only used for capacity estimation
@@ -265,13 +257,31 @@ impl<F: ScalarField> RlcChip<F> {
             partial_len.push(running_len);
             partial_rlc.push(running_rlc);
         }
-        assert_eq!(partial_rlc.len(), max_num_frags);
 
         let num_frags_minus_1 = gate.sub(ctx_gate, num_frags, Constant(F::one()));
         let total_len = gate.select_from_idx(ctx_gate, partial_len, num_frags_minus_1);
-        ctx_gate.constrain_equal(&total_len, concat_len);
-
         let rlc_select = gate.select_from_idx(ctx_gate, partial_rlc, num_frags_minus_1);
+
+        (rlc_select, total_len)
+    }
+
+    /// Same as `constrain_rlc_concat` but now the actual length of `inputs` to use is variable:
+    /// these are referred to as "fragments".
+    ///
+    /// Assumes 0 < num_frags <= max_num_frags.
+    ///
+    /// `ctx_gate` and `ctx_rlc` should be in later phase than `inputs`
+    pub fn constrain_rlc_concat_var(
+        &self,
+        ctx_gate: &mut Context<F>,
+        gate: &impl GateInstructions<F>,
+        inputs: impl IntoIterator<Item = (AssignedValue<F>, AssignedValue<F>, usize)>,
+        (concat_rlc, concat_len): (&AssignedValue<F>, &AssignedValue<F>),
+        num_frags: AssignedValue<F>,
+        // max_num_frags: usize,
+    ) {
+        let (rlc_select, total_len) = self.rlc_concat_var(ctx_gate, gate, inputs, num_frags);
+        ctx_gate.constrain_equal(&total_len, concat_len);
         ctx_gate.constrain_equal(&rlc_select, concat_rlc);
     }
 

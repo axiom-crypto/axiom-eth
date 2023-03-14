@@ -212,11 +212,12 @@ pub trait Scheduler: SchedulerCommon<CircuitType = <Self::Task as Task>::Circuit
     }
 
     #[cfg(feature = "evm")]
-    fn get_calldata(&self, task: Self::Task, generate_smart_contract: bool) -> Vec<u8> {
+    fn get_calldata(&self, task: Self::Task, generate_smart_contract: bool) -> String {
         // TODO: some shared code with `get_snark`; clean up somehow
 
         let calldata_path = self.calldata_path(task);
-        if let Ok(calldata) = fs::read(&calldata_path) {
+        if let Ok(calldata) = fs::read_to_string(&calldata_path) {
+            // calldata is serialized as a hex string
             return calldata;
         }
 

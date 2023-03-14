@@ -673,7 +673,6 @@ impl<'chip, F: Field> EthChip<'chip, F> {
             fragment_rlcs.into_iter().map(|f| (f.rlc_val, f.len, f.max_len)),
             (&key_hex_rlc.rlc_val, &assigned_len),
             witness.depth,
-            max_depth,
         );
 
         /* Check value matches. Currently value_bytes is RLC encoded
@@ -921,7 +920,7 @@ impl MPTFixedKeyInput {
 
         // below "key" and "path" are used interchangeably, sorry for confusion
         const KEY_BYTE_LEN: usize = 32;
-        let mut leaf = proof.pop().unwrap();
+        let mut leaf = proof.pop().unwrap_or_else(|| DUMMY_EXT.clone());
         let (_, max_leaf_bytes) = max_leaf_lens(KEY_BYTE_LEN, value_max_byte_len);
 
         let (_, max_ext_bytes) = max_ext_lens(KEY_BYTE_LEN);

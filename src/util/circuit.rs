@@ -80,7 +80,7 @@ pub trait AnyCircuit: Sized {
         pinning_path: impl AsRef<Path>,
         path: impl AsRef<Path>,
         deployment_code: Option<Vec<u8>>,
-    ) -> Vec<u8>;
+    ) -> String;
 }
 
 pub trait PreCircuit: Sized {
@@ -163,7 +163,7 @@ impl<C: PreCircuit> AnyCircuit for C {
         pinning_path: impl AsRef<Path>,
         path: impl AsRef<Path>,
         deployment_code: Option<Vec<u8>>,
-    ) -> Vec<u8> {
+    ) -> String {
         let pinning = C::Pinning::from_path(pinning_path);
         let circuit = self.create_circuit(CircuitBuilderStage::Prover, Some(pinning), params);
         write_calldata_generic(params, pk, circuit, path, deployment_code)
@@ -225,16 +225,17 @@ pub fn write_calldata_generic<ConcreteCircuit: CircuitExt<Fr>>(
     circuit: ConcreteCircuit,
     path: impl AsRef<Path>,
     deployment_code: Option<Vec<u8>>,
-) -> Vec<u8> {
+) -> String {
+    use ethers_core::utils::hex::encode;
     use snark_verifier::loader::evm::encode_calldata;
     use snark_verifier_sdk::evm::evm_verify;
     use std::fs;
 
     let instances = circuit.instances();
     let proof = gen_evm_proof_shplonk(params, pk, circuit, instances.clone());
-    let calldata = encode_calldata(&instances, &proof);
-    fs::write(path, ethers_core::utils::hex::encode(&calldata))
-        .expect("write calldata should not fail");
+    // calldata as hex string
+    let calldata = encode(encode_calldata(&instances, &proof));
+    fs::write(path, &calldata).expect("write calldata should not fail");
     if let Some(deployment_code) = deployment_code {
         evm_verify(deployment_code, instances, proof);
     }
