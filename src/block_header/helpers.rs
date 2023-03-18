@@ -140,7 +140,8 @@ impl scheduler::Task for Task {
 
 /// The public/private inputs for various circuits.
 // This is an enum of `PreCircuit`s.
-// Perhaps a macro should be used instead. Rust traits do not allow a single type to output different kinds of `PreCircuit`s.
+// We implement `AnyCircuit` for `CircuitRouter` by passing through the implementations from each enum variant. TODO: use procedural macro for this (enum_dispatch does not quite work, not sure about enum_delegate)
+// This is because Rust traits do not allow a single type to output different kinds of `PreCircuit`s.
 #[derive(Clone, Debug)]
 pub enum CircuitRouter {
     Initial(EthBlockHeaderChainCircuit<Fr>),

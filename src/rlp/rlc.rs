@@ -431,6 +431,22 @@ pub fn rlc_select_from_idx<F: ScalarField, R>(
 where
     R: Into<RlcVar<F>>,
 {
+    let a = a.into_iter();
+    let (len, hi) = a.size_hint();
+    assert_eq!(Some(len), hi);
+    let indicator = gate.idx_to_indicator(ctx_gate, idx, len);
+    rlc_select_by_indicator(ctx_gate, gate, a, indicator)
+}
+
+pub fn rlc_select_by_indicator<F: ScalarField, R>(
+    ctx_gate: &mut Context<F>,
+    gate: &impl GateInstructions<F>,
+    a: impl IntoIterator<Item = R>,
+    indicator: Vec<AssignedValue<F>>,
+) -> RlcVar<F>
+where
+    R: Into<RlcVar<F>>,
+{
     let (a_len, a_rlc): (Vec<_>, Vec<_>) = a
         .into_iter()
         .map(|a| {
@@ -438,7 +454,7 @@ where
             (a.len, a.rlc_val)
         })
         .unzip();
-    let len = gate.select_from_idx(ctx_gate, a_len, idx);
-    let rlc_val = gate.select_from_idx(ctx_gate, a_rlc, idx);
+    let len = gate.select_by_indicator(ctx_gate, a_len, indicator.clone());
+    let rlc_val = gate.select_by_indicator(ctx_gate, a_rlc, indicator);
     RlcVar { rlc_val, len }
 }

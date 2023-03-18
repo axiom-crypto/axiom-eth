@@ -10,8 +10,8 @@ use crate::{
     Network,
 };
 use ethers_core::types::{
-    Address, Block, BlockId, BlockId::Number, BlockNumber, EIP1186ProofResponse, StorageProof,
-    H256, U256,
+    Address, Block, BlockId, BlockId::Number, BlockNumber, Bytes, EIP1186ProofResponse,
+    StorageProof, H256, U256,
 };
 use ethers_core::utils::keccak256;
 use ethers_providers::{Http, Middleware, Provider};
@@ -53,34 +53,35 @@ pub fn get_block_storage_input(
         .block_on(provider.get_proof(addr, slots, Some(Number(BlockNumber::from(block_number)))))
         .unwrap();
 
-    for storage_pf in pf.storage_proof.iter() {
-        let is_assigned = is_assigned_slot(storage_pf);
-        log::info!("key: {:?}, is_assigned_slot: {}", storage_pf.key, is_assigned);
-    }
-
+    let acct_key = H256(keccak256(addr));
+    let slot_is_empty = !is_assigned_slot(&acct_key, &pf.account_proof);
     let acct_pf = MPTFixedKeyInput {
-        path: H256(keccak256(addr)),
+        path: acct_key,
         value: get_acct_rlp(&pf),
         root_hash: block.state_root,
         proof: pf.account_proof.into_iter().map(|x| x.to_vec()).collect(),
         value_max_byte_len: ACCOUNT_PROOF_VALUE_MAX_BYTE_LEN,
         max_depth: acct_pf_max_depth,
+        slot_is_empty,
     };
 
     let storage_pfs = pf
         .storage_proof
         .into_iter()
         .map(|storage_pf| {
+            let path = H256(keccak256(storage_pf.key));
+            let slot_is_empty = !is_assigned_slot(&path, &storage_pf.proof);
             (
                 storage_pf.key,
                 storage_pf.value,
                 MPTFixedKeyInput {
-                    path: H256(keccak256(storage_pf.key)),
+                    path,
                     value: storage_pf.value.rlp_bytes().to_vec(),
                     root_hash: pf.storage_hash,
                     proof: storage_pf.proof.into_iter().map(|x| x.to_vec()).collect(),
                     value_max_byte_len: STORAGE_PROOF_VALUE_MAX_BYTE_LEN,
                     max_depth: storage_pf_max_depth,
+                    slot_is_empty,
                 },
             )
         })
@@ -95,16 +96,15 @@ pub fn get_block_storage_input(
     }
 }
 
-pub fn is_assigned_slot(pf: &StorageProof) -> bool {
-    let key = keccak256(pf.key);
+pub fn is_assigned_slot(key: &H256, proof: &[Bytes]) -> bool {
     let mut key_nibbles = Vec::new();
-    for byte in key {
+    for &byte in key.as_bytes() {
         key_nibbles.push(byte / 16);
         key_nibbles.push(byte % 16);
     }
     let mut key_frags = Vec::new();
     let mut path_idx = 0;
-    for node in pf.proof.iter() {
+    for node in proof.iter() {
         let rlp = Rlp::new(node);
         if rlp.item_count().unwrap() == 2 {
             let path = rlp.at(0).unwrap().data().unwrap();

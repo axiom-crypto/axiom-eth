@@ -170,7 +170,7 @@ impl<'chip, F: Field> EthStorageChip<F> for EthChip<'chip, F> {
         addr: AssignedBytes<F>,
         proof: MPTFixedKeyProof<F>,
     ) -> EthAccountTraceWitness<F> {
-        assert_eq!(32, proof.key_byte_len);
+        assert_eq!(32, proof.key_bytes.len());
 
         // check key is keccak(addr)
         assert_eq!(addr.len(), 20);
@@ -195,9 +195,7 @@ impl<'chip, F: Field> EthStorageChip<F> for EthChip<'chip, F> {
         );
         // Check MPT inclusion for:
         // keccak(addr) => RLP([nonce, balance, storage_root, code_hash])
-        let max_depth = proof.max_depth;
-        let mpt_witness =
-            self.parse_mpt_inclusion_fixed_key_phase0(ctx, keccak, proof, 32, 114, max_depth);
+        let mpt_witness = self.parse_mpt_inclusion_fixed_key_phase0(ctx, keccak, proof); // 32, 114, max_depth);
 
         EthAccountTraceWitness { array_witness, mpt_witness }
     }
@@ -227,7 +225,7 @@ impl<'chip, F: Field> EthStorageChip<F> for EthChip<'chip, F> {
         slot: AssignedBytes<F>,
         proof: MPTFixedKeyProof<F>,
     ) -> EthStorageTraceWitness<F> {
-        assert_eq!(32, proof.key_byte_len);
+        assert_eq!(32, proof.key_bytes.len());
 
         // check key is keccak(slot)
         let hash_query_idx = keccak.keccak_fixed_len(ctx, self.gate(), slot, None);
@@ -245,9 +243,7 @@ impl<'chip, F: Field> EthStorageChip<F> for EthChip<'chip, F> {
         let value_witness =
             self.rlp().decompose_rlp_field_phase0(ctx, proof.value_bytes.clone(), 32);
         // check MPT inclusion
-        let max_depth = proof.max_depth;
-        let mpt_witness =
-            self.parse_mpt_inclusion_fixed_key_phase0(ctx, keccak, proof, 32, 33, max_depth);
+        let mpt_witness = self.parse_mpt_inclusion_fixed_key_phase0(ctx, keccak, proof);
 
         EthStorageTraceWitness { value_witness, mpt_witness }
     }
