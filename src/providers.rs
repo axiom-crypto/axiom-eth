@@ -71,12 +71,14 @@ pub fn get_block_storage_input(
         .map(|storage_pf| {
             let path = H256(keccak256(storage_pf.key));
             let slot_is_empty = !is_assigned_slot(&path, &storage_pf.proof);
+            let value =
+                if slot_is_empty { vec![0u8] } else { storage_pf.value.rlp_bytes().to_vec() };
             (
                 storage_pf.key,
                 storage_pf.value,
                 MPTFixedKeyInput {
                     path,
-                    value: storage_pf.value.rlp_bytes().to_vec(),
+                    value,
                     root_hash: pf.storage_hash,
                     proof: storage_pf.proof.into_iter().map(|x| x.to_vec()).collect(),
                     value_max_byte_len: STORAGE_PROOF_VALUE_MAX_BYTE_LEN,

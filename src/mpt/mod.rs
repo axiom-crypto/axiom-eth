@@ -1,3 +1,6 @@
+//! Merkle Patricia Trie (MPT) inclusion & exclusion proofs in ZK.
+//!
+//! See https://hackmd.io/@jpw/ry35GZ4l3 for a technical walkthrough of circuit structure and logic
 use crate::{
     keccak::{self, KeccakChip},
     rlp::{
@@ -48,13 +51,13 @@ lazy_static! {
 pub struct LeafTrace<F: Field> {
     key_path: RlpFieldTrace<F>,
     value: RlpFieldTrace<F>,
-    leaf_hash_rlc: RlcVar<F>,
+    hash_rlc: RlcVar<F>,
 }
 
 #[derive(Clone, Debug)]
 pub struct LeafTraceWitness<F: Field> {
     pub rlp: RlpArrayTraceWitness<F>,
-    pub leaf_hash_query_idx: usize,
+    pub hash_query_idx: usize,
     // pub max_leaf_bytes: usize,
 }
 
@@ -141,7 +144,7 @@ pub struct MPTFixedKeyProof<F: Field> {
     pub root_hash_bytes: AssignedBytes<F>,
 
     // proof specification
-    /// The variable length of the proof. In the case of a non-inclusion proof, we pretend there is a NULL leaf node in the proof.
+    /// The variable length of the proof, including the leaf node if !slot_is_empty.
     pub depth: AssignedValue<F>,
     /// RLP encoding of the final leaf node
     pub leaf_bytes: AssignedBytes<F>,
@@ -200,7 +203,7 @@ impl<F: Field> MPTFixedKeyProofWitness<F> {
     ///
     /// Currently all indices are with respect to `keccak.var_len_queries` (see [`EthChip::mpt_hash_phase0`]).
     pub fn shift_query_indices(&mut self, shift: usize) {
-        self.leaf_parsed.leaf_hash_query_idx += shift;
+        self.leaf_parsed.hash_query_idx += shift;
         for node in self.nodes.iter_mut() {
             node.ext.hash_query_idx += shift;
             node.branch.hash_query_idx += shift;
@@ -400,9 +403,9 @@ impl<'chip, F: Field> EthChip<'chip, F> {
         let rlp_witness =
             self.rlp.decompose_rlp_array_phase0(ctx, leaf_bytes, &max_field_bytes, false);
         // TODO: remove unnecessary clones somehow?
-        let leaf_hash_query_idx =
+        let hash_query_idx =
             self.mpt_hash_phase0(ctx, keccak, rlp_witness.rlp_array.clone(), rlp_witness.rlp_len);
-        LeafTraceWitness { rlp: rlp_witness, leaf_hash_query_idx }
+        LeafTraceWitness { rlp: rlp_witness, hash_query_idx }
     }
 
     /// Parse the RLP encoding of an assumed leaf node.
@@ -415,8 +418,8 @@ impl<'chip, F: Field> EthChip<'chip, F> {
         let rlp_trace =
             self.rlp.decompose_rlp_array_phase1((ctx_gate, ctx_rlc), witness.rlp, false);
         let [key_path, value]: [RlpFieldTrace<F>; 2] = rlp_trace.field_trace.try_into().unwrap();
-        let leaf_hash_rlc = self.mpt_hash_phase1(ctx_gate, witness.leaf_hash_query_idx);
-        LeafTrace { key_path, value, leaf_hash_rlc }
+        let hash_rlc = self.mpt_hash_phase1(ctx_gate, witness.hash_query_idx);
+        LeafTrace { key_path, value, hash_rlc }
     }
 
     /// Parse the RLP encoding of an assumed extension node.
@@ -526,8 +529,9 @@ impl<'chip, F: Field> EthChip<'chip, F> {
          * all inputs are bytes
          * node_types[idx] in {0, 1}
          * key_frag_is_odd[idx] in {0, 1}
+         * slot_is_empty in {0, 1}
          * key_frag_hexes are hexs
-         * 0 < depth <= max_depth
+         * 0 <= depth <= max_depth
          * 0 <= value_byte_len <= value_max_byte_len
          * 0 <= key_frag_byte_len[idx] <= key_byte_len + 1
          */
@@ -656,7 +660,7 @@ impl<'chip, F: Field> EthChip<'chip, F> {
     pub fn parse_mpt_inclusion_fixed_key_phase1(
         &self,
         (ctx_gate, ctx_rlc): RlcContextPair<F>,
-        witness: MPTFixedKeyProofWitness<F>,
+        mut witness: MPTFixedKeyProofWitness<F>,
     ) {
         let max_depth = witness.max_depth;
         let leaf_parsed = self.parse_leaf_phase1((ctx_gate, ctx_rlc), witness.leaf_parsed);
@@ -693,8 +697,11 @@ impl<'chip, F: Field> EthChip<'chip, F> {
             self.gate().idx_to_indicator(ctx_gate, depth_minus_one, max_depth);
 
         // Match fragments to node key
-        for ((key_frag_ext_rlc, node), is_last) in
-            key_frag_ext_rlcs.into_iter().zip(nodes.iter()).zip(depth_minus_one_indicator.iter())
+        for (((key_frag_ext_rlc, node), is_last), frag_len) in key_frag_ext_rlcs
+            .into_iter()
+            .zip(nodes.iter())
+            .zip(depth_minus_one_indicator.iter())
+            .zip(witness.frag_lens.iter_mut())
         {
             // When node is extension, check node key RLC equals key frag RLC
             let mut node_key_is_equal = rlc_is_equal(
@@ -709,26 +716,29 @@ impl<'chip, F: Field> EthChip<'chip, F> {
 
             // If slot_is_empty && this is the last node && node is extension, then node key fragment must NOT equal key fragment (which is the last key fragment)
             // Reminder: node_type = 1 if extension, 0 if branch
-            node_key_is_equal =
-                self.gate().select(ctx_gate, node_key_is_equal, Constant(F::one()), node.node_type);
-            // !is_last || !node_type = !(is_last && node_type) = 1 - is_last * node_type
+            let is_ext = node.node_type;
+            let is_branch = self.gate().not(ctx_gate, node.node_type);
+            // is_ext ? node_key_is_equal : 1
+            node_key_is_equal = self.gate().mul_add(ctx_gate, node_key_is_equal, is_ext, is_branch);
+            // !is_last || !is_ext = !(is_last && is_ext) = 1 - is_last * is_ext
             let mut expected = {
-                let val = F::one() - *is_last.value() * node.node_type.value();
+                let val = F::one() - *is_last.value() * is_ext.value();
                 ctx_gate.assign_region(
-                    [
-                        Witness(val),
-                        Existing(*is_last),
-                        Existing(node.node_type),
-                        Constant(F::one()),
-                    ],
+                    [Witness(val), Existing(*is_last), Existing(is_ext), Constant(F::one())],
                     [0],
                 );
                 ctx_gate.get(-4)
             };
-            // (slot_is_empty ? !(is_last && node_type) : 1), we cache slot_is_occupied as an optimization
+            // (slot_is_empty ? !(is_last && is_ext) : 1), we cache slot_is_occupied as an optimization
             expected = self.gate().mul_add(ctx_gate, expected, slot_is_empty, slot_is_occupied);
             // assuming node type is not extension if idx > pf.len() [we don't care what happens for these idx]
             ctx_gate.constrain_equal(&node_key_is_equal, &expected);
+
+            // We enforce that the frag_len is 1 if the node is a branch, unless it is the last node (idx = depth - 1)
+            // This check is only necessary if slot_is_empty; otherwise, the fixed key length and overall concatenation check will enforce this
+            let is_branch_and_not_last = self.gate().mul_not(ctx_gate, *is_last, is_branch);
+            *frag_len =
+                self.gate().select(ctx_gate, Constant(F::one()), *frag_len, is_branch_and_not_last);
         }
 
         // Question for auditers: is the following necessary?
@@ -759,14 +769,14 @@ impl<'chip, F: Field> EthChip<'chip, F> {
                 .key_frag
                 .into_iter()
                 .zip(witness.frag_lens.into_iter())
-                .map(|(key_frag, frag_lens)| {
+                .map(|(key_frag, frag_len)| {
                     let first_nibble = key_frag.nibbles[0];
                     (
                         self.rlc().compute_rlc(
                             (ctx_gate, ctx_rlc),
                             self.gate(),
                             key_frag.nibbles,
-                            frag_lens,
+                            frag_len,
                         ),
                         first_nibble,
                     )
@@ -788,6 +798,7 @@ impl<'chip, F: Field> EthChip<'chip, F> {
                 (&key_hex_rlc.rlc_val, &key_len),
                 witness.depth,
             );
+
             fragment_first_nibbles
         };
 
@@ -842,7 +853,7 @@ impl<'chip, F: Field> EthChip<'chip, F> {
         // TODO: maybe use rust iterators instead here, would make it harder to read though
         for idx in 0..max_depth {
             // `node_hash_rlc` can be viewed as a fixed length RLC
-            let mut node_hash_rlc = leaf_parsed.leaf_hash_rlc;
+            let mut node_hash_rlc = leaf_parsed.hash_rlc;
             if idx < max_depth - 1 {
                 node_hash_rlc = rlc_select(
                     ctx_gate,
@@ -854,13 +865,8 @@ impl<'chip, F: Field> EthChip<'chip, F> {
                 // is_leaf = (idx == depth - 1) && !slot_is_empty
                 let is_last = depth_minus_one_indicator[idx];
                 let is_leaf = self.gate().mul_not(ctx_gate, slot_is_empty, is_last);
-                node_hash_rlc = rlc_select(
-                    ctx_gate,
-                    self.gate(),
-                    leaf_parsed.leaf_hash_rlc,
-                    node_hash_rlc,
-                    is_leaf,
-                );
+                node_hash_rlc =
+                    rlc_select(ctx_gate, self.gate(), leaf_parsed.hash_rlc, node_hash_rlc, is_leaf);
             }
             if idx == 0 {
                 // if !proof_is_empty:

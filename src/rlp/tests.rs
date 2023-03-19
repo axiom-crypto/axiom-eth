@@ -269,6 +269,15 @@ mod rlp {
     }
 
     #[test]
+    pub fn test_mock_rlp_literal() {
+        let k = DEGREE;
+        let mut input_bytes: Vec<u8> = vec![0];
+        input_bytes.resize(33, 0);
+        let circuit = rlp_string_circuit(RlcThreadBuilder::<Fr>::mock(), input_bytes, 32);
+        MockProver::run(k, &circuit, vec![]).unwrap().assert_satisfied();
+    }
+
+    #[test]
     pub fn test_mock_rlp_long_field() {
         let k = DEGREE;
         let input_bytes: Vec<u8> = Vec::from_hex("a09bdb004d9b1e7f3e5f86fbdc9856f21f9dcb07a44c42f5de8eec178514d279df0000000000000000000000000000000000000000000000000000000000").unwrap();

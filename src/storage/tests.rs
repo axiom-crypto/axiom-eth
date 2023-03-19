@@ -52,6 +52,7 @@ fn get_test_circuit<F: Field>(network: Network, num_slots: usize) -> EthBlockSto
             block_number = 0x713d54;
         }
     }
+    // For only occupied slots:
     let slot_nums = vec![0u64, 1u64, 2u64, 3u64, 6u64, 8u64];
     let mut slots = (0..4)
         .map(|x| {
@@ -62,15 +63,8 @@ fn get_test_circuit<F: Field>(network: Network, num_slots: usize) -> EthBlockSto
         })
         .collect::<Vec<_>>();
     slots.extend(slot_nums.iter().map(|x| H256::from_low_u64_be(*x)));
-    EthBlockStorageCircuit::from_provider(
-        &provider,
-        block_number,
-        addr,
-        slots[..num_slots].to_vec(),
-        8,
-        8,
-        network,
-    )
+    // let slots: Vec<_> = (0..num_slots).map(|x| H256::from_low_u64_be(x as u64)).collect();
+    EthBlockStorageCircuit::from_provider(&provider, block_number, addr, slots, 8, 8, network)
 }
 
 #[test]
@@ -79,7 +73,7 @@ pub fn test_mock_single_eip1186() -> Result<(), Box<dyn std::error::Error>> {
     set_var("ETH_CONFIG_PARAMS", serde_json::to_string(&params).unwrap());
     let k = params.degree;
 
-    let input = get_test_circuit::<Fr>(Network::Mainnet, 1);
+    let input = get_test_circuit::<Fr>(Network::Mainnet, 10);
     let circuit = input.create_circuit(RlcThreadBuilder::mock(), None);
     MockProver::run(k, &circuit, vec![circuit.instance()]).unwrap().assert_satisfied();
     Ok(())
