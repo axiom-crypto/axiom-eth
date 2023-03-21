@@ -323,7 +323,7 @@ mod aggregation {
             Task::new(
                 0x765fb3,
                 0x765fb3 + 11,
-                CircuitType::new(4, 3, Finality::Evm(0), Network::Goerli),
+                CircuitType::new(4, 3, Finality::Evm(1), Network::Goerli),
             ),
             true,
         );
