@@ -276,20 +276,26 @@ impl<F: Field> KeccakChip<F> {
             .collect_vec()
         };
 
+        let zero = ctx.load_zero();
         once(self.merkle_tree_root(ctx, gate, leaves))
             .chain(mountain_range_start_positions.into_iter().zip((0..max_depth).rev()).map(
                 |(start_idx, depth)| {
                     // generate the sub-leaves `leaves[start_idx..start_idx + 2^depth]`
+                    let start_indicator = gate.idx_to_indicator(ctx, start_idx, leaves.len());
                     let subleaves = (0..(1 << depth))
                         .map(|idx| {
-                            let leaf_idx =
-                                gate.add(ctx, start_idx, Constant(gate.get_field_element(idx)));
+                            // let leaf_idx = gate.add(ctx, start_idx, Constant(gate.get_field_element(idx)));
+                            // indicator of start_idx + idx is just start_indicator shifted idx to the right, left padded with 0s
+                            let indicator = iter::repeat(zero)
+                                .take(idx)
+                                .chain(start_indicator.iter().take(leaves.len() - idx).copied())
+                                .collect_vec();
                             (0..NUM_BYTES_TO_SQUEEZE)
                                 .map(|byte_idx| {
-                                    gate.select_from_idx(
+                                    gate.select_by_indicator(
                                         ctx,
                                         leaves.iter().map(|leaf| leaf[byte_idx]),
-                                        leaf_idx,
+                                        indicator.iter().copied(),
                                     )
                                 })
                                 .collect_vec()
@@ -530,15 +536,16 @@ impl<F: Field> KeccakChip<F> {
             .map(|((ctx_id, (select_range, idx)), (input_rlc, output_rlc))| {
                 let mut ctx = Context::new(witness_gen_only, ctx_id);
                 let (table_input_rlc, table_output_rlc) = if let Some(idx) = idx {
-                    let input_rlc = gate.select_from_idx(
+                    let indicator = gate.idx_to_indicator(&mut ctx, idx, select_range.len());
+                    let input_rlc = gate.select_by_indicator(
                         &mut ctx,
                         table_input_rlcs[select_range.clone()].iter().copied(),
-                        idx,
+                        indicator.iter().copied(),
                     );
-                    let output_rlc = gate.select_from_idx(
+                    let output_rlc = gate.select_by_indicator(
                         &mut ctx,
                         table_output_rlcs[select_range].iter().copied(),
-                        idx,
+                        indicator,
                     );
                     (input_rlc, output_rlc)
                 } else {

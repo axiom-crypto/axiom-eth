@@ -180,7 +180,8 @@ pub trait EthBlockHeaderChip<F: Field> {
     /// Decomposes each header into it's fields.
     /// `headers[0]` is the earliest block
     ///
-    /// - If `num_blocks_minus_one` is not None, then the circuit checks that the first `num_blocks := num_blocks_minus_one + 1` block headers form a chain: meaning that the parent hash of block i + 1 equals the hash of block i.
+    /// - If `num_blocks_minus_one = (num_blocks_minus_one, indicator)` is not None, then the circuit checks that the first `num_blocks := num_blocks_minus_one + 1` block headers form a chain: meaning that the parent hash of block i + 1 equals the hash of block i.
+    /// - `indicator` is a vector with index `i` equal to `i == num_blocks - 1 ? 1 : 0`.
     /// - Otherwise if `num_blocks` is None, the circuit checks that all `headers` form a hash chain.
     ///
     /// Assumes that `0 <= num_blocks_minus_one < 2^max_depth`.
@@ -192,7 +193,7 @@ pub trait EthBlockHeaderChip<F: Field> {
         &self,
         thread_pool: &mut RlcThreadBuilder<F>,
         witnesses: Vec<EthBlockHeaderTraceWitness<F>>,
-        num_blocks_minus_one: Option<AssignedValue<F>>,
+        num_blocks_minus_one: Option<(AssignedValue<F>, Vec<AssignedValue<F>>)>,
     ) -> Vec<EthBlockHeaderTrace<F>>;
 }
 
@@ -316,7 +317,7 @@ impl<'chip, F: Field> EthBlockHeaderChip<F> for EthChip<'chip, F> {
         &self,
         thread_pool: &mut RlcThreadBuilder<F>,
         witnesses: Vec<EthBlockHeaderTraceWitness<F>>,
-        num_blocks_minus_one: Option<AssignedValue<F>>,
+        num_blocks_minus_one: Option<(AssignedValue<F>, Vec<AssignedValue<F>>)>,
     ) -> Vec<EthBlockHeaderTrace<F>> {
         assert!(!witnesses.is_empty());
         let ctx = thread_pool.rlc_ctx_pair();
@@ -348,7 +349,7 @@ impl<'chip, F: Field> EthBlockHeaderChip<F> for EthChip<'chip, F> {
         let ctx_gate = thread_pool.gate_builder.main(RLC_PHASE);
         let thirty_two = self.gate().get_field_element(32);
         // record for each idx whether hash of headers[idx] is in headers[idx + 1]
-        if let Some(num_blocks_minus_one) = num_blocks_minus_one {
+        if let Some((num_blocks_minus_one, indicator)) = num_blocks_minus_one {
             let mut hash_checks = Vec::with_capacity(traces.len() - 1);
             for idx in 0..traces.len() - 1 {
                 let hash_check = self.gate().is_equal(
@@ -365,10 +366,10 @@ impl<'chip, F: Field> EthBlockHeaderChip<F> for EthChip<'chip, F> {
             }
             let hash_check_sums =
                 self.gate().partial_sums(ctx_gate, hash_checks.iter().copied()).collect_vec();
-            let hash_check_sum = self.gate().select_from_idx(
+            let hash_check_sum = self.gate().select_by_indicator(
                 ctx_gate,
                 once(Constant(F::zero())).chain(hash_check_sums.into_iter().map(Existing)),
-                num_blocks_minus_one,
+                indicator,
             );
             ctx_gate.constrain_equal(&hash_check_sum, &num_blocks_minus_one);
         } else {
@@ -405,22 +406,24 @@ impl<'chip, F: Field> EthBlockHeaderChip<F> for EthChip<'chip, F> {
 ///
 /// The numbers are left padded by zeros to be exactly 4 bytes (u32); the two padded numbers are concatenated together to a u64.
 ///
+/// `indicator` is the indicator for `num_blocks_minus_one`, where `indicator[i] = (i == end_block_number - start_block_number ? 1 : 0)`.
+///
 /// This function should be called in `FirstPhase`.
 pub fn get_boundary_block_data<F: Field>(
     ctx: &mut Context<F>, // ctx_gate in FirstPhase
     gate: &impl GateInstructions<F>,
     chain: &[EthBlockHeaderTraceWitness<F>],
-    num_blocks_minus_one: AssignedValue<F>,
+    indicator: &[AssignedValue<F>],
 ) -> ([AssignedValue<F>; 2], [AssignedValue<F>; 2], AssignedValue<F>) {
     let prev_block_hash: [_; 2] =
         bytes_be_to_u128(ctx, gate, &chain[0].get("parent_hash").field_cells).try_into().unwrap();
     let end_block_hash: [_; 2] = {
         let end_block_hash_bytes = (0..32)
             .map(|idx| {
-                gate.select_from_idx(
+                gate.select_by_indicator(
                     ctx,
                     chain.iter().map(|header| header.block_hash[idx]),
-                    num_blocks_minus_one,
+                    indicator.iter().copied(),
                 )
             })
             .collect_vec();
@@ -440,16 +443,16 @@ pub fn get_boundary_block_data<F: Field>(
         // TODO: is there a way to do this without so many selects
         let end_block_number_bytes: [_; BLOCK_NUMBER_MAX_BYTES] =
             core::array::from_fn(|i| i).map(|idx| {
-                gate.select_from_idx(
+                gate.select_by_indicator(
                     ctx,
                     chain.iter().map(|header| header.get("number").field_cells[idx]),
-                    num_blocks_minus_one,
+                    indicator.iter().copied(),
                 )
             });
-        let end_block_number_len = gate.select_from_idx(
+        let end_block_number_len = gate.select_by_indicator(
             ctx,
             chain.iter().map(|header| header.get("number").field_len),
-            num_blocks_minus_one,
+            indicator.iter().copied(),
         );
         let mut end_block_number_bytes = bytes_be_var_to_fixed(
             ctx,
@@ -584,8 +587,10 @@ impl<F: Field> EthBlockHeaderChainCircuit<F> {
             })
             .collect_vec();
 
+        let indicator =
+            chip.gate().idx_to_indicator(ctx, num_blocks_minus_one, block_chain_witness.len());
         let (prev_block_hash, end_block_hash, block_numbers) =
-            get_boundary_block_data(ctx, chip.gate(), &block_chain_witness, num_blocks_minus_one);
+            get_boundary_block_data(ctx, chip.gate(), &block_chain_witness, &indicator);
         let assigned_instances = iter::empty()
             .chain(prev_block_hash)
             .chain(end_block_hash)
@@ -607,7 +612,7 @@ impl<F: Field> EthBlockHeaderChainCircuit<F> {
                 let _block_chain_trace = chip.decompose_block_header_chain_phase1(
                     builder,
                     block_chain_witness,
-                    Some(num_blocks_minus_one),
+                    Some((num_blocks_minus_one, indicator)),
                 );
             },
         );

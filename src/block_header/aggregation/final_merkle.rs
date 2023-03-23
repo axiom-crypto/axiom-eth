@@ -75,7 +75,7 @@ impl EthBlockHeaderChainFinalAggregationCircuit {
         });
         let aggregation = AggregationCircuit::new::<SHPLONK>(
             stage,
-            Some(Vec::new()), // break points aren't actually used, since we will just take the builder form this circuit
+            Some(Vec::new()), // break points aren't actually used, since we will just take the builder from this circuit
             lookup_bits,
             params,
             self.0.snarks,

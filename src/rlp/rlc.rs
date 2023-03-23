@@ -259,8 +259,9 @@ impl<F: ScalarField> RlcChip<F> {
         }
 
         let num_frags_minus_1 = gate.sub(ctx_gate, num_frags, Constant(F::one()));
-        let total_len = gate.select_from_idx(ctx_gate, partial_len, num_frags_minus_1);
-        let rlc_select = gate.select_from_idx(ctx_gate, partial_rlc, num_frags_minus_1);
+        let indicator = gate.idx_to_indicator(ctx_gate, num_frags_minus_1, partial_len.len());
+        let total_len = gate.select_by_indicator(ctx_gate, partial_len, indicator.clone());
+        let rlc_select = gate.select_by_indicator(ctx_gate, partial_rlc, indicator);
 
         (rlc_select, total_len)
     }
