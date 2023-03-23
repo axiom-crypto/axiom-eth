@@ -11,7 +11,11 @@ ssh-add
 cargo update
 ```
 
-Place your Infura ID in a file named `axiom-eth/scripts/input_gen/INFURA_ID`
+Copy [`.env.example`] to `.env` and add your INFURA ID. Then run
+
+```bash
+source .env
+```
 
 ## Header chain
 
