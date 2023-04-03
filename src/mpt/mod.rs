@@ -1,6 +1,6 @@
 //! Merkle Patricia Trie (MPT) inclusion & exclusion proofs in ZK.
 //!
-//! See https://hackmd.io/@jpw/ry35GZ4l3 for a technical walkthrough of circuit structure and logic
+//! See https://hackmd.io/@axiom/ry35GZ4l3 for a technical walkthrough of circuit structure and logic
 use crate::{
     keccak::{self, KeccakChip},
     rlp::{
