@@ -21,7 +21,7 @@ use ethers_core::types::{Address, Block, H256, U256};
 #[cfg(feature = "providers")]
 use ethers_providers::{Http, Provider};
 use halo2_base::{
-    gates::{builder::GateThreadBuilder, RangeChip},
+    gates::{builder::GateThreadBuilder, GateInstructions, RangeChip},
     utils::bit_length,
     AssignedValue, Context,
 };
@@ -90,6 +90,8 @@ pub struct EIP1186ResponseDigest<F: Field> {
     pub address: AssignedValue<F>,
     // the value U256 is interpreted as H256 (padded with 0s on left)
     pub slots_values: Vec<(AssignedH256<F>, AssignedH256<F>)>,
+    pub address_is_empty: AssignedValue<F>,
+    pub slot_is_empty: Vec<AssignedValue<F>>,
 }
 
 pub trait EthStorageChip<F: Field> {
@@ -170,7 +172,7 @@ impl<'chip, F: Field> EthStorageChip<F> for EthChip<'chip, F> {
         addr: AssignedBytes<F>,
         proof: MPTFixedKeyProof<F>,
     ) -> EthAccountTraceWitness<F> {
-        assert_eq!(32, proof.key_byte_len);
+        assert_eq!(32, proof.key_bytes.len());
 
         // check key is keccak(addr)
         assert_eq!(addr.len(), 20);
@@ -195,9 +197,7 @@ impl<'chip, F: Field> EthStorageChip<F> for EthChip<'chip, F> {
         );
         // Check MPT inclusion for:
         // keccak(addr) => RLP([nonce, balance, storage_root, code_hash])
-        let max_depth = proof.max_depth;
-        let mpt_witness =
-            self.parse_mpt_inclusion_fixed_key_phase0(ctx, keccak, proof, 32, 114, max_depth);
+        let mpt_witness = self.parse_mpt_inclusion_fixed_key_phase0(ctx, keccak, proof); // 32, 114, max_depth);
 
         EthAccountTraceWitness { array_witness, mpt_witness }
     }
@@ -227,7 +227,7 @@ impl<'chip, F: Field> EthStorageChip<F> for EthChip<'chip, F> {
         slot: AssignedBytes<F>,
         proof: MPTFixedKeyProof<F>,
     ) -> EthStorageTraceWitness<F> {
-        assert_eq!(32, proof.key_byte_len);
+        assert_eq!(32, proof.key_bytes.len());
 
         // check key is keccak(slot)
         let hash_query_idx = keccak.keccak_fixed_len(ctx, self.gate(), slot, None);
@@ -245,10 +245,7 @@ impl<'chip, F: Field> EthStorageChip<F> for EthChip<'chip, F> {
         let value_witness =
             self.rlp().decompose_rlp_field_phase0(ctx, proof.value_bytes.clone(), 32);
         // check MPT inclusion
-        let max_depth = proof.max_depth;
-        let mpt_witness =
-            self.parse_mpt_inclusion_fixed_key_phase0(ctx, keccak, proof, 32, 33, max_depth);
-
+        let mpt_witness = self.parse_mpt_inclusion_fixed_key_phase0(ctx, keccak, proof);
         EthStorageTraceWitness { value_witness, mpt_witness }
     }
 
@@ -257,6 +254,7 @@ impl<'chip, F: Field> EthStorageChip<F> for EthChip<'chip, F> {
         (ctx_gate, ctx_rlc): RlcContextPair<F>,
         witness: EthStorageTraceWitness<F>,
     ) -> EthStorageTrace<F> {
+        // Comments below just to log what load_rlc_cache calls are done in the internal functions:
         // load_rlc_cache bit_length(2*mpt_witness.key_byte_len)
         self.parse_mpt_inclusion_fixed_key_phase1((ctx_gate, ctx_rlc), witness.mpt_witness);
         // load rlc_cache bit_length(value_witness.rlp_field.len())
@@ -421,14 +419,20 @@ impl<'chip, F: Field> EthStorageChip<F> for EthChip<'chip, F> {
                 (slot, value)
             })
             .collect_vec();
+        let digest = EIP1186ResponseDigest {
+            block_hash: block_hash_hi_lo.try_into().unwrap(),
+            block_number,
+            address,
+            slots_values,
+            address_is_empty: acct_witness.mpt_witness.slot_is_empty,
+            slot_is_empty: storage_witness
+                .iter()
+                .map(|witness| witness.mpt_witness.slot_is_empty)
+                .collect_vec(),
+        };
         (
             EthBlockAccountStorageTraceWitness { block_witness, acct_witness, storage_witness },
-            EIP1186ResponseDigest {
-                block_hash: block_hash_hi_lo.try_into().unwrap(),
-                block_number,
-                address,
-                slots_values,
-            },
+            digest,
         )
     }
 
@@ -574,7 +578,14 @@ impl<F: Field> EthBlockStorageCircuit<F> {
             input,
             self.network,
         );
-        let EIP1186ResponseDigest { block_hash, block_number, address, slots_values } = digest;
+        let EIP1186ResponseDigest {
+            block_hash,
+            block_number,
+            address,
+            slots_values,
+            address_is_empty,
+            slot_is_empty,
+        } = digest;
         let assigned_instances = block_hash
             .into_iter()
             .chain([block_number, address])
@@ -584,6 +595,14 @@ impl<F: Field> EthBlockStorageCircuit<F> {
                     .flat_map(|(slot, value)| slot.into_iter().chain(value.into_iter())),
             )
             .collect_vec();
+        // For now this circuit is going to constrain that all slots are occupied. We can also create a circuit that exposes the bitmap of slot_is_empty
+        {
+            let ctx = builder.gate_builder.main(FIRST_PHASE);
+            range.gate.assert_is_const(ctx, &address_is_empty, &F::zero());
+            for slot_is_empty in slot_is_empty {
+                range.gate.assert_is_const(ctx, &slot_is_empty, &F::zero());
+            }
+        }
 
         let circuit = EthCircuitBuilder::new(
             assigned_instances,

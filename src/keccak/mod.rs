@@ -249,7 +249,9 @@ impl<F: Field> KeccakChip<F> {
     /// - The byte length of each element of `leaves` is known and fixed, i.e., we use `keccak_fixed_len` to perform the hashes.
     ///
     /// Returns the merkle mountain range associated with `leaves[..num_leaves]`
-    /// as a length `log_2(leaves.len()) + 1` vector of byte arrays. The mountain range is ordered with the largest mountain first. For example, if `num_leaves = leaves.len()` then the first mountain is the merkle root of the full tree.
+    /// as a length `log_2(leaves.len()) + 1` vector of byte arrays.
+    /// The mountain range is ordered with the largest mountain first. For example, if `num_leaves = leaves.len()` then the first mountain is the merkle root of the full tree.
+    /// For `i` where `(num_leaves >> i) & 1 == 0`, the value of the corresponding peak should be considered UNDEFINED.
     ///
     /// The merkle root of the tree with leaves `leaves[..num_leaves]` can be recovered by successively hashing the elements in the merkle mountain range, in reverse order, corresponding to indices
     /// where `num_leaves` has a 1 bit.
@@ -262,43 +264,34 @@ impl<F: Field> KeccakChip<F> {
     ) -> Vec<Vec<AssignedValue<F>>> {
         let max_depth = leaves.len().ilog2() as usize;
         assert_eq!(leaves.len(), 1 << max_depth);
-        debug_assert_eq!(num_leaves_bits.len(), max_depth + 1);
+        assert_eq!(num_leaves_bits.len(), max_depth + 1);
 
-        let mountain_range_start_positions = {
-            // we start at 0 and go through bits of `num_leaves` in big endian order
-            // if `(num_leaves >> i) & 1` then we add 2^i
-            // Note that if num_leaves = 2^max_depth, then these all equal 2^max_depth
-            gate.inner_product_with_sums(
-                ctx,
-                num_leaves_bits[..=max_depth].iter().rev().copied(),
-                gate.pow_of_two()[..=max_depth].iter().rev().copied().map(Constant),
-            )
-            .collect_vec()
-        };
-
+        // start_idx[i] = (num_leaves >> i) << i
+        // below we will want to select `leaves[start_idx[depth+1]..start_idx[depth+1] + 2^depth] for depth = max_depth - 1, ..., 0
+        // we do this with a barrel-shifter, by shifting `leaves` left by 2^i or 0 depending on the bit in `num_leaves_bits`
+        // we skip the first shift by 2^max_depth because if num_leaves == 2^max_depth then all these subsequent peaks are undefined
+        let mut shift_leaves = leaves.to_vec();
         once(self.merkle_tree_root(ctx, gate, leaves))
-            .chain(mountain_range_start_positions.into_iter().zip((0..max_depth).rev()).map(
-                |(start_idx, depth)| {
-                    // generate the sub-leaves `leaves[start_idx..start_idx + 2^depth]`
-                    let subleaves = (0..(1 << depth))
-                        .map(|idx| {
-                            let leaf_idx =
-                                gate.add(ctx, start_idx, Constant(gate.get_field_element(idx)));
-                            (0..NUM_BYTES_TO_SQUEEZE)
-                                .map(|byte_idx| {
-                                    gate.select_from_idx(
-                                        ctx,
-                                        leaves.iter().map(|leaf| leaf[byte_idx]),
-                                        leaf_idx,
-                                    )
-                                })
-                                .collect_vec()
-                        })
-                        .collect_vec();
+            .chain(num_leaves_bits.iter().enumerate().rev().skip(1).map(|(depth, &sel)| {
+                let peak = self.merkle_tree_root(ctx, gate, &shift_leaves[..(1usize << depth)]);
+                // no need to shift if we're at the end
+                if depth != 0 {
+                    // shift left by sel == 1 ? 2^depth : 0
+                    for i in 0..1 << depth {
+                        debug_assert_eq!(shift_leaves[i].len(), NUM_BYTES_TO_SQUEEZE);
+                        for j in 0..shift_leaves[i].len() {
+                            shift_leaves[i][j] = gate.select(
+                                ctx,
+                                shift_leaves[i + (1 << depth)][j],
+                                shift_leaves[i][j],
+                                sel,
+                            );
+                        }
+                    }
+                }
 
-                    self.merkle_tree_root(ctx, gate, &subleaves)
-                },
-            ))
+                peak
+            }))
             .collect()
     }
 
@@ -530,15 +523,16 @@ impl<F: Field> KeccakChip<F> {
             .map(|((ctx_id, (select_range, idx)), (input_rlc, output_rlc))| {
                 let mut ctx = Context::new(witness_gen_only, ctx_id);
                 let (table_input_rlc, table_output_rlc) = if let Some(idx) = idx {
-                    let input_rlc = gate.select_from_idx(
+                    let indicator = gate.idx_to_indicator(&mut ctx, idx, select_range.len());
+                    let input_rlc = gate.select_by_indicator(
                         &mut ctx,
                         table_input_rlcs[select_range.clone()].iter().copied(),
-                        idx,
+                        indicator.iter().copied(),
                     );
-                    let output_rlc = gate.select_from_idx(
+                    let output_rlc = gate.select_by_indicator(
                         &mut ctx,
                         table_output_rlcs[select_range].iter().copied(),
-                        idx,
+                        indicator,
                     );
                     (input_rlc, output_rlc)
                 } else {

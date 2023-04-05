@@ -351,7 +351,8 @@ pub fn bytes_be_var_to_fixed<F: ScalarField>(
     // If `bytes` is an RLP field, then `len <= bytes.len()` was already checked during `decompose_rlp_array_phase0` so we don't need to do it again:
     // range.range_check(ctx, len, bit_length(bytes.len() as u64));
 
-    // out[idx] = 1{ len >= out_len - idx } * bytes[idx + len - out_len]
+    // TODO: the indicator for byte_idx can maybe be created from indicator for len just by shifts and 0 pads since out_len and idx are not witnesses, but this function isn't used that often so not optimizing for now
+    // out[idx] = len >= out_len - idx ? bytes[idx + len - out_len] : 0
     (0..out_len)
         .map(|idx| {
             let byte_idx =

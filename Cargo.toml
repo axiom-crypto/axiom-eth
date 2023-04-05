@@ -17,6 +17,7 @@ rayon = "1.6.1"
 
 # misc
 log = "0.4"
+env_logger = "0.10"
 ark-std = { version = "0.3.0", features = ["print-trace"], optional = true }
 clap = { version = "4.0.13", features = ["derive"], optional = true }
 clap-num = { version = "1.0.2", optional = true }
@@ -26,7 +27,6 @@ serde_with = { version = "2.2", optional = true }
 
 # halo2
 ff = "0.12"
-# halo2
 halo2-base = { git = "https://github.com/axiom-crypto/halo2-lib", branch = "axiom-dev-0301", default-features = false }
 zkevm-keccak = { git = "https://github.com/axiom-crypto/halo2-lib", branch = "axiom-dev-0301", default-features = false }
 
@@ -49,7 +49,6 @@ tokio = { version = "1.26", default-features = false, features = ["rt", "rt-mult
 hex = "0.4.3"
 ark-std = { version = "0.3.0", features = ["print-trace"] }
 log = "0.4"
-env_logger = "0.10"
 test-log = "0.2.11"
 
 [features]
