@@ -1,6 +1,6 @@
 [package]
 name = "axiom-eth"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 autobins = false
 
@@ -13,7 +13,7 @@ itertools = "0.10"
 lazy_static = "1.4.0"
 serde = { version = "1.0", default-features = false, features = ["derive"] }
 serde_json = { version = "1.0", default-features = false }
-rayon = "1.6.1"
+rayon = "1.7"
 
 # misc
 log = "0.4"
@@ -27,22 +27,22 @@ serde_with = { version = "2.2", optional = true }
 
 # halo2
 ff = "0.12"
-halo2-base = { path = "../halo2-lib/halo2-base", default-features = false }
-zkevm-keccak = { path = "../halo2-lib/hashes/zkevm-keccak", default-features = false }
+halo2-base = { git = "https://github.com/axiom-crypto/halo2-lib.git", branch = "upgrade-v0.3.0-fixes", default-features = false }
+zkevm-keccak = { git = "https://github.com/axiom-crypto/halo2-lib.git", branch = "upgrade-v0.3.0-fixes", default-features = false }
 
 # crypto
 rlp = "0.5.2"
-ethers-core = { version = "1.0.2" } # used by halo2-mpt already
+ethers-core = { version = "2.0.2" } # used by halo2-mpt already
 rand_core = { version = "0.6", default-features = false, features = ["getrandom"] }
 rand = "0.8"
 rand_chacha = "0.3.1"
 
 # aggregation 
-snark-verifier = { git = "https://github.com/axiom-crypto/snark-verifier.git", branch = "sync/halo2-lib-v0.3.0", default-features = false, features = ["loader_halo2"], optional = true }
-snark-verifier-sdk = { git = "https://github.com/axiom-crypto/snark-verifier.git", branch = "sync/halo2-lib-v0.3.0", default-features = false, features = ["loader_halo2"], optional = true }
+snark-verifier = { git = "https://github.com/axiom-crypto/snark-verifier.git", branch = "sync/halo2-lib-v0.3.0-fixes", default-features = false, features = ["loader_halo2"], optional = true }
+snark-verifier-sdk = { git = "https://github.com/axiom-crypto/snark-verifier.git", branch = "sync/halo2-lib-v0.3.0-fixes", default-features = false, features = ["loader_halo2"], optional = true }
 
 # generating circuit inputs from blockchain
-ethers-providers = { version = "1.0.2", optional = true }  
+ethers-providers = { version = "2.0.2", optional = true }  
 tokio = { version = "1.26", default-features = false, features = ["rt", "rt-multi-thread"], optional = true }
 
 [dev-dependencies]
