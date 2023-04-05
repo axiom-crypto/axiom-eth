@@ -37,39 +37,48 @@ pub mod helpers;
 #[cfg(test)]
 mod tests;
 
+// extra data max byte length is different for different networks
 const MAINNET_EXTRA_DATA_MAX_BYTES: usize = 32;
 const MAINNET_EXTRA_DATA_RLP_MAX_BYTES: usize = MAINNET_EXTRA_DATA_MAX_BYTES + 1;
-pub const MAINNET_BLOCK_HEADER_RLP_MAX_BYTES: usize =
-    1 + 2 + 521 + MAINNET_EXTRA_DATA_RLP_MAX_BYTES;
 const GOERLI_EXTRA_DATA_MAX_BYTES: usize = 97;
 const GOERLI_EXTRA_DATA_RLP_MAX_BYTES: usize = GOERLI_EXTRA_DATA_MAX_BYTES + 1;
-pub const GOERLI_BLOCK_HEADER_RLP_MAX_BYTES: usize = 1 + 2 + 521 + GOERLI_EXTRA_DATA_RLP_MAX_BYTES;
-const BLOCK_HEADER_RLP_MIN_BYTES: usize = 479;
 
-const NUM_BLOCK_HEADER_FIELDS: usize = 16;
+/// This is the minimum possible RLP byte length of a block header *at any block* (including pre EIPs)
+const BLOCK_HEADER_RLP_MIN_BYTES: usize = 479;
+/// The maximum possible RLP byte length of a block header *at any block* (including all EIPs).
+///
+/// Provided that the total length is < 256^2, this will be 1 + 2 + sum(max RLP byte length of each field)
+pub const MAINNET_BLOCK_HEADER_RLP_MAX_BYTES: usize =
+    1 + 2 + (521 + MAINNET_EXTRA_DATA_RLP_MAX_BYTES + 33); // 33 is for withdrawals_root
+pub const GOERLI_BLOCK_HEADER_RLP_MAX_BYTES: usize =
+    1 + 2 + (521 + GOERLI_EXTRA_DATA_RLP_MAX_BYTES + 33);
+
+const NUM_BLOCK_HEADER_FIELDS: usize = 17;
 const MAINNET_HEADER_FIELDS_MAX_BYTES: [usize; NUM_BLOCK_HEADER_FIELDS] =
-    [32, 32, 20, 32, 32, 32, 256, 7, 4, 4, 4, 4, MAINNET_EXTRA_DATA_MAX_BYTES, 32, 8, 6];
+    [32, 32, 20, 32, 32, 32, 256, 7, 4, 4, 4, 4, MAINNET_EXTRA_DATA_MAX_BYTES, 32, 8, 6, 32];
 const GOERLI_HEADER_FIELDS_MAX_BYTES: [usize; NUM_BLOCK_HEADER_FIELDS] =
-    [32, 32, 20, 32, 32, 32, 256, 7, 4, 4, 4, 4, GOERLI_EXTRA_DATA_MAX_BYTES, 32, 8, 6];
+    [32, 32, 20, 32, 32, 32, 256, 7, 4, 4, 4, 4, GOERLI_EXTRA_DATA_MAX_BYTES, 32, 8, 6, 32];
+/// The maximum number of bytes it takes to represent a block number, without any RLP encoding.
 pub const BLOCK_NUMBER_MAX_BYTES: usize = MAINNET_HEADER_FIELDS_MAX_BYTES[8];
 
-// Field        Type        Size (bytes) RLP size (bytes) RLP size (bits)
-// parentHash	256 bits	32	33	264
-// ommersHash	256 bits	32	33	264
-// beneficiary	160 bits	20	21	168
-// stateRoot	256 bits	32	33	264
-// transactionsRoot	256 bits	32	33	264
-// receiptsRoot	256 bits	32	33	264
-// logsBloom	256 bytes	256	259	2072
-// difficulty	big int scalar	variable	8   64
-// number	big int scalar	variable	<= 5    <= 32
-// gasLimit	big int scalar	variable	5	40
-// gasUsed	big int scalar	variable	<= 5	<= 40
-// timestamp	big int scalar	variable	5	40
-// extraData	up to 256 bits	variable, <= 32	<= 33	<= 264
-// mixHash	256 bits	32	33	264
-// nonce	64 bits	8	9	72
-// basefee (post-1559)	big int scalar	variable	<= 6	<= 48
+// Field                        Type            Size (bytes)    RLP size (bytes)    RLP size (bits)
+// parentHash	                256 bits	    32	            33	                264
+// ommersHash	                256 bits	    32	            33	                264
+// beneficiary	                160 bits	    20	            21	                168
+// stateRoot	                256 bits	    32	            33	                264
+// transactionsRoot	            256 bits	    32	            33	                264
+// receiptsRoot	                256 bits	    32	            33	                264
+// logsBloom	                256 bytes	    256	            259	                2072
+// difficulty	                big int scalar	variable	    8                   64
+// number	                    big int scalar	variable	    <= 5                <= 40
+// gasLimit	                    big int scalar	variable	    5	                40
+// gasUsed	                    big int scalar	variable	    <= 5	            <= 40
+// timestamp	                big int scalar	variable	    5	                40
+// extraData	                up to 256 bits	variable, <= 32	<= 33	            <= 264              (Mainnet)
+// mixHash	                    256 bits	    32	            33	                264
+// nonce	                    64 bits	        8	            9	                72
+// basefee (post-1559)	        big int scalar	variable	    <= 6	            <= 48
+// withdrawals_root (post-4895) 256 bits	    32	            33	                264
 #[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub struct EthBlockHeaderTrace<F: Field> {
@@ -80,7 +89,6 @@ pub struct EthBlockHeaderTrace<F: Field> {
     pub state_root: RlpFieldTrace<F>,
     pub transactions_root: RlpFieldTrace<F>,
     pub receipts_root: RlpFieldTrace<F>,
-
     pub logs_bloom: RlpFieldTrace<F>,
     pub difficulty: RlpFieldTrace<F>,
     pub number: RlpFieldTrace<F>,
@@ -91,6 +99,7 @@ pub struct EthBlockHeaderTrace<F: Field> {
     pub mix_hash: RlpFieldTrace<F>,
     pub nonce: RlpFieldTrace<F>,
     pub basefee: RlpFieldTrace<F>, // this is 0 (or undefined) for pre-EIP1559 (London) blocks
+    pub withdrawals_root: RlpFieldTrace<F>, // this is 0 (or undefined) for pre-EIP4895 (Shapella) blocks (before block number 1681338455)
     // the user will have to separately determine whether the block is EIP1559 or not
     pub block_hash: RlcFixedTrace<F>,
 
@@ -123,6 +132,7 @@ impl<F: Field> EthBlockHeaderTraceWitness<F> {
             "mix_hash" | "mixHash" => &self.rlp_witness.field_witness[13],
             "nonce" => &self.rlp_witness.field_witness[14],
             "basefee" => &self.rlp_witness.field_witness[15],
+            "withdrawals_root" => &self.rlp_witness.field_witness[16],
             _ => panic!("Invalid header field"),
         }
     }
@@ -215,7 +225,7 @@ impl<'chip, F: Field> EthBlockHeaderChip<F> for EthChip<'chip, F> {
         let block_header_assigned =
             ctx.assign_witnesses(block_header.iter().map(|byte| F::from(*byte as u64)));
         let rlp_witness =
-            self.rlp().decompose_rlp_array_phase0(ctx, block_header_assigned, max_field_lens, true); // `is_variable_len = true` because RLP can have either 15 or 16 fields, depending on whether block is pre-London or not
+            self.rlp().decompose_rlp_array_phase0(ctx, block_header_assigned, max_field_lens, true); // `is_variable_len = true` because RLP can have between 15 to 17 fields, depending on which EIPs are active at that block
 
         let block_hash_query_idx = keccak.keccak_var_len(
             ctx,
@@ -238,7 +248,7 @@ impl<'chip, F: Field> EthBlockHeaderChip<F> for EthChip<'chip, F> {
         let block_hash = self.keccak_var_len_rlcs()[witness.block_hash_query_idx].1;
 
         // Base fee per unit gas only after London
-        let [parent_hash, ommers_hash, beneficiary, state_root, transactions_root, receipts_root, logs_bloom, difficulty, number, gas_limit, gas_used, timestamp, extra_data, mix_hash, nonce, basefee]: [RlpFieldTrace<F>; 16] =
+        let [parent_hash, ommers_hash, beneficiary, state_root, transactions_root, receipts_root, logs_bloom, difficulty, number, gas_limit, gas_used, timestamp, extra_data, mix_hash, nonce, basefee, withdrawals_root]: [RlpFieldTrace<F>; NUM_BLOCK_HEADER_FIELDS] =
             trace.field_trace.try_into().unwrap();
 
         EthBlockHeaderTrace {
@@ -258,6 +268,7 @@ impl<'chip, F: Field> EthBlockHeaderChip<F> for EthChip<'chip, F> {
             mix_hash,
             nonce,
             basefee,
+            withdrawals_root,
             block_hash,
             len_trace: trace.len_trace,
         }
