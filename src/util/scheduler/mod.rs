@@ -7,7 +7,9 @@ use halo2_base::{
     },
     utils::fs::{gen_srs, read_params},
 };
-use snark_verifier_sdk::{halo2::read_snark, Snark};
+#[cfg(feature = "halo2-axiom")]
+use snark_verifier_sdk::halo2::read_snark;
+use snark_verifier_sdk::Snark;
 use std::{
     collections::HashMap,
     env::var,

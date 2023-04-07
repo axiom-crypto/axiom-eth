@@ -428,7 +428,16 @@ impl<F: Field> KeccakChip<F> {
                 .enumerate()
                 .map(|(i, acell)| {
                     let value = value_to_option(acell.value())
-                        .map(|v| **v)
+                        .map(|v| {
+                            #[cfg(feature = "halo2-axiom")]
+                            {
+                                **v
+                            }
+                            #[cfg(not(feature = "halo2-axiom"))]
+                            {
+                                Assigned::Trivial(*v)
+                            }
+                        })
                         .unwrap_or_else(|| Assigned::Trivial(F::zero())); // for keygen
                     let aval = AssignedValue {
                         value,
@@ -713,12 +722,7 @@ where
         config.keccak.load_aux_tables(layouter).expect("load keccak lookup tables");
 
         let mut first_pass = SKIP_FIRST_PASS;
-        #[cfg(feature = "halo2-axiom")]
         let witness_gen_only = self.builder.borrow().witness_gen_only();
-        // in non halo2-axiom, the prover calls `synthesize` twice: first just to get FirstPhase advice columns, commit, and then generate challenge value; then the second time to actually compute SecondPhase advice
-        // our "Prover" implementation is heavily optimized for the Axiom version, which only calls `synthesize` once
-        #[cfg(not(feature = "halo2-axiom"))]
-        let witness_gen_only = false;
 
         let mut gamma = None;
         if !witness_gen_only {
@@ -795,10 +799,12 @@ where
                             self.keccak.borrow().assign_phase0(&mut region, &config.keccak);
                         // == END OF FIRST PHASE ==
                         // this is a special backend API function (in halo2-axiom only) that computes the KZG commitments for all columns in FirstPhase and performs Fiat-Shamir on them to return the challenge value
+                        #[cfg(feature = "halo2-axiom")]
                         region.next_phase();
                         // == BEGIN SECOND PHASE ==
                         // get challenge value
                         let mut gamma = None;
+                        #[cfg(feature = "halo2-axiom")]
                         region.get_challenge(config.rlp.rlc.gamma).map(|gamma_| {
                             log::info!("gamma: {gamma_:?}");
                             gamma = Some(gamma_);

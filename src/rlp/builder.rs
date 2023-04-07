@@ -48,7 +48,13 @@ pub struct RlcThreadBuilder<F: ScalarField> {
 
 impl<F: ScalarField> RlcThreadBuilder<F> {
     // re-expose some methods from [`GateThreadBuilder`] for convenience
-    pub fn new(witness_gen_only: bool) -> Self {
+    pub fn new(mut witness_gen_only: bool) -> Self {
+        // in non halo2-axiom, the prover calls `synthesize` twice: first just to get FirstPhase advice columns, commit, and then generate challenge value; then the second time to actually compute SecondPhase advice
+        // our "Prover" implementation (`witness_gen_only = true`) is heavily optimized for the Axiom version, which only calls `synthesize` once
+        #[cfg(not(feature = "halo2-axiom"))]
+        {
+            witness_gen_only = false;
+        }
         Self { threads_rlc: Vec::new(), gate_builder: GateThreadBuilder::new(witness_gen_only) }
     }
 
@@ -160,7 +166,7 @@ impl<F: ScalarField> RlcThreadBuilder<F> {
             mut break_points,
         }: KeygenAssignments<F>,
     ) -> KeygenAssignments<F> {
-        assert!(!self.witness_gen_only());
+        // assert!(!self.witness_gen_only());
         if rlc.basic_gates.is_empty() {
             return KeygenAssignments { assigned_advices, assigned_constants, break_points };
         }

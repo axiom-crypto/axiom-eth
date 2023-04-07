@@ -405,9 +405,11 @@ where
                             break_points,
                         );
                         // this is a special backend API function (in halo2-axiom only) that computes the KZG commitments for all columns in FirstPhase and performs Fiat-Shamir on them to return the challenge value
+                        #[cfg(feature = "halo2-axiom")]
                         region.next_phase();
                         // get challenge value
                         let mut gamma = None;
+                        #[cfg(feature = "halo2-axiom")]
                         region.get_challenge(rlc.gamma).map(|gamma_| {
                             log::info!("gamma: {gamma_:?}");
                             gamma = Some(gamma_);
