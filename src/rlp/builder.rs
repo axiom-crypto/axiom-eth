@@ -48,6 +48,7 @@ pub struct RlcThreadBuilder<F: ScalarField> {
 
 impl<F: ScalarField> RlcThreadBuilder<F> {
     // re-expose some methods from [`GateThreadBuilder`] for convenience
+    #[allow(unused_mut)]
     pub fn new(mut witness_gen_only: bool) -> Self {
         // in non halo2-axiom, the prover calls `synthesize` twice: first just to get FirstPhase advice columns, commit, and then generate challenge value; then the second time to actually compute SecondPhase advice
         // our "Prover" implementation (`witness_gen_only = true`) is heavily optimized for the Axiom version, which only calls `synthesize` once

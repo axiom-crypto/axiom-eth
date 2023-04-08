@@ -30,8 +30,7 @@ use test_log::test;
 
 fn get_test_circuit<F: Field>(network: Network, num_slots: usize) -> EthBlockStorageCircuit<F> {
     assert!(num_slots <= 10);
-    let infura_id =
-        std::fs::read_to_string("scripts/input_gen/INFURA_ID").expect("Infura ID not found");
+    let infura_id = var("INFURA_ID").expect("INFURA_ID environmental variable not set");
     let provider_url = match network {
         Network::Mainnet => format!("{MAINNET_PROVIDER_URL}{infura_id}"),
         Network::Goerli => format!("{GOERLI_PROVIDER_URL}{infura_id}"),
@@ -64,6 +63,7 @@ fn get_test_circuit<F: Field>(network: Network, num_slots: usize) -> EthBlockSto
         .collect::<Vec<_>>();
     slots.extend(slot_nums.iter().map(|x| H256::from_low_u64_be(*x)));
     // let slots: Vec<_> = (0..num_slots).map(|x| H256::from_low_u64_be(x as u64)).collect();
+    slots.truncate(num_slots);
     EthBlockStorageCircuit::from_provider(&provider, block_number, addr, slots, 8, 8, network)
 }
 
