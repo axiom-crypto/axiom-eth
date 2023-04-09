@@ -176,7 +176,7 @@ impl Halo2ConfigPinning for AggregationConfigPinning {
     }
 }
 
-pub(crate) type AssignedH256<F> = [AssignedValue<F>; 2]; // H256 as hi-lo (u128, u128)
+pub type AssignedH256<F> = [AssignedValue<F>; 2]; // H256 as hi-lo (u128, u128)
 
 pub fn get_merkle_mountain_range(leaves: &[H256], max_depth: usize) -> Vec<H256> {
     let num_leaves = leaves.len();
