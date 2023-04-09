@@ -78,9 +78,9 @@ pub struct EthBlockAccountStorageTrace<F: Field> {
 
 #[derive(Clone, Debug)]
 pub struct EthBlockAccountStorageTraceWitness<F: Field> {
-    block_witness: EthBlockHeaderTraceWitness<F>,
-    acct_witness: EthAccountTraceWitness<F>,
-    storage_witness: Vec<EthStorageTraceWitness<F>>,
+    pub block_witness: EthBlockHeaderTraceWitness<F>,
+    pub acct_witness: EthAccountTraceWitness<F>,
+    pub storage_witness: Vec<EthStorageTraceWitness<F>>,
 }
 
 #[derive(Clone, Debug)]
