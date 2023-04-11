@@ -95,8 +95,11 @@ impl Halo2ConfigPinning for EthConfigPinning {
     type BreakPoints = RlcThreadBreakPoints;
 
     fn from_path<P: AsRef<Path>>(path: P) -> Self {
-        let pinning: Self =
-            serde_json::from_reader(File::open(&path).expect("path does not exist")).unwrap();
+        let pinning: Self = serde_json::from_reader(
+            File::open(&path)
+                .unwrap_or_else(|e| panic!("{:?} does not exist: {e:?}", path.as_ref())),
+        )
+        .unwrap();
         pinning.set_var();
         pinning
     }
@@ -133,8 +136,11 @@ impl Halo2ConfigPinning for AggregationConfigPinning {
     type BreakPoints = MultiPhaseThreadBreakPoints;
 
     fn from_path<P: AsRef<Path>>(path: P) -> Self {
-        let pinning: Self =
-            serde_json::from_reader(File::open(&path).expect("path does not exist")).unwrap();
+        let pinning: Self = serde_json::from_reader(
+            File::open(&path)
+                .unwrap_or_else(|e| panic!("{:?} does not exist: {e:?}", path.as_ref())),
+        )
+        .unwrap();
         pinning.set_var();
         pinning
     }
