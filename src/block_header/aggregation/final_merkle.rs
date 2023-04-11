@@ -1,3 +1,5 @@
+#[cfg(not(feature = "production"))]
+use crate::util::EthConfigParams;
 use crate::{
     block_header::aggregation::join_previous_instances,
     keccak::{FixedLenRLCs, FnSynthesize, KeccakChip, VarLenRLCs},
@@ -5,10 +7,7 @@ use crate::{
         builder::{RlcThreadBreakPoints, RlcThreadBuilder},
         RlpChip,
     },
-    util::{
-        bytes_be_to_u128, get_merkle_mountain_range, num_to_bytes_be, EthConfigParams,
-        NUM_BYTES_IN_U128,
-    },
+    util::{bytes_be_to_u128, get_merkle_mountain_range, num_to_bytes_be, NUM_BYTES_IN_U128},
     EthCircuitBuilder,
 };
 #[cfg(feature = "display")]
@@ -22,7 +21,9 @@ use halo2_base::{
     QuantumCell::Constant,
 };
 use snark_verifier_sdk::{halo2::aggregation::AggregationCircuit, Snark, SHPLONK};
-use std::{cell::RefCell, env::var};
+use std::cell::RefCell;
+#[cfg(not(feature = "production"))]
+use std::env::var;
 
 use super::EthBlockHeaderChainAggregationCircuit;
 
@@ -134,7 +135,7 @@ impl EthBlockHeaderChainFinalAggregationCircuit {
         assigned_instances.extend(new_mmr);
         assigned_instances.extend_from_slice(&mmr_instances[2 * num_leaves..]);
 
-        let prover = builder.witness_gen_only();
+        let _prover = builder.witness_gen_only();
         let circuit = EthCircuitBuilder::new(
             assigned_instances,
             builder,
@@ -148,7 +149,7 @@ impl EthBlockHeaderChainFinalAggregationCircuit {
         #[cfg(feature = "display")]
         end_timer!(timer);
         #[cfg(not(feature = "production"))]
-        if !prover {
+        if !_prover {
             let config_params: EthConfigParams = serde_json::from_str(
                 var("ETH_CONFIG_PARAMS").expect("ETH_CONFIG_PARAMS is not set").as_str(),
             )
