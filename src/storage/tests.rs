@@ -1,4 +1,5 @@
 use super::*;
+use crate::util::scheduler::evm_wrapper::ForEvm;
 use crate::{
     halo2_proofs::{
         dev::MockProver,
@@ -15,6 +16,8 @@ use crate::{
         },
     },
     providers::{GOERLI_PROVIDER_URL, MAINNET_PROVIDER_URL},
+    storage::helpers::{StorageScheduler, StorageTask},
+    util::scheduler::Scheduler,
 };
 use ark_std::{end_timer, start_timer};
 use ethers_core::utils::keccak256;
@@ -25,10 +28,11 @@ use std::{
     env::set_var,
     fs::File,
     io::{BufReader, Write},
+    path::PathBuf,
 };
 use test_log::test;
 
-fn get_test_circuit<F: Field>(network: Network, num_slots: usize) -> EthBlockStorageCircuit<F> {
+fn get_test_circuit(network: Network, num_slots: usize) -> EthBlockStorageCircuit {
     assert!(num_slots <= 10);
     let infura_id = var("INFURA_ID").expect("INFURA_ID environmental variable not set");
     let provider_url = match network {
@@ -73,10 +77,30 @@ pub fn test_mock_single_eip1186() -> Result<(), Box<dyn std::error::Error>> {
     set_var("ETH_CONFIG_PARAMS", serde_json::to_string(&params).unwrap());
     let k = params.degree;
 
-    let input = get_test_circuit::<Fr>(Network::Mainnet, 10);
-    let circuit = input.create_circuit(RlcThreadBuilder::mock(), None);
+    let input = get_test_circuit(Network::Mainnet, 10);
+    let circuit = input.create_circuit::<Fr>(RlcThreadBuilder::mock(), None);
     MockProver::run(k, &circuit, vec![circuit.instance()]).unwrap().assert_satisfied();
     Ok(())
+}
+
+#[test]
+pub fn test_storage_scheduler() {
+    let network = Network::Mainnet;
+    let scheduler = StorageScheduler::new(
+        network,
+        false,
+        false,
+        PathBuf::from("configs/storage"),
+        PathBuf::from("data/storage"),
+    );
+    let slots = (0..10).map(|x| H256::from_low_u64_be(x as u64)).collect::<Vec<_>>();
+    let task = StorageTask::new(
+        16356350,
+        "0xb47e3cd837dDF8e4c57F05d70Ab865de6e193BBB".parse::<Address>().unwrap(),
+        slots,
+        network,
+    );
+    scheduler.get_calldata(ForEvm(task), true);
 }
 
 #[derive(Serialize, Deserialize)]
@@ -98,7 +122,7 @@ pub fn bench_eip1186() -> Result<(), Box<dyn std::error::Error>> {
         );
 
         set_var("ETH_CONFIG_PARAMS", serde_json::to_string(&bench_params.0).unwrap());
-        let input = get_test_circuit::<Fr>(Network::Mainnet, bench_params.1);
+        let input = get_test_circuit(Network::Mainnet, bench_params.1);
         let instance = input.instance();
         let circuit = input.clone().create_circuit(RlcThreadBuilder::keygen(), None);
 
@@ -200,13 +224,14 @@ pub fn bench_evm_eip1186() -> Result<(), Box<dyn std::error::Error>> {
 
         let (storage_snark, storage_proof_time) = {
             let k = bench_params.0.degree;
-            let input = get_test_circuit::<Fr>(Network::Mainnet, bench_params.1);
+            let input = get_test_circuit(Network::Mainnet, bench_params.1);
             let circuit = input.clone().create_circuit(RlcThreadBuilder::keygen(), None);
             let params = gen_srs(k);
             let pk = gen_pk(&params, &circuit, None);
             let break_points = circuit.circuit.break_points.take();
             let storage_proof_time = start_timer!(|| "Storage Proof SHPLONK");
-            let circuit = input.create_circuit(RlcThreadBuilder::prover(), Some(break_points));
+            let circuit =
+                input.create_circuit::<Fr>(RlcThreadBuilder::prover(), Some(break_points));
             let snark = gen_snark_shplonk(&params, &pk, circuit, None::<&str>);
             end_timer!(storage_proof_time);
             (snark, storage_proof_time)

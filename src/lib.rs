@@ -1,6 +1,7 @@
 #![feature(int_log)]
 #![feature(trait_alias)]
 #![feature(return_position_impl_trait_in_trait)]
+#![allow(incomplete_features)]
 
 pub mod block_header;
 pub mod keccak;
@@ -28,6 +29,7 @@ use halo2_base::{
 };
 use keccak::{FnSynthesize, KeccakCircuitBuilder, SharedKeccakChip};
 pub use mpt::EthChip;
+use serde::{Deserialize, Serialize};
 use std::env::{set_var, var};
 use util::EthConfigParams;
 pub use zkevm_keccak::util::eth_types::Field;
@@ -35,7 +37,7 @@ use zkevm_keccak::KeccakConfig;
 
 pub(crate) const ETH_LOOKUP_BITS: usize = 8; // always want 8 to range check bytes
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
 pub enum Network {
     Mainnet,

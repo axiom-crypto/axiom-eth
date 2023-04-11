@@ -22,6 +22,8 @@ pub enum Wrapper<T> {
     Initial(T),
     ForEvm(T),
 }
+// commonly used
+pub use Wrapper::ForEvm;
 
 impl<T: Task> Task for Wrapper<T> {
     type CircuitType = Wrapper<T::CircuitType>;
@@ -47,7 +49,7 @@ impl<T: Task> Task for Wrapper<T> {
     fn dependencies(&self) -> Vec<Self> {
         match self {
             Wrapper::Initial(_) => vec![],
-            Wrapper::ForEvm(t) => vec![Wrapper::Initial(*t)],
+            Wrapper::ForEvm(t) => vec![Wrapper::Initial(t.clone())],
         }
     }
 }

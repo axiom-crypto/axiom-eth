@@ -1,6 +1,8 @@
-On a fresh machine:
+# Binaries
 
-```
+## Setup
+
+```bash
 cd axiom-eth
 # symlink existing params folder if you have one, otherwise a new one will automatically be created
 mkdir data
@@ -11,7 +13,7 @@ ssh-add
 cargo update
 ```
 
-Copy [`.env.example`] to `.env` and add your INFURA ID. Then run
+Copy [`.env.example`](../../.env.example) to `.env` and add your INFURA ID. Then run
 
 ```bash
 source .env
@@ -44,3 +46,13 @@ For full commandline usage, type
 ```
 cargo run --bin header_chain --release -- --help
 ```
+
+## Storage Proof
+
+To prove a pre-specified number of storage slots for a given account at a given block number, fill in [`task.t.json`](../../data/storage/task.t.json) with the required information and run
+
+```bash
+cargo run --bin storage_proof --release -- --path data/storage/task.t.json --create-contract
+```
+
+Currently we only provide [configuration files](../../configs/storage/) for `10` storage slots.

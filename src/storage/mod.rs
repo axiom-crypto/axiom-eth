@@ -27,8 +27,9 @@ use halo2_base::{
 };
 use itertools::Itertools;
 use rayon::prelude::*;
-use std::{cell::RefCell, env::var, marker::PhantomData};
+use std::{cell::RefCell, env::var};
 
+pub mod helpers;
 #[cfg(all(test, feature = "providers"))]
 mod tests;
 
@@ -513,13 +514,12 @@ pub struct EthBlockStorageInputAssigned<F: Field> {
 }
 
 #[derive(Clone, Debug)]
-pub struct EthBlockStorageCircuit<F> {
+pub struct EthBlockStorageCircuit {
     pub inputs: EthBlockStorageInput, // public and private inputs
     pub network: Network,
-    _marker: PhantomData<F>,
 }
 
-impl<F: Field> EthBlockStorageCircuit<F> {
+impl EthBlockStorageCircuit {
     #[cfg(feature = "providers")]
     pub fn from_provider(
         provider: &Provider<Http>,
@@ -540,13 +540,13 @@ impl<F: Field> EthBlockStorageCircuit<F> {
             acct_pf_max_depth,
             storage_pf_max_depth,
         );
-        Self { inputs, network, _marker: PhantomData }
+        Self { inputs, network }
     }
 
     // MAYBE UNUSED
     // blockHash, blockNumber, address, (slot, value)s
     // with H256 encoded as hi-lo (u128, u128)
-    pub fn instance(&self) -> Vec<F> {
+    pub fn instance<F: Field>(&self) -> Vec<F> {
         let EthBlockStorageInput { block_number, block_hash, storage, .. } = &self.inputs;
         let EthStorageInput { addr, storage_pfs, .. } = storage;
         let mut instance = Vec::with_capacity(4 + 4 * storage_pfs.len());
@@ -560,7 +560,7 @@ impl<F: Field> EthBlockStorageCircuit<F> {
         instance
     }
 
-    pub fn create_circuit(
+    pub fn create_circuit<F: Field>(
         self,
         mut builder: RlcThreadBuilder<F>,
         break_points: Option<RlcThreadBreakPoints>,
@@ -618,6 +618,7 @@ impl<F: Field> EthBlockStorageCircuit<F> {
                 let _trace = chip.parse_eip1186_proofs_from_block_phase1(builder, witness);
             },
         );
+        #[cfg(not(feature = "production"))]
         if !prover {
             let config_params: EthConfigParams = serde_json::from_str(
                 var("ETH_CONFIG_PARAMS").expect("ETH_CONFIG_PARAMS is not set").as_str(),

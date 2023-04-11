@@ -34,6 +34,8 @@ struct Cli {
     create_contract: bool,
     #[arg(long = "readonly")]
     readonly: bool,
+    #[arg(long = "srs-readonly")]
+    srs_readonly: bool,
 }
 
 #[derive(Clone, Debug, ValueEnum)]
@@ -63,13 +65,13 @@ fn main() {
     let args = Cli::parse();
     let initial_depth = args.initial_depth.unwrap_or(args.max_depth);
     #[cfg(feature = "production")]
-    let production = true;
+    let srs_readonly = true;
     #[cfg(not(feature = "production"))]
-    let production = false;
+    let srs_readonly = args.srs_readonly;
 
     let scheduler = BlockHeaderScheduler::new(
         args.network,
-        production,
+        srs_readonly,
         args.readonly,
         PathBuf::from("configs/headers"),
         PathBuf::from("data/headers"),
