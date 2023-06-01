@@ -1,4 +1,5 @@
-use ethers_providers::{Http, Provider};
+use ethers_core::types::U256;
+use ethers_providers::{Http, Middleware, Provider};
 use halo2_base::{
     halo2_proofs::{
         halo2curves::bn256::{Bn256, G1Affine},
@@ -88,13 +89,20 @@ impl<T: Task> EthScheduler<T> {
         config_dir: PathBuf,
         data_dir: PathBuf,
     ) -> Self {
-        let infura_id = var("INFURA_ID").expect("Infura ID not found");
-        let provider_url = match network {
-            Network::Mainnet => MAINNET_PROVIDER_URL,
-            Network::Goerli => GOERLI_PROVIDER_URL,
-        };
-        let provider = Provider::<Http>::try_from(format!("{provider_url}{infura_id}").as_str())
-            .expect("could not instantiate HTTP Provider");
+        let provider_url = var("JSON_RPC_URL").expect("JSON_RPC_URL not found");
+        let provider =
+            Provider::<Http>::try_from(provider_url).expect("could not instantiate HTTP Provider");
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            let chain_id = provider.get_chainid().await.unwrap();
+            match network {
+                Network::Mainnet => {
+                    assert_eq!(chain_id, U256::from(1));
+                }
+                Network::Goerli => {
+                    assert_eq!(chain_id, U256::from(5));
+                }
+            }
+        });
         fs::create_dir_all(&config_dir).expect("could not create config directory");
         fs::create_dir_all(&data_dir).expect("could not create data directory");
         srs_read_only = srs_read_only || read_only;

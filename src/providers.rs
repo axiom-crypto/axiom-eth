@@ -282,4 +282,15 @@ mod tests {
         let block = rt.block_on(provider.get_block(17034973)).unwrap().unwrap();
         get_block_rlp(&block);
     }
+
+    #[test]
+    fn test_provider() {
+        let provider_uri = var("JSON_RPC_URL").expect("JSON_RPC_URL not found");
+        let provider =
+            Provider::<Http>::try_from(provider_uri).expect("could not instantiate HTTP Provider");
+
+        let rt = Runtime::new().unwrap();
+        let block = rt.block_on(provider.get_block(17034973)).unwrap().unwrap();
+        get_block_rlp(&block);
+    }
 }
