@@ -150,8 +150,7 @@ pub fn get_acct_rlp(pf: &EIP1186ProofResponse) -> Vec<u8> {
 }
 
 pub fn get_block_rlp(block: &Block<H256>) -> Vec<u8> {
-    let withdrawals_root: Option<H256> =
-        block.other.get_deserialized("withdrawalsRoot").and_then(|x| x.ok());
+    let withdrawals_root: Option<H256> = block.withdrawals_root;
     let base_fee = block.base_fee_per_gas;
     let rlp_len = 15 + usize::from(base_fee.is_some()) + usize::from(withdrawals_root.is_some());
     let mut rlp = RlpStream::new_list(rlp_len);
@@ -172,7 +171,9 @@ pub fn get_block_rlp(block: &Block<H256>) -> Vec<u8> {
     rlp.append(&block.nonce.unwrap());
     base_fee.map(|base_fee| rlp.append(&base_fee));
     withdrawals_root.map(|withdrawals_root| rlp.append(&withdrawals_root));
-    rlp.out().into()
+    let encoding = rlp.out().into();
+    assert_eq!(keccak256(&encoding), block.hash.unwrap().0);
+    encoding
 }
 
 serde_with::serde_conv!(
@@ -277,6 +278,17 @@ mod tests {
             format!("https://mainnet.infura.io/v3/{infura_id}").as_str(),
         )
         .expect("could not instantiate HTTP Provider");
+
+        let rt = Runtime::new().unwrap();
+        let block = rt.block_on(provider.get_block(17034973)).unwrap().unwrap();
+        get_block_rlp(&block);
+    }
+
+    #[test]
+    fn test_provider() {
+        let provider_uri = var("JSON_RPC_URL").expect("JSON_RPC_URL not found");
+        let provider =
+            Provider::<Http>::try_from(provider_uri).expect("could not instantiate HTTP Provider");
 
         let rt = Runtime::new().unwrap();
         let block = rt.block_on(provider.get_block(17034973)).unwrap().unwrap();
