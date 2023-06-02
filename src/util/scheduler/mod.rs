@@ -23,7 +23,6 @@ use std::{
 };
 
 use crate::{
-    providers::{GOERLI_PROVIDER_URL, MAINNET_PROVIDER_URL},
     Network,
 };
 

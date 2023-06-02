@@ -57,8 +57,8 @@ type KeccakAssignedValue<'v, F> = AssignedCell<F, F>;
 #[cfg(test)]
 mod tests;
 
-pub(crate) type FixedLenRLCs<F> = Vec<(RlcFixedTrace<F>, RlcFixedTrace<F>)>;
-pub(crate) type VarLenRLCs<F> = Vec<(RlcTrace<F>, RlcFixedTrace<F>)>;
+pub type FixedLenRLCs<F> = Vec<(RlcFixedTrace<F>, RlcFixedTrace<F>)>;
+pub type VarLenRLCs<F> = Vec<(RlcTrace<F>, RlcFixedTrace<F>)>;
 
 pub(crate) const KECCAK_CONTEXT_ID: usize = usize::MAX;
 
