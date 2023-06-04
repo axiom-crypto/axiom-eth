@@ -37,6 +37,7 @@ use std::{
     io::{BufRead, BufReader, Write},
 };
 use zkevm_keccak::keccak_packed_multi::get_keccak_capacity;
+use ethers_core::utils::keccak256;
 
 fn test_keccak_circuit<F: Field>(
     k: u32,
@@ -102,6 +103,39 @@ pub fn test_keccak() {
     MockProver::<Fr>::run(k, &circuit, vec![]).unwrap().assert_satisfied();
     println!("Var len keccak passed");
 }
+
+#[test]
+pub fn test_fix_len_keccak_empty_string() {
+    let _ = env_logger::builder().is_test(true).try_init();
+    let input_bytes = "".as_bytes();
+    let mut builder = RlcThreadBuilder::mock();
+    let range = RangeChip::default(8);
+    let keccak = SharedKeccakChip::default();
+    let ctx = builder.gate_builder.main(0);
+    let bytes_assigned =
+        ctx.assign_witnesses(input_bytes.iter().map(|byte| Fr::from(*byte as u64)));
+    let hash_idx = keccak.borrow_mut().keccak_fixed_len(ctx, &range.gate, bytes_assigned, Some(input_bytes.to_vec()));
+    let out_bytes32 = keccak.borrow_mut().fixed_len_queries[hash_idx].output_assigned.clone();
+    let output = out_bytes32.into_iter().map(|x| x.value().get_lower_128() as u8).collect_vec();
+    assert_eq!(output, keccak256(input_bytes));
+} 
+
+#[test]
+pub fn test_var_len_keccak_empty_string() {
+    let _ = env_logger::builder().is_test(true).try_init();
+    let input_bytes = "".as_bytes();
+    let mut builder = RlcThreadBuilder::mock();
+    let range = RangeChip::default(8);
+    let keccak = SharedKeccakChip::default();
+    let ctx = builder.gate_builder.main(0);
+    let bytes_assigned =
+        ctx.assign_witnesses(input_bytes.iter().map(|byte| Fr::from(*byte as u64)));
+    let len = ctx.load_witness(Fr::from(0 as u64));
+    let hash_idx = keccak.borrow_mut().keccak_var_len(ctx, &range, bytes_assigned, Some(input_bytes.to_vec()), len, 0);
+    let out_bytes32 = keccak.borrow_mut().var_len_queries[hash_idx].output_assigned.clone();
+    let output = out_bytes32.into_iter().map(|x| x.value().get_lower_128() as u8).collect_vec();
+    assert_eq!(output, keccak256(input_bytes));
+} 
 
 #[derive(Serialize, Deserialize)]
 pub struct KeccakBenchConfig {
