@@ -118,6 +118,7 @@ pub fn test_fix_len_keccak_empty_string() {
     let hash_idx = keccak.borrow_mut().keccak_fixed_len(ctx, &range.gate, bytes_assigned, Some(input_bytes.to_vec()));
     let out_bytes32 = keccak.borrow_mut().fixed_len_queries[hash_idx].output_assigned.clone();
     let output = out_bytes32.into_iter().map(|x| x.value().get_lower_128() as u8).collect_vec();
+
     let circuit = KeccakCircuitBuilder::new(
         builder,
         keccak,
@@ -125,7 +126,6 @@ pub fn test_fix_len_keccak_empty_string() {
         None,
         |_: &mut RlcThreadBuilder<Fr>, _: RlpChip<Fr>, _: (FixedLenRLCs<Fr>, VarLenRLCs<Fr>)| {},
     );
-
     let unusable_rows =
             var("UNUSABLE_ROWS").unwrap_or_else(|_| "109".to_string()).parse().unwrap();
     circuit.config(k as usize, Some(unusable_rows));
@@ -148,7 +148,6 @@ pub fn test_var_len_keccak_empty_string() {
     let hash_idx = keccak.borrow_mut().keccak_var_len(ctx, &range, bytes_assigned, Some(input_bytes.to_vec()), len, 0);
     let out_bytes32 = keccak.borrow_mut().var_len_queries[hash_idx].output_assigned.clone();
     let output = out_bytes32.into_iter().map(|x| x.value().get_lower_128() as u8).collect_vec();
-    // verify keccak256 hash
     assert_eq!(output, keccak256(input_bytes));
     let circuit = KeccakCircuitBuilder::new(
         builder,
