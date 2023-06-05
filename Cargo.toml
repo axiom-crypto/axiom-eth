@@ -49,11 +49,18 @@ snark-verifier-sdk = { git = "https://github.com/axiom-crypto/snark-verifier.git
 ethers-providers = { version = "2.0.2", optional = true }  
 tokio = { version = "1.26", default-features = false, features = ["rt", "rt-multi-thread"], optional = true }
 
+
 [dev-dependencies]
 hex = "0.4.3"
 ark-std = { version = "0.3.0", features = ["print-trace"] }
 log = "0.4"
 test-log = "0.2.11"
+pprof = { version = "0.11", features = ["criterion", "flamegraph"] }
+criterion = "0.4"
+criterion-macro = "0.4"
+rayon = "1.6.1"
+test-case = "3.1.0"
+proptest = "1.1.0"
 
 [features]
 default = ["halo2-axiom", "jemallocator", "display", "aggregation", "clap", "evm"]
@@ -68,3 +75,4 @@ production = []
 halo2-pse = ["zkevm-keccak/halo2-pse", "snark-verifier-sdk?/halo2-pse"]
 halo2-axiom = ["zkevm-keccak/halo2-axiom", "snark-verifier-sdk?/halo2-axiom"]
 jemallocator = ["halo2-base/jemallocator"]
+

@@ -1,3 +1,5 @@
+mod mpt_tests;
+
 use super::*;
 use crate::{
     halo2_proofs::{
@@ -136,7 +138,7 @@ pub fn test_mock_mpt_inclusion_fixed() {
 pub fn test_mpt_noninclusion_branch_fixed() {
     let params = EthConfigParams::from_path("configs/tests/mpt.json");
     let k = params.degree;
-    let input = mpt_input("scripts/input_gen/noninclusion_branch_pf.json", true, 5);
+    let input = mpt_input("scripts/input_gen/pos_data/noninclusion_branch_pf.json", true, 5);
     let circuit = test_mpt_circuit(k, RlcThreadBuilder::<Fr>::mock(), input);
     MockProver::run(k, &circuit, vec![]).unwrap().assert_satisfied();
 }

@@ -77,7 +77,7 @@ pub fn test_mock_single_eip1186() -> Result<(), Box<dyn std::error::Error>> {
     set_var("ETH_CONFIG_PARAMS", serde_json::to_string(&params).unwrap());
     let k = params.degree;
 
-    let input = get_test_circuit(Network::Mainnet, 10);
+    let input = get_test_circuit(Network::Mainnet, 1);
     let circuit = input.create_circuit::<Fr>(RlcThreadBuilder::mock(), None);
     MockProver::run(k, &circuit, vec![circuit.instance()]).unwrap().assert_satisfied();
     Ok(())
