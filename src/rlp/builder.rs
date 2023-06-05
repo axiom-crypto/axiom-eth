@@ -355,3 +355,284 @@ pub fn assign_prover_phase1<F: ScalarField>(
     let threads_rlc = mem::take(&mut builder.threads_rlc);
     assign_threads_rlc(threads_rlc, rlc_config, region, break_points_rlc);
 }
+
+pub use circuit_builder::*;
+mod circuit_builder {
+    use std::cell::RefCell;
+
+    use crate::util::EthConfigParams;
+
+    use crate::rlp::{
+        builder::*,
+        rlc::{RlcChip, RlcConfig},
+        RlcGateConfig, RlpConfig,
+    };
+    use halo2_base::{
+        gates::flex_gate::{FlexGateConfig, GateStrategy},
+        halo2_proofs::{
+            circuit::{Layouter, SimpleFloorPlanner},
+            plonk::{Advice, Circuit, Column, ConstraintSystem, Error, Selector},
+        },
+        utils::ScalarField,
+        SKIP_FIRST_PASS,
+    };
+    // The circuits below are mostly used for testing.
+    // Unfortunately for `KeccakCircuitBuilder` we still need to do some more custom stuff beyond what's in this circuit
+    // due to the intricacies of 2-phase challenge API.
+
+    /// A wrapper struct to auto-build a circuit from a `RlcThreadBuilder`.
+    ///
+    /// This struct is trickier because it uses the Multi-phase Challenge API. The intended use is as follows:
+    /// * The user can run phase 0 calculations on `builder` outside of the circuit (as usual) and supply the builder to construct the circuit.
+    /// * The user also specifies a closure `synthesize_phase1(builder, challenge)` that specifies all calculations that should be done in phase 1.
+    /// The builder will then handle the process of assigning all advice cells in phase 1, squeezing a challenge value `challenge` from the backend API, and then using that value to do all phase 1 witness generation.
+    pub struct RlcCircuitBuilder<F: ScalarField, FnPhase1>
+    where
+        FnPhase1: FnSynthesize<F>,
+    {
+        pub builder: RefCell<RlcThreadBuilder<F>>,
+        pub break_points: RefCell<RlcThreadBreakPoints>, // `RefCell` allows the circuit to record break points in a keygen call of `synthesize` for use in later witness gen
+        // we guarantee that `synthesize_phase1` is called *exactly once* during the proving stage, but since `Circuit::synthesize` takes `&self`, and `assign_region` takes a `Fn` instead of `FnOnce`, we need some extra engineering:
+        pub synthesize_phase1: RefCell<Option<FnPhase1>>,
+    }
+
+    impl<F: ScalarField, FnPhase1> RlcCircuitBuilder<F, FnPhase1>
+    where
+        FnPhase1: FnSynthesize<F>,
+    {
+        pub fn new(
+            builder: RlcThreadBuilder<F>,
+            break_points: Option<RlcThreadBreakPoints>,
+            synthesize_phase1: FnPhase1,
+        ) -> Self {
+            Self {
+                builder: RefCell::new(builder),
+                break_points: RefCell::new(break_points.unwrap_or_default()),
+                synthesize_phase1: RefCell::new(Some(synthesize_phase1)),
+            }
+        }
+
+        pub fn config(&self, k: usize, minimum_rows: Option<usize>) -> EthConfigParams {
+            // clone everything so we don't alter the circuit in any way for later calls
+            let mut builder = self.builder.borrow().clone();
+            let f =
+                self.synthesize_phase1.borrow().clone().expect("synthesize_phase1 should exist");
+            f(&mut builder, &RlcChip::new(F::zero()));
+            builder.config(k, minimum_rows)
+        }
+
+        // re-usable function for synthesize
+        pub fn two_phase_synthesize(
+            &self,
+            gate: &FlexGateConfig<F>,
+            lookup_advice: &[Vec<Column<Advice>>],
+            q_lookup: &[Option<Selector>],
+            rlc: &RlcConfig<F>,
+            layouter: &mut impl Layouter<F>,
+        ) {
+            let mut first_pass = SKIP_FIRST_PASS;
+            #[cfg(feature = "halo2-axiom")]
+            let witness_gen_only = self.builder.borrow().witness_gen_only();
+            // in non halo2-axiom, the prover calls `synthesize` twice: first just to get FirstPhase advice columns, commit, and then generate challenge value; then the second time to actually compute SecondPhase advice
+            // our "Prover" implementation is heavily optimized for the Axiom version, which only calls `synthesize` once
+            #[cfg(not(feature = "halo2-axiom"))]
+            let witness_gen_only = false;
+
+            let mut gamma = None;
+            if !witness_gen_only {
+                // in these cases, synthesize is called twice, and challenge can be gotten after the first time, or we use dummy value 0
+                layouter.get_challenge(rlc.gamma).map(|gamma_| gamma = Some(gamma_));
+            }
+
+            layouter
+                .assign_region(
+                    || "RlcCircuitBuilder generated circuit",
+                    |mut region| {
+                        if first_pass {
+                            first_pass = false;
+                            return Ok(());
+                        }
+                        if !witness_gen_only {
+                            let mut builder = self.builder.borrow().clone();
+                            let f = self
+                                .synthesize_phase1
+                                .borrow()
+                                .clone()
+                                .expect("synthesize_phase1 should exist");
+                            // call the actual synthesize function
+                            let rlc_chip = RlcChip::new(gamma.unwrap_or_else(|| F::zero()));
+                            f(&mut builder, &rlc_chip);
+                            let KeygenAssignments {
+                                assigned_advices: _,
+                                assigned_constants: _,
+                                break_points,
+                            } = builder.assign_all(
+                                gate,
+                                lookup_advice,
+                                q_lookup,
+                                rlc,
+                                &mut region,
+                                Default::default(),
+                            );
+                            *self.break_points.borrow_mut() = break_points;
+                        } else {
+                            let builder = &mut self.builder.borrow_mut();
+                            let break_points = &mut self.break_points.borrow_mut();
+                            assign_prover_phase0(
+                                &mut region,
+                                gate,
+                                lookup_advice,
+                                builder,
+                                break_points,
+                            );
+                            // this is a special backend API function (in halo2-axiom only) that computes the KZG commitments for all columns in FirstPhase and performs Fiat-Shamir on them to return the challenge value
+                            #[cfg(feature = "halo2-axiom")]
+                            region.next_phase();
+                            // get challenge value
+                            let mut gamma = None;
+                            #[cfg(feature = "halo2-axiom")]
+                            region.get_challenge(rlc.gamma).map(|gamma_| {
+                                log::info!("gamma: {gamma_:?}");
+                                gamma = Some(gamma_);
+                            });
+                            let rlc_chip = RlcChip::new(
+                                gamma.expect("Could not get challenge in second phase"),
+                            );
+                            let f = RefCell::take(&self.synthesize_phase1)
+                                .expect("synthesize_phase1 should exist"); // we `take` the closure during proving to avoid cloning captured variables (the captured variables would be the AssignedValue payload sent from FirstPhase to SecondPhase)
+                            assign_prover_phase1(
+                                &mut region,
+                                gate,
+                                lookup_advice,
+                                rlc,
+                                &rlc_chip,
+                                builder,
+                                break_points,
+                                f,
+                            );
+                        }
+                        Ok(())
+                    },
+                )
+                .unwrap();
+        }
+    }
+
+    impl<F: ScalarField, FnPhase1> Circuit<F> for RlcCircuitBuilder<F, FnPhase1>
+    where
+        FnPhase1: FnSynthesize<F>,
+    {
+        type Config = RlcGateConfig<F>;
+        type FloorPlanner = SimpleFloorPlanner;
+
+        fn without_witnesses(&self) -> Self {
+            unimplemented!()
+        }
+
+        fn configure(meta: &mut ConstraintSystem<F>) -> RlcGateConfig<F> {
+            let EthConfigParams {
+                degree,
+                num_rlc_columns,
+                num_range_advice,
+                num_lookup_advice: _,
+                num_fixed,
+                unusable_rows: _,
+                keccak_rows_per_round: _,
+                lookup_bits: _,
+            } = serde_json::from_str(&std::env::var("ETH_CONFIG_PARAMS").unwrap()).unwrap();
+            let mut gate = FlexGateConfig::configure(
+                meta,
+                GateStrategy::Vertical,
+                &num_range_advice,
+                num_fixed,
+                degree as usize,
+            );
+            let rlc = RlcConfig::configure(meta, num_rlc_columns);
+            // number of blinding factors may have changed due to introduction of new RLC gate
+            gate.max_rows = (1 << degree) - meta.minimum_rows();
+            RlcGateConfig { gate, rlc }
+        }
+
+        fn synthesize(
+            &self,
+            config: Self::Config,
+            mut layouter: impl Layouter<F>,
+        ) -> Result<(), Error> {
+            self.two_phase_synthesize(&config.gate, &[], &[], &config.rlc, &mut layouter);
+            Ok(())
+        }
+    }
+
+    /// A wrapper around RlcCircuitBuilder where Gate is replaced by Range in the circuit
+    pub struct RlpCircuitBuilder<F: ScalarField, FnPhase1>(RlcCircuitBuilder<F, FnPhase1>)
+    where
+        FnPhase1: FnSynthesize<F>;
+
+    impl<F: ScalarField, FnPhase1> RlpCircuitBuilder<F, FnPhase1>
+    where
+        FnPhase1: FnSynthesize<F>,
+    {
+        pub fn new(
+            builder: RlcThreadBuilder<F>,
+            break_points: Option<RlcThreadBreakPoints>,
+            synthesize_phase1: FnPhase1,
+        ) -> Self {
+            Self(RlcCircuitBuilder::new(builder, break_points, synthesize_phase1))
+        }
+
+        pub fn config(&self, k: usize, minimum_rows: Option<usize>) -> EthConfigParams {
+            self.0.config(k, minimum_rows)
+        }
+    }
+
+    impl<F: ScalarField, FnPhase1> Circuit<F> for RlpCircuitBuilder<F, FnPhase1>
+    where
+        FnPhase1: FnSynthesize<F>,
+    {
+        type Config = RlpConfig<F>;
+        type FloorPlanner = SimpleFloorPlanner;
+
+        fn without_witnesses(&self) -> Self {
+            unimplemented!()
+        }
+
+        fn configure(meta: &mut ConstraintSystem<F>) -> RlpConfig<F> {
+            let EthConfigParams {
+                degree,
+                num_rlc_columns,
+                num_range_advice,
+                num_lookup_advice,
+                num_fixed,
+                unusable_rows: _,
+                keccak_rows_per_round: _,
+                lookup_bits: _,
+            } = serde_json::from_str(&std::env::var("ETH_CONFIG_PARAMS").unwrap()).unwrap();
+            let lookup_bits = std::env::var("LOOKUP_BITS").unwrap().parse().unwrap();
+            RlpConfig::configure(
+                meta,
+                num_rlc_columns,
+                &num_range_advice,
+                &num_lookup_advice,
+                num_fixed,
+                lookup_bits,
+                degree as usize,
+            )
+        }
+
+        fn synthesize(
+            &self,
+            config: Self::Config,
+            mut layouter: impl Layouter<F>,
+        ) -> Result<(), Error> {
+            config.range.load_lookup_table(&mut layouter)?;
+            self.0.two_phase_synthesize(
+                &config.range.gate,
+                &config.range.lookup_advice,
+                &config.range.q_lookup,
+                &config.rlc,
+                &mut layouter,
+            );
+            Ok(())
+        }
+    }
+}
