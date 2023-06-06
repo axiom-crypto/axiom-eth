@@ -1,6 +1,6 @@
 mod rlc {
     use halo2_base::{
-        gates::{GateChip, builder::{GateThreadBuilder}},
+        gates::GateChip,
         halo2_proofs::{
             dev::MockProver,
             halo2curves::bn256::{Bn256, Fr, G1Affine},
@@ -18,8 +18,7 @@ mod rlc {
                 TranscriptWriterBuffer,
             },
         },
-        utils::{ScalarField, bit_length},
-        QuantumCell::{self, Witness},
+        utils::{bit_length, ScalarField},
     };
     use itertools::Itertools;
     use rand::{rngs::StdRng, SeedableRng};
@@ -108,59 +107,69 @@ mod rlc {
 
     #[test_case(([1, 2, 3, 4, 5, 6, 7, 8].map(Fr::from).to_vec(), [1, 2, 3, 4, 5, 6, 7, 8].map(Fr::from).to_vec()) ; "Dynamic RLC test, var len 1")]
     #[test_case(([1, 2, 3].map(Fr::from).to_vec(), [1, 2, 3, 4, 5, 6, 7, 8].map(Fr::from).to_vec()) ; "Dynamic RLC test, var len 2")]
-    pub fn test_rlc_dynamic<F: ScalarField>(inputs: (Vec<F>, Vec<F>)) {
+    pub fn test_rlc_dynamic_var_len<F: ScalarField>(inputs: (Vec<F>, Vec<F>)) {
         let mut builder = RlcThreadBuilder::mock();
         let ctx = builder.gate_builder.main(0);
 
         let a_b = ctx.assign_witnesses(inputs.0.iter().chain(inputs.1.iter()).cloned());
         let combined_len = inputs.0.len() as u64 + inputs.1.len() as u64;
         let a_b_len = ctx.load_witness(F::from(combined_len));
-        
+
         let a_len = ctx.load_witness(F::from(inputs.0.len() as u64));
         let mut a = inputs.0.clone();
         a.resize(combined_len as usize, F::from(0));
         let a = ctx.assign_witnesses(a);
-        
+
         let b_len = ctx.load_witness(F::from(inputs.1.len() as u64));
         let mut b = inputs.1.clone();
         b.resize(combined_len as usize, F::from(0));
         let b = ctx.assign_witnesses(b);
-        
 
-        let circuit = RlcCircuitBuilder::new(
-            builder,
-            None,
-            move |builder: &mut RlcThreadBuilder<F>, rlc: &RlcChip<F>| {
-                let gate = GateChip::default();
-                let (ctx_gate, ctx_rlc) = builder.rlc_ctx_pair();
-                let rlc_trace = rlc.compute_rlc((ctx_gate, ctx_rlc), &gate, a_b, a_b_len);
-                let rlc_val = *rlc_trace.rlc_val.value();
-                
-                let rlc_trace_a = rlc.compute_rlc((ctx_gate, ctx_rlc), &gate, a, a_len);
-                let rlc_val_a = *rlc_trace_a.rlc_val.value();
+        let gate = GateChip::default();
+        let (ctx_gate, ctx_rlc) = builder.rlc_ctx_pair();
+        let rlc = RlcChip::new(F::from(2));
+        let rlc_trace = rlc.compute_rlc((ctx_gate, ctx_rlc), &gate, a_b, a_b_len);
+        let rlc_val = *rlc_trace.rlc_val.value();
 
-                let rlc_trace_b = rlc.compute_rlc((ctx_gate, ctx_rlc), &gate, b, b_len);
-                let rlc_val_b = *rlc_trace_b.rlc_val.value();
+        let rlc_trace_a = rlc.compute_rlc((ctx_gate, ctx_rlc), &gate, a, a_len);
+        let rlc_val_a = *rlc_trace_a.rlc_val.value();
 
-                rlc.load_rlc_cache((ctx_gate, ctx_rlc), &gate, combined_len as usize);
-                let gamma_pow = rlc.rlc_pow(ctx_gate, &gate, a_len, bit_length(combined_len as u64));
-                let gamma = *rlc.gamma();
-                let gamma_a = gamma.pow_vartime(&[inputs.0.len() as u64]);
-                dbg!(rlc_val_a);
-                dbg!(rlc_val_b);
-                dbg!(gamma_a);
-                assert_eq!(*gamma_pow.value(), gamma_a);
-                assert_eq!(rlc_val, rlc_val_a + rlc_val_b * gamma_a);
-            },
-        );
+        let rlc_trace_b = rlc.compute_rlc((ctx_gate, ctx_rlc), &gate, b, b_len);
+        let rlc_val_b = *rlc_trace_b.rlc_val.value();
 
-        circuit.config(DEGREE as usize, Some(6));
-        MockProver::run(DEGREE, &circuit, vec![]).unwrap().assert_satisfied();
+        rlc.load_rlc_cache((ctx_gate, ctx_rlc), &gate, combined_len as usize);
+        let gamma_pow = rlc.rlc_pow(ctx_gate, &gate, b_len, bit_length(combined_len as u64));
+        assert_eq!(rlc_val, rlc_val_a * gamma_pow.value() + rlc_val_b);
     }
 
+    #[test_case(([1, 2, 3, 4, 5, 6, 7, 8].map(Fr::from).to_vec(), [1, 2, 3, 4, 5, 6, 7, 8].map(Fr::from).to_vec()) ; "Dynamic RLC test, fixed len 1")]
+    #[test_case(([1, 2, 3].map(Fr::from).to_vec(), [1, 2, 3, 4, 5, 6, 7, 8].map(Fr::from).to_vec()) ; "Dynamic RLC test, fixed len 2")]
+    pub fn test_rlc_dynamic_fixed_len<F: ScalarField>(inputs: (Vec<F>, Vec<F>)) {
+        let mut builder = RlcThreadBuilder::mock();
+        let ctx = builder.gate_builder.main(0);
 
+        let a_b = ctx.assign_witnesses(inputs.0.iter().chain(inputs.1.iter()).cloned());
+        let combined_len = inputs.0.len() as u64 + inputs.1.len() as u64;
+        let a = ctx.assign_witnesses(inputs.0.clone());
+        let b_len = ctx.load_witness(F::from(inputs.1.len() as u64));
+        let b = ctx.assign_witnesses(inputs.1.clone());
 
-    
+        let gate = GateChip::default();
+        let (ctx_gate, ctx_rlc) = builder.rlc_ctx_pair();
+        let rlc = RlcChip::new(F::from(2));
+        let rlc_trace = rlc.compute_rlc_fixed_len(ctx_rlc, a_b);
+        let rlc_val = *rlc_trace.rlc_val.value();
+
+        let rlc_trace_a = rlc.compute_rlc_fixed_len(ctx_rlc, a);
+        let rlc_val_a = *rlc_trace_a.rlc_val.value();
+
+        let rlc_trace_b = rlc.compute_rlc_fixed_len(ctx_rlc, b);
+        let rlc_val_b = *rlc_trace_b.rlc_val.value();
+
+        rlc.load_rlc_cache((ctx_gate, ctx_rlc), &gate, combined_len as usize);
+        let gamma_pow = rlc.rlc_pow(ctx_gate, &gate, b_len, bit_length(combined_len as u64));
+        assert_eq!(rlc_val, rlc_val_a * gamma_pow.value() + rlc_val_b);
+    }
 
     #[test]
     pub fn test_rlc() -> Result<(), Error> {
