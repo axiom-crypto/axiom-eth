@@ -108,25 +108,47 @@ mod rlc {
         MockProver::run(DEGREE, &circuit, vec![]).unwrap().assert_satisfied();
     }
 
-    #[test_case(([1, 2, 3, 4, 5, 6, 7, 8].map(Fr::from).to_vec(), [1, 2, 3, 4, 5, 6, 7, 8].map(Fr::from).to_vec()) ; "Dynamic RLC test, var len 1")]
-    #[test_case(([1, 2, 3].map(Fr::from).to_vec(), [1, 2, 3, 4, 5, 6, 7, 8].map(Fr::from).to_vec()) ; "Dynamic RLC test, var len 2")]
-    pub fn test_rlc_dynamic_var_len<F: ScalarField>(inputs: (Vec<F>, Vec<F>)) {
+    #[derive(PartialEq, Debug)]
+    pub enum RlcTestErrors {
+        RlcValError,
+        RlcValAError,
+        RlcValBError,
+        GammaPowError,
+        DynamicRlcError,
+    }
+
+    #[test_case(([1, 2, 3, 4, 5, 6, 7, 8].map(Fr::from).to_vec(), [1, 2, 3, 4, 5, 6, 7, 8].map(Fr::from).to_vec(), 8, 8, 16) => Ok(()) ; "Dynamic RLC test, var len 1")]
+    #[test_case(([1, 2, 3].map(Fr::from).to_vec(), [1, 2, 3, 4, 5, 6, 7, 8].map(Fr::from).to_vec(), 3, 8, 11) => Ok(()) ; "Dynamic RLC test, var len 2")]
+    #[test_case(([1, 2, 3].map(Fr::from).to_vec(), [1, 2, 3, 4, 5, 6, 7, 8].map(Fr::from).to_vec(), 5, 8, 11) => Err(RlcTestErrors::RlcValAError) ; "Dynamic RLC test, a_len too big")]
+    #[test_case(([1, 2, 3].map(Fr::from).to_vec(), [1, 2, 3, 4, 5, 6, 7, 8].map(Fr::from).to_vec(), 1, 8, 11) => Err(RlcTestErrors::RlcValError) ; "Dynamic RLC test, a_len too small")]
+    #[test_case(([1, 2, 3].map(Fr::from).to_vec(), [1, 2, 3, 4, 5, 6, 7, 8].map(Fr::from).to_vec(), 0, 8, 11) => Err(RlcTestErrors::RlcValError) ; "Dynamic RLC test, a_len=0")]
+    #[test_case(([1, 2, 3].map(Fr::from).to_vec(), [1, 2, 3, 4, 5, 6, 7, 8].map(Fr::from).to_vec(), 3, 6, 11) => Err(RlcTestErrors::RlcValError) ; "Dynamic RLC test, b_len too small")]
+    #[test_case(([1, 2, 3].map(Fr::from).to_vec(), [1, 2, 3, 4, 5, 6, 7, 8].map(Fr::from).to_vec(), 3, 10, 11) => Err(RlcTestErrors::RlcValBError) ; "Dynamic RLC test, b_len too big")]
+    #[test_case(([1, 2, 3].map(Fr::from).to_vec(), [1, 2, 3, 4, 5, 6, 7, 8].map(Fr::from).to_vec(), 3, 0, 11) => Err(RlcTestErrors::RlcValError) ; "Dynamic RLC test, b_len=0")]
+    pub fn test_rlc_dynamic_var_len<F: ScalarField>(
+        inputs: (Vec<F>, Vec<F>, u64, u64, u64),
+    ) -> Result<(), RlcTestErrors> {
         let mut rlc_builder = RlcThreadBuilder::mock();
         let mut builder = GateThreadBuilder::mock();
         let ctx = builder.main(0);
 
-        let a_b = ctx.assign_witnesses(inputs.0.iter().chain(inputs.1.iter()).cloned());
-        let combined_len = inputs.0.len() as u64 + inputs.1.len() as u64;
-        let a_b_len = ctx.load_witness(F::from(combined_len));
+        let a_b_joined = inputs
+            .0
+            .iter()
+            .take(inputs.2 as usize)
+            .chain(inputs.1.iter().take(inputs.3 as usize))
+            .cloned();
+        let a_b = ctx.assign_witnesses(a_b_joined.clone());
+        let a_b_len = ctx.load_witness(F::from(inputs.4));
 
-        let a_len = ctx.load_witness(F::from(inputs.0.len() as u64));
+        let a_len = ctx.load_witness(F::from(inputs.2));
         let mut a = inputs.0.clone();
-        a.resize(combined_len as usize, F::from(0));
+        a.resize(inputs.4 as usize, F::from(0));
         let a = ctx.assign_witnesses(a);
 
-        let b_len = ctx.load_witness(F::from(inputs.1.len() as u64));
+        let b_len = ctx.load_witness(F::from(inputs.3));
         let mut b = inputs.1.clone();
-        b.resize(combined_len as usize, F::from(0));
+        b.resize(inputs.4 as usize, F::from(0));
         let b = ctx.assign_witnesses(b);
 
         let gate = GateChip::default();
@@ -134,20 +156,44 @@ mod rlc {
         let rlc = RlcChip::new(F::from(2));
         let rlc_trace = rlc.compute_rlc((ctx_gate, ctx_rlc), &gate, a_b, a_b_len);
         let rlc_val = *rlc_trace.rlc_val.value();
+        let real_rlc_val = compute_rlc_acc(&a_b_joined.collect_vec(), *rlc.gamma());
+
+        if rlc_val != real_rlc_val {
+            return Err(RlcTestErrors::RlcValError);
+        }
 
         let rlc_trace_a = rlc.compute_rlc((ctx_gate, ctx_rlc), &gate, a, a_len);
         let rlc_val_a = *rlc_trace_a.rlc_val.value();
+        let real_rlc_val_a = compute_rlc_acc(&inputs.0, *rlc.gamma());
+
+        if rlc_val_a != real_rlc_val_a {
+            return Err(RlcTestErrors::RlcValAError);
+        }
 
         let rlc_trace_b = rlc.compute_rlc((ctx_gate, ctx_rlc), &gate, b, b_len);
         let rlc_val_b = *rlc_trace_b.rlc_val.value();
+        let real_rlc_val_b = compute_rlc_acc(&inputs.1, *rlc.gamma());
 
-        rlc.load_rlc_cache((ctx_gate, ctx_rlc), &gate, combined_len as usize);
-        let gamma_pow = rlc.rlc_pow(ctx_gate, &gate, b_len, bit_length(combined_len as u64));
-        assert_eq!(rlc_val, rlc_val_a * gamma_pow.value() + rlc_val_b);
-        
+        if rlc_val_b != real_rlc_val_b {
+            return Err(RlcTestErrors::RlcValBError);
+        }
+
+        rlc.load_rlc_cache((ctx_gate, ctx_rlc), &gate, inputs.4 as usize);
+        let gamma_pow = rlc.rlc_pow(ctx_gate, &gate, b_len, bit_length(inputs.4 as u64));
+        let real_gamma_pow = rlc.gamma().pow_vartime(&[inputs.1.len() as u64]);
+
+        if *gamma_pow.value() != real_gamma_pow {
+            return Err(RlcTestErrors::GammaPowError);
+        }
+
+        if rlc_val != rlc_val_a * gamma_pow.value() + rlc_val_b {
+            return Err(RlcTestErrors::DynamicRlcError);
+        }
+
         builder.config(6, Some(9));
         let circuit = GateCircuitBuilder::mock(builder);
-        MockProver::run(6, &circuit, vec![]).unwrap().assert_satisfied()
+        MockProver::run(6, &circuit, vec![]).unwrap().assert_satisfied();
+        Ok(())
     }
 
     #[test_case(([1, 2, 3, 4, 5, 6, 7, 8].map(Fr::from).to_vec(), [1, 2, 3, 4, 5, 6, 7, 8].map(Fr::from).to_vec()) ; "Dynamic RLC test, fixed len 1")]
@@ -168,16 +214,26 @@ mod rlc {
         let rlc = RlcChip::new(F::from(2));
         let rlc_trace = rlc.compute_rlc_fixed_len(ctx_rlc, a_b);
         let rlc_val = *rlc_trace.rlc_val.value();
-        println!("{:?}", rlc_val);
+        let real_rlc_val = compute_rlc_acc(
+            &inputs.0.iter().chain(inputs.1.iter()).cloned().collect_vec(),
+            *rlc.gamma(),
+        );
+        assert_eq!(rlc_val, real_rlc_val);
 
         let rlc_trace_a = rlc.compute_rlc_fixed_len(ctx_rlc, a);
         let rlc_val_a = *rlc_trace_a.rlc_val.value();
+        let real_rlc_val_a = compute_rlc_acc(&inputs.0, *rlc.gamma());
+        assert_eq!(rlc_val_a, real_rlc_val_a);
 
         let rlc_trace_b = rlc.compute_rlc_fixed_len(ctx_rlc, b);
         let rlc_val_b = *rlc_trace_b.rlc_val.value();
+        let real_rlc_val_b = compute_rlc_acc(&inputs.1, *rlc.gamma());
+        assert_eq!(rlc_val_b, real_rlc_val_b);
 
         rlc.load_rlc_cache((ctx_gate, ctx_rlc), &gate, combined_len as usize);
         let gamma_pow = rlc.rlc_pow(ctx_gate, &gate, b_len, bit_length(combined_len as u64));
+        let real_gamma_pow = rlc.gamma().pow_vartime(&[inputs.1.len() as u64]);
+        assert_eq!(*gamma_pow.value(), real_gamma_pow);
         assert_eq!(rlc_val, rlc_val_a * gamma_pow.value() + rlc_val_b);
 
         builder.config(6, Some(9));
