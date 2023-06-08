@@ -125,6 +125,7 @@ mod rlc {
     #[test_case(([1, 2, 3].map(Fr::from).to_vec(), [1, 2, 3, 4, 5, 6, 7, 8].map(Fr::from).to_vec(), 3, 6, 11) => Err(RlcTestErrors::RlcValError) ; "Dynamic RLC test, b_len too small")]
     #[test_case(([1, 2, 3].map(Fr::from).to_vec(), [1, 2, 3, 4, 5, 6, 7, 8].map(Fr::from).to_vec(), 3, 10, 11) => Err(RlcTestErrors::RlcValBError) ; "Dynamic RLC test, b_len too big")]
     #[test_case(([1, 2, 3].map(Fr::from).to_vec(), [1, 2, 3, 4, 5, 6, 7, 8].map(Fr::from).to_vec(), 3, 0, 11) => Err(RlcTestErrors::RlcValError) ; "Dynamic RLC test, b_len=0")]
+    #[test_case(([1, 2, 3].map(Fr::from).to_vec(), [1, 2, 3, 4, 5, 6, 7, 8].map(Fr::from).to_vec(), 2, 5, 7) => Err(RlcTestErrors::RlcValError) ; "Dynamic RLC test, a_len and b_len too small, but a_len+b_len=c_len")]
     pub fn test_rlc_dynamic_var_len<F: ScalarField>(
         inputs: (Vec<F>, Vec<F>, u64, u64, u64),
     ) -> Result<(), RlcTestErrors> {
@@ -142,12 +143,12 @@ mod rlc {
         let a_b_len = ctx.load_witness(F::from(inputs.4));
 
         let a_len = ctx.load_witness(F::from(inputs.2));
-        let mut a = inputs.0.clone();
+        let mut a = inputs.0.clone().iter().take(inputs.2 as usize).cloned().collect_vec();
         a.resize(inputs.4 as usize, F::from(0));
         let a = ctx.assign_witnesses(a);
 
         let b_len = ctx.load_witness(F::from(inputs.3));
-        let mut b = inputs.1.clone();
+        let mut b = inputs.1.clone().iter().take(inputs.3 as usize).cloned().collect_vec();
         b.resize(inputs.4 as usize, F::from(0));
         let b = ctx.assign_witnesses(b);
 
@@ -164,7 +165,7 @@ mod rlc {
 
         let rlc_trace_a = rlc.compute_rlc((ctx_gate, ctx_rlc), &gate, a, a_len);
         let rlc_val_a = *rlc_trace_a.rlc_val.value();
-        let real_rlc_val_a = compute_rlc_acc(&inputs.0, *rlc.gamma());
+        let real_rlc_val_a = compute_rlc_acc(&inputs.0[..inputs.2 as usize], *rlc.gamma());
 
         if rlc_val_a != real_rlc_val_a {
             return Err(RlcTestErrors::RlcValAError);
@@ -172,7 +173,7 @@ mod rlc {
 
         let rlc_trace_b = rlc.compute_rlc((ctx_gate, ctx_rlc), &gate, b, b_len);
         let rlc_val_b = *rlc_trace_b.rlc_val.value();
-        let real_rlc_val_b = compute_rlc_acc(&inputs.1, *rlc.gamma());
+        let real_rlc_val_b = compute_rlc_acc(&inputs.1[..inputs.3 as usize], *rlc.gamma());
 
         if rlc_val_b != real_rlc_val_b {
             return Err(RlcTestErrors::RlcValBError);
