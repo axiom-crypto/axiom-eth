@@ -60,6 +60,9 @@ mod rlc {
     }
 
     fn compute_rlc_acc<F: ScalarField>(msg: &[F], r: F) -> F {
+        if msg.is_empty() {
+            return F::from(0);
+        }
         let mut rlc = msg[0];
         for val in msg.iter().skip(1) {
             rlc = rlc * r + val;
@@ -119,13 +122,15 @@ mod rlc {
 
     #[test_case(([1, 2, 3, 4, 5, 6, 7, 8].map(Fr::from).to_vec(), [1, 2, 3, 4, 5, 6, 7, 8].map(Fr::from).to_vec(), 8, 8, 16) => Ok(()) ; "Dynamic RLC test, var len 1")]
     #[test_case(([1, 2, 3].map(Fr::from).to_vec(), [1, 2, 3, 4, 5, 6, 7, 8].map(Fr::from).to_vec(), 3, 8, 11) => Ok(()) ; "Dynamic RLC test, var len 2")]
-    #[test_case(([1, 2, 3].map(Fr::from).to_vec(), [1, 2, 3, 4, 5, 6, 7, 8].map(Fr::from).to_vec(), 5, 8, 11) => Err(RlcTestErrors::DynamicRlcError) ; "Dynamic RLC test, a_len too big")]
-    #[test_case(([1, 2, 3].map(Fr::from).to_vec(), [1, 2, 3, 4, 5, 6, 7, 8].map(Fr::from).to_vec(), 1, 8, 11) => Err(RlcTestErrors::RlcValError) ; "Dynamic RLC test, a_len too small")]
-    #[test_case(([1, 2, 3].map(Fr::from).to_vec(), [1, 2, 3, 4, 5, 6, 7, 8].map(Fr::from).to_vec(), 0, 8, 11) => Err(RlcTestErrors::RlcValError) ; "Dynamic RLC test, a_len=0")]
-    #[test_case(([1, 2, 3].map(Fr::from).to_vec(), [1, 2, 3, 4, 5, 6, 7, 8].map(Fr::from).to_vec(), 3, 6, 11) => Err(RlcTestErrors::RlcValError) ; "Dynamic RLC test, b_len too small")]
-    #[test_case(([1, 2, 3].map(Fr::from).to_vec(), [1, 2, 3, 4, 5, 6, 7, 8].map(Fr::from).to_vec(), 3, 10, 11) => Err(RlcTestErrors::DynamicRlcError) ; "Dynamic RLC test, b_len too big")]
-    #[test_case(([1, 2, 3].map(Fr::from).to_vec(), [1, 2, 3, 4, 5, 6, 7, 8].map(Fr::from).to_vec(), 3, 0, 11) => Err(RlcTestErrors::RlcValError) ; "Dynamic RLC test, b_len=0")]
-    #[test_case(([1, 2, 3].map(Fr::from).to_vec(), [1, 2, 3, 4, 5, 6, 7, 8].map(Fr::from).to_vec(), 2, 5, 7) => Ok(()) ; "Dynamic RLC test, a_len and b_len too small, but a_len+b_len=c_len")]
+    #[test_case(([1, 2, 3].map(Fr::from).to_vec(), [1, 2, 3, 4, 5, 6, 7, 8].map(Fr::from).to_vec(), 5, 8, 11) => Err(RlcTestErrors::DynamicRlcError) ; "Dynamic RLC test, c_len too small")]
+    #[test_case(([1, 2, 3].map(Fr::from).to_vec(), [1, 2, 3, 4, 5, 6, 7, 8].map(Fr::from).to_vec(), 1, 8, 11) => Err(RlcTestErrors::RlcValError) ; "Dynamic RLC test, c_len too big")]
+    #[test_case(([1, 2, 3].map(Fr::from).to_vec(), [1, 2, 3, 4, 5, 6, 7, 8].map(Fr::from).to_vec(), 0, 8, 11) => Err(RlcTestErrors::RlcValError) ; "Dynamic RLC test, c_len too small 2")]
+    #[test_case(([1, 2, 3].map(Fr::from).to_vec(), [1, 2, 3, 4, 5, 6, 7, 8].map(Fr::from).to_vec(), 3, 6, 11) => Err(RlcTestErrors::RlcValError) ; "Dynamic RLC test, c_len too big 2")]
+    #[test_case(([1, 2, 3].map(Fr::from).to_vec(), [1, 2, 3, 4, 5, 6, 7, 8].map(Fr::from).to_vec(), 3, 10, 11) => Err(RlcTestErrors::DynamicRlcError) ; "Dynamic RLC test, c_len too small 3")]
+    #[test_case(([1, 2, 3].map(Fr::from).to_vec(), [1, 2, 3, 4, 5, 6, 7, 8].map(Fr::from).to_vec(), 3, 0, 11) => Err(RlcTestErrors::RlcValError) ; "Dynamic RLC test, c_len too big 3")]
+    #[test_case(([1, 2, 3].map(Fr::from).to_vec(), [1, 2, 3, 4, 5, 6, 7, 8].map(Fr::from).to_vec(), 2, 5, 7) => Ok(()) ; "Dynamic RLC test, a_len + b_len = c_len")]
+    #[test_case((Vec::<Fr>::new(), [1, 2, 3, 4, 5, 6, 7, 8].map(Fr::from).to_vec(), 0, 8, 8) => Ok(()) ; "Dynamic RLC test, a_len = 0")]
+    #[test_case(([1, 2, 3].map(Fr::from).to_vec(), Vec::<Fr>::new(), 3, 0, 3) => Ok(()) ; "Dynamic RLC test, b_len = 0")]
     pub fn test_rlc_dynamic_var_len<F: ScalarField>(
         inputs: (Vec<F>, Vec<F>, u64, u64, u64),
     ) -> Result<(), RlcTestErrors> {
