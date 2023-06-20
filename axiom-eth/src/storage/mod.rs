@@ -61,8 +61,8 @@ let cache_bits = bit_length(max_len)
 */
 const CACHE_BITS: usize = 10;
 
-pub const ACCOUNT_PROOF_MAX_DEPTH: usize = 13;
-pub const STORAGE_PROOF_MAX_DEPTH: usize = 8;
+pub const ACCOUNT_PROOF_MAX_DEPTH: usize = 10;
+pub const STORAGE_PROOF_MAX_DEPTH: usize = 9;
 
 #[derive(Clone, Debug)]
 pub struct EthAccountTrace<F: Field> {
