@@ -207,6 +207,7 @@ mod rlp {
         let prover = builder.witness_gen_only();
         let ctx = builder.gate_builder.main(0);
         let inputs = ctx.assign_witnesses(encoded.iter().map(|x| F::from(*x as u64)));
+        set_var("LOOKUP_BITS", "8");
         let range = RangeChip::default(8);
         let chip = RlpChip::new(&range, None);
         let witness = chip.decompose_rlp_array_phase0(ctx, inputs, max_field_lens, is_var_len);
