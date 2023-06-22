@@ -294,9 +294,8 @@ impl scheduler::Task for Task {
                 let hasher = &mut poseidon;
 
                 for input in &task.input {
-                    let response = EthBlockStorageInput::from(input.clone());
+                    let mut response = EthBlockStorageInput::from(input.clone());
                     block_header_rlps.push(response.block_header.clone());
-                    responses.push(response);
                     let ((block_res_p, _block_res_k), block_res) =
                         get_block_response(hasher, input.block.clone(), network);
                     block_responses.push((block_res_p, input.block.number.unwrap().as_u32()));
@@ -313,6 +312,8 @@ impl scheduler::Task for Task {
                             storage_inputs.push(acct_storage.clone());
                             storage_not_empty.push(true);
                         } else {
+                            response.storage.storage_pfs =
+                                DEFAULT_STORAGE_QUERY.storage_pfs.clone();
                             storage_inputs.push(DEFAULT_STORAGE_QUERY.clone());
                             storage_not_empty.push(false);
                         }
@@ -322,6 +323,7 @@ impl scheduler::Task for Task {
                         storage_inputs.push(DEFAULT_STORAGE_QUERY.clone());
                         storage_not_empty.push(false);
                     }
+                    responses.push(response);
                 }
                 let mut input_arity = block_header_rlps.len().ilog2() as usize;
                 if (1 << input_arity) != block_header_rlps.len() {
