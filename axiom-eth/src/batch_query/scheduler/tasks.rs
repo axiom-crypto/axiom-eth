@@ -355,14 +355,26 @@ impl scheduler::Task for Task {
                     .map(|input| EthStorageInput { storage_pfs: vec![], ..input.clone() })
                     .collect_vec();
                 let acct_task = MultiAccountCircuit::resize_from(
-                    block_responses.clone(),
+                    block_responses
+                        .iter()
+                        .zip(account_not_empty.iter())
+                        .map(|(res, &ne)| if ne { *res } else { (Fr::zero(), 0) })
+                        .collect_vec(),
                     acct_inputs,
                     account_not_empty.clone(),
                     len,
                 );
                 let storage_task = MultiStorageCircuit::resize_from(
-                    block_responses,
-                    account_responses,
+                    block_responses
+                        .iter()
+                        .zip(storage_not_empty.iter())
+                        .map(|(res, &ne)| if ne { *res } else { (Fr::zero(), 0) })
+                        .collect_vec(),
+                    account_responses
+                        .iter()
+                        .zip(storage_not_empty.iter())
+                        .map(|(res, &ne)| if ne { *res } else { (Fr::zero(), Address::zero()) })
+                        .collect_vec(),
                     storage_inputs,
                     storage_not_empty.clone(),
                     len,
