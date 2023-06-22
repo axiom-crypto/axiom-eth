@@ -314,7 +314,7 @@ impl scheduler::Task for Task {
                         } else {
                             response.storage.storage_pfs =
                                 DEFAULT_STORAGE_QUERY.storage_pfs.clone();
-                            storage_inputs.push(DEFAULT_STORAGE_QUERY.clone());
+                            storage_inputs.push(response.storage.clone());
                             storage_not_empty.push(false);
                         }
                     } else {
