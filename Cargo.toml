@@ -1,8 +1,5 @@
 [workspace]
 members = [
-    "halo2-lib/halo2-base",
-    "halo2-lib/halo2-ecc",
-    "halo2-lib/hashes/zkevm-keccak",
     "axiom-eth",
     "any_circuit_derive"
 ]
