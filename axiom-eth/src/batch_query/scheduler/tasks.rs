@@ -294,9 +294,8 @@ impl scheduler::Task for Task {
                 let hasher = &mut poseidon;
 
                 for input in &task.input {
-                    let response = EthBlockStorageInput::from(input.clone());
+                    let mut response = EthBlockStorageInput::from(input.clone());
                     block_header_rlps.push(response.block_header.clone());
-                    responses.push(response);
                     let ((block_res_p, _block_res_k), block_res) =
                         get_block_response(hasher, input.block.clone(), network);
                     block_responses.push((block_res_p, input.block.number.unwrap().as_u32()));
@@ -313,7 +312,9 @@ impl scheduler::Task for Task {
                             storage_inputs.push(acct_storage.clone());
                             storage_not_empty.push(true);
                         } else {
-                            storage_inputs.push(DEFAULT_STORAGE_QUERY.clone());
+                            response.storage.storage_pfs =
+                                DEFAULT_STORAGE_QUERY.storage_pfs.clone();
+                            storage_inputs.push(response.storage.clone());
                             storage_not_empty.push(false);
                         }
                     } else {
@@ -322,6 +323,7 @@ impl scheduler::Task for Task {
                         storage_inputs.push(DEFAULT_STORAGE_QUERY.clone());
                         storage_not_empty.push(false);
                     }
+                    responses.push(response);
                 }
                 let mut input_arity = block_header_rlps.len().ilog2() as usize;
                 if (1 << input_arity) != block_header_rlps.len() {
@@ -353,14 +355,26 @@ impl scheduler::Task for Task {
                     .map(|input| EthStorageInput { storage_pfs: vec![], ..input.clone() })
                     .collect_vec();
                 let acct_task = MultiAccountCircuit::resize_from(
-                    block_responses.clone(),
+                    block_responses
+                        .iter()
+                        .zip(account_not_empty.iter())
+                        .map(|(res, &ne)| if ne { *res } else { (Fr::zero(), 0) })
+                        .collect_vec(),
                     acct_inputs,
                     account_not_empty.clone(),
                     len,
                 );
                 let storage_task = MultiStorageCircuit::resize_from(
-                    block_responses,
-                    account_responses,
+                    block_responses
+                        .iter()
+                        .zip(storage_not_empty.iter())
+                        .map(|(res, &ne)| if ne { *res } else { (Fr::zero(), 0) })
+                        .collect_vec(),
+                    account_responses
+                        .iter()
+                        .zip(storage_not_empty.iter())
+                        .map(|(res, &ne)| if ne { *res } else { (Fr::zero(), Address::zero()) })
+                        .collect_vec(),
                     storage_inputs,
                     storage_not_empty.clone(),
                     len,
