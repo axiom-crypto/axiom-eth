@@ -1,14 +1,14 @@
 {
   "round": 1,
   "network": "Mainnet",
-  "block_arities": [5,1],
+  "block_arities": [6],
   "account_schema": {
     "start_arity": 3,
     "total_arity": 6,
     "level": 0
   },
   "storage_schema": {
-    "start_arity": 4,
+    "start_arity": 3,
     "total_arity": 6,
     "level": 0
   },
