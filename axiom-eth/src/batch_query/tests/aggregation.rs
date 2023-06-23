@@ -1,36 +1,20 @@
-use super::setup_provider;
 use crate::{
     batch_query::{
         aggregation::{HashStrategy, PoseidonAggregationCircuit},
-        response::{
-            account::{
-                MultiAccountCircuit, ACCOUNT_INSTANCE_SIZE, ACCOUNT_KECCAK_ROOT_INDICES,
-                ACCOUNT_POSEIDON_ROOT_INDICES,
-            },
-            row_consistency::{RowConsistencyCircuit, ROW_CIRCUIT_NUM_INSTANCES},
-        },
-        tests::{
-            account::native_account_instance, get_latest_block_number,
-            storage::get_full_storage_inputs_nouns,
-        },
+        response::row_consistency::{RowConsistencyCircuit, ROW_CIRCUIT_NUM_INSTANCES},
+        tests::storage::get_full_storage_inputs_nouns,
     },
-    providers::get_account_queries,
-    storage::{EthBlockStorageInput, ACCOUNT_PROOF_MAX_DEPTH},
-    util::{circuit::PreCircuit, EthConfigParams},
+    storage::EthBlockStorageInput,
     AggregationPreCircuit, Network,
 };
-use ethers_core::types::{Address, H256};
-use ethers_providers::{Http, Provider};
-use ff::Field;
+
 use halo2_base::{
-    gates::builder::CircuitBuilderStage,
-    halo2_proofs::{dev::MockProver, halo2curves::bn256::Fr},
-    utils::fs::gen_srs,
+    gates::builder::CircuitBuilderStage, halo2_proofs::dev::MockProver, utils::fs::gen_srs,
 };
 use itertools::Itertools;
 use rand::{thread_rng, Rng};
-use rand_core::OsRng;
-use snark_verifier_sdk::{gen_pk, halo2::gen_snark_shplonk, Snark, LIMBS};
+
+use snark_verifier_sdk::{gen_pk, halo2::gen_snark_shplonk, LIMBS};
 use std::env::set_var;
 use test_log::test;
 
