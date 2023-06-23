@@ -1,1 +1,18 @@
-{"strategy":"Simple","degree":22,"num_advice":[12],"num_lookup_advice":[2],"num_fixed":1,"lookup_bits":21,"limb_bits":88,"num_limbs":3}
+{
+  "params": {
+    "degree": 22,
+    "num_advice": 4,
+    "num_lookup_advice": 1,
+    "num_fixed": 1,
+    "lookup_bits": 21
+  },
+  "break_points": [
+    [
+      4194293,
+      4194292,
+      4194293
+    ],
+    [],
+    []
+  ]
+}
