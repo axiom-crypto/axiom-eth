@@ -11,7 +11,7 @@ use snark_verifier_sdk::{halo2::POSEIDON_SPEC, NativeLoader};
 use crate::{
     batch_query::response::{
         account::MultiAccountCircuit,
-        block_header::{MultiBlockCircuit, GENESIS_BLOCK_RLP},
+        block_header::MultiBlockCircuit,
         native::{get_account_response, get_block_response, FullStorageResponse},
         row_consistency::RowConsistencyCircuit,
         storage::{MultiStorageCircuit, DEFAULT_STORAGE_QUERY},
@@ -325,30 +325,15 @@ impl scheduler::Task for Task {
                     }
                     responses.push(response);
                 }
-                let mut input_arity = block_header_rlps.len().ilog2() as usize;
-                if (1 << input_arity) != block_header_rlps.len() {
-                    input_arity += 1;
-                }
-                block_header_rlps.resize_with(1 << input_arity, || GENESIS_BLOCK_RLP.to_vec());
-                block_not_empty.resize(1 << input_arity, false);
-                let mut mmr_proofs = task.mmr_proofs.clone();
-                mmr_proofs.resize(1 << input_arity, vec![]);
 
-                let num_chunks = 1 << (total_arity - input_arity);
-
-                let block_header_rlps =
-                    (0..num_chunks).flat_map(|_| block_header_rlps.clone()).collect_vec();
-                let block_not_empty =
-                    (0..num_chunks).flat_map(|_| block_not_empty.clone()).collect_vec();
-                let mmr_proofs = (0..num_chunks).flat_map(|_| mmr_proofs.clone()).collect_vec();
-
-                let block_task = MultiBlockCircuit::new(
+                let block_task = MultiBlockCircuit::resize_from(
                     block_header_rlps,
                     block_not_empty.clone(),
                     network,
                     task.mmr.clone(),
                     task.mmr_num_blocks,
-                    mmr_proofs,
+                    task.mmr_proofs.clone(),
+                    len,
                 );
                 let acct_inputs = storage_inputs
                     .iter()

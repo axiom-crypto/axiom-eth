@@ -485,3 +485,67 @@ fn test_scheduler_final_assembly_empty_accounts() {
     let scheduler = test_scheduler(Network::Mainnet);
     scheduler.get_calldata(task, true);
 }
+
+#[test]
+fn test_scheduler_final_assembly_resize() {
+    let block_number = 14_985_438;
+    let merkle_proof = [
+        "0x4ee507551ceeb4e7cd160e1d6a546f78d7dc5ea29be99e79476a52781e5422a2",
+        "0xdfba2ede28a828481f99a0277f6062b3f409370c75dbbdb1f7513fdf43e114c5",
+        "0xe315409409b8ad6c0502debcf846d8f4f4d648c7c7598e12306caebb6879cf4d",
+        "0x319f29f57fd20fcbd67cf16d1547f2c7206fc402d11640759834574413c7c073",
+        "0xd7283aa12b799f869ddb6805d6ee0a6ac70bae8af5eda1fa83d910605902d31a",
+        "0xb6ababeeff584afc2ffd2a6239a8421cd36617a07fdfbaaf78e0d98ee5cdd2b2",
+        "0x7738be39d3d440a968245f93f2659da6c3955306b70de635caf704a2cd248012",
+        "0x9c5f767b3e6bf3e6e3716642d4beaeeb0705e4bce45411b4b130739050b85e3b",
+        "0xde3605c75c7c1e971b9615d608112661d407af3ef24945e226b7f0b3694ba102",
+        "0x24b2de47bd4094e61e07ee06d40f5a4f4d66999eea97037866eb06c535c70c5d",
+        "0x7c8e45373e748b8ec69371841bccbc438e4308d345729e5684c1264ac243dd9d",
+        "0x82779b69d134f2dac8998450a341591d53eb19d7b51d57645d6a67fafa0e4cfd",
+        "0x6b47cb78db4428a19df5344391d54e1f695576595eadedc82aef81156e3f85a6",
+        "0xd9e8dbccb0368b6a0b9d2886a0b1c30776684018474174d7666c08068fba49a9",
+        "0xda256132c245db47f729f5d9b8742a5074ec38dd376a5b01496e179863b8e6ef",
+        "0xc2cea502d15df8518ddb1834aa172cd4460c5b52d37ac0f38c3a232c1d8d19fb",
+        "0x282d4ca5df280766756c3f34dbd986145b41b3ebb1bca021c6cceb9ce7214aba",
+        "0xee9f461f804095981853ed2af093769936c30b686f242f67cb8b65d6e59746dd",
+        "0x03bb87fd41000fc97ba8639b2439aac2a80389bcb973086d8334930e100f5765",
+        "0x3267b39f880cdc657d6639cc25b454e4bf72099572682e3e95dc080c4bd1aa59",
+    ]
+    .into_iter()
+    .map(|s| H256::from_str(s).unwrap())
+    .collect_vec();
+    let mmr_num_blocks = 16_525_312;
+    let mmr = vec![H256::zero(); BLOCK_BATCH_DEPTH]
+        .into_iter()
+        .chain(MMR_16525312.iter().map(|s| H256::from_str(s).unwrap()))
+        .collect();
+
+    let circuit_type: FinalAssemblyCircuitType =
+        serde_json::from_reader(File::open("configs/tests/batch_query/schema.final.json").unwrap())
+            .unwrap();
+    assert_eq!(circuit_type.network, Network::Mainnet);
+    let len = 5;
+
+    let address = Address::from_str("0x9C8fF314C9Bc7F6e59A9d9225Fb22946427eDC03").unwrap(); // NounsToken
+    let queries = (0..len)
+        .map(|_| FullStorageQuery { block_number, addr_slots: Some((address, vec![])) })
+        .collect_vec();
+    let input = get_full_storage_queries(
+        &setup_provider(),
+        queries,
+        ACCOUNT_PROOF_MAX_DEPTH,
+        STORAGE_PROOF_MAX_DEPTH,
+    )
+    .unwrap();
+    let task = Task::Final(FinalAssemblyTask {
+        circuit_type,
+        input,
+        mmr,
+        mmr_num_blocks,
+        mmr_proofs: vec![merkle_proof; len],
+    });
+    println!("{}", task.name());
+
+    let scheduler = test_scheduler(Network::Mainnet);
+    scheduler.get_calldata(task, true);
+}
