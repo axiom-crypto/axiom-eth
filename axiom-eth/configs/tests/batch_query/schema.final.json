@@ -1,5 +1,5 @@
 {
-  "round": 1,
+  "round": 2,
   "network": "Mainnet",
   "block_arities": [6],
   "account_schema": {
