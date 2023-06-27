@@ -26,7 +26,7 @@ use crate::{
 };
 use ethers_core::types::{Block, H256};
 #[cfg(feature = "providers")]
-use ethers_providers::{Http, Provider};
+use ethers_providers::{JsonRpcClient, Provider};
 use halo2_base::{
     gates::{GateInstructions, RangeChip, RangeInstructions},
     halo2_proofs::halo2curves::bn256::G1Affine,
@@ -341,8 +341,8 @@ impl MultiBlockCircuit {
     ///
     /// Assumes that `network` is the same as the provider's network.
     #[cfg(feature = "providers")]
-    pub fn from_provider(
-        provider: &Provider<Http>,
+    pub fn from_provider<P: JsonRpcClient>(
+        provider: &Provider<P>,
         block_numbers: Vec<u64>,
         not_empty: Vec<bool>,
         network: Network,

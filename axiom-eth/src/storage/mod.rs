@@ -22,7 +22,7 @@ use crate::{
 };
 use ethers_core::types::{Address, Block, H256, U256};
 #[cfg(feature = "providers")]
-use ethers_providers::{Http, Provider};
+use ethers_providers::{JsonRpcClient, Provider};
 use halo2_base::{
     gates::{builder::GateThreadBuilder, GateInstructions, RangeChip, RangeInstructions},
     halo2_proofs::halo2curves::bn256::Fr,
@@ -634,8 +634,8 @@ pub struct EthBlockStorageCircuit {
 
 impl EthBlockStorageCircuit {
     #[cfg(feature = "providers")]
-    pub fn from_provider(
-        provider: &Provider<Http>,
+    pub fn from_provider<P: JsonRpcClient>(
+        provider: &Provider<P>,
         block_number: u32,
         address: Address,
         slots: Vec<H256>,

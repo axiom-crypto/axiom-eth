@@ -17,7 +17,7 @@ use core::{
     marker::PhantomData,
 };
 #[cfg(feature = "providers")]
-use ethers_providers::{Http, Provider};
+use ethers_providers::{JsonRpcClient, Provider};
 use halo2_base::{
     gates::{builder::GateThreadBuilder, GateInstructions, RangeChip, RangeInstructions},
     halo2_proofs::halo2curves::bn256::Fr,
@@ -516,8 +516,8 @@ pub struct EthBlockHeaderChainCircuit<F> {
 
 impl<F: Field> EthBlockHeaderChainCircuit<F> {
     #[cfg(feature = "providers")]
-    pub fn from_provider(
-        provider: &Provider<Http>,
+    pub fn from_provider<P: JsonRpcClient>(
+        provider: &Provider<P>,
         network: Network,
         start_block_number: u32,
         num_blocks: u32,

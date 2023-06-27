@@ -1,5 +1,5 @@
 use ethers_core::types::U256;
-use ethers_providers::{Http, Middleware, Provider};
+use ethers_providers::{Http, Middleware, Provider, RetryClient};
 use halo2_base::{
     halo2_proofs::{
         halo2curves::bn256::{Bn256, G1Affine},
@@ -82,7 +82,7 @@ pub struct EthScheduler<T: Task> {
     pub pkeys: RwLock<HashMap<T::CircuitType, Arc<ProvingKey<G1Affine>>>>,
     pub degree: RwLock<HashMap<T::CircuitType, u32>>,
     pub params: RwLock<HashMap<u32, Arc<ParamsKZG<Bn256>>>>,
-    pub provider: Arc<Provider<Http>>,
+    pub provider: Arc<Provider<RetryClient<Http>>>,
     pub network: Network,
 
     _marker: PhantomData<T>,
@@ -97,8 +97,8 @@ impl<T: Task> EthScheduler<T> {
         data_dir: PathBuf,
     ) -> Self {
         let provider_url = var("JSON_RPC_URL").expect("JSON_RPC_URL not found");
-        let provider =
-            Provider::<Http>::try_from(provider_url).expect("could not instantiate HTTP Provider");
+        let provider = Provider::new_client(&provider_url, 10, 500)
+            .expect("could not instantiate HTTP Provider");
         tokio::runtime::Runtime::new().unwrap().block_on(async {
             let chain_id = provider.get_chainid().await.unwrap();
             match network {

@@ -8,7 +8,7 @@ use crate::{
 };
 use ethers_core::types::{Address, Block, Bytes, EIP1186ProofResponse, H256};
 use ethers_core::utils::keccak256;
-use ethers_providers::{Http, Middleware, Provider, ProviderError};
+use ethers_providers::{JsonRpcClient, Middleware, Provider, ProviderError};
 // use halo2_mpt::mpt::{max_branch_lens, max_leaf_lens};
 use futures::future::{join, join_all};
 use rlp::{Encodable, Rlp, RlpStream};
@@ -24,8 +24,8 @@ pub const MAINNET_PROVIDER_URL: &str = "https://mainnet.infura.io/v3/";
 pub const GOERLI_PROVIDER_URL: &str = "https://goerli.infura.io/v3/";
 
 /// Makes concurrent JSON-RPC calls to get the blocks with the given block numbers.
-pub fn get_blocks(
-    provider: &Provider<Http>,
+pub fn get_blocks<P: JsonRpcClient>(
+    provider: &Provider<P>,
     block_numbers: impl IntoIterator<Item = u64>,
 ) -> Result<Vec<Option<Block<H256>>>, ProviderError> {
     let rt = Runtime::new().unwrap();
@@ -36,8 +36,8 @@ pub fn get_blocks(
     .collect()
 }
 
-async fn get_account_query(
-    provider: &Provider<Http>,
+async fn get_account_query<P: JsonRpcClient>(
+    provider: &Provider<P>,
     block_number: u64,
     addr: Address,
     acct_pf_max_depth: usize,
@@ -63,8 +63,8 @@ async fn get_account_query(
     }
 }
 
-pub fn get_account_queries(
-    provider: &Provider<Http>,
+pub fn get_account_queries<P: JsonRpcClient>(
+    provider: &Provider<P>,
     queries: Vec<(u64, Address)>,
     acct_pf_max_depth: usize,
 ) -> Vec<EthStorageInput> {
@@ -75,8 +75,8 @@ pub fn get_account_queries(
 }
 
 /// Does not provide state root
-async fn get_storage_query(
-    provider: &Provider<Http>,
+async fn get_storage_query<P: JsonRpcClient>(
+    provider: &Provider<P>,
     block_number: u64,
     addr: Address,
     slots: Vec<H256>,
@@ -124,8 +124,8 @@ async fn get_storage_query(
     EthStorageInput { addr, acct_state, acct_pf, storage_pfs }
 }
 
-pub fn get_full_storage_queries(
-    provider: &Provider<Http>,
+pub fn get_full_storage_queries<P: JsonRpcClient>(
+    provider: &Provider<P>,
     queries: Vec<FullStorageQuery>,
     acct_pf_max_depth: usize,
     storage_pf_max_depth: usize,
@@ -171,8 +171,8 @@ pub fn get_full_storage_queries(
         .collect::<Result<Vec<_>, _>>()
 }
 
-pub fn get_storage_queries(
-    provider: &Provider<Http>,
+pub fn get_storage_queries<P: JsonRpcClient>(
+    provider: &Provider<P>,
     queries: Vec<(u64, Address, H256)>,
     acct_pf_max_depth: usize,
     storage_pf_max_depth: usize,
@@ -190,8 +190,8 @@ pub fn get_storage_queries(
     })))
 }
 
-pub fn get_block_storage_input(
-    provider: &Provider<Http>,
+pub fn get_block_storage_input<P: JsonRpcClient>(
+    provider: &Provider<P>,
     block_number: u32,
     addr: Address,
     slots: Vec<H256>,
@@ -340,8 +340,8 @@ pub struct ProcessedBlock {
 ///       * merkleRoots (Vec<H256>)
 ///   * where merkleRoots is a length `max_depth + 1` vector representing a merkle mountain range, ordered largest mountain first
 // second tuple `instance` is only used for debugging now
-pub fn get_blocks_input(
-    provider: &Provider<Http>,
+pub fn get_blocks_input<P: JsonRpcClient>(
+    provider: &Provider<P>,
     start_block_number: u32,
     num_blocks: u32,
     max_depth: usize,
@@ -400,6 +400,8 @@ pub fn get_blocks_input(
 mod tests {
     use std::env::var;
 
+    use ethers_providers::Http;
+
     use super::*;
 
     #[test]
@@ -407,6 +409,17 @@ mod tests {
         let provider_uri = var("JSON_RPC_URL").expect("JSON_RPC_URL not found");
         let provider =
             Provider::<Http>::try_from(provider_uri).expect("could not instantiate HTTP Provider");
+
+        let rt = Runtime::new().unwrap();
+        let block = rt.block_on(provider.get_block(17034973)).unwrap().unwrap();
+        get_block_rlp(&block);
+    }
+
+    #[test]
+    fn test_retry_provider() {
+        let provider_uri = var("JSON_RPC_URL").expect("JSON_RPC_URL not found");
+        let provider = Provider::new_client(&provider_uri, 10, 500)
+            .expect("could not instantiate HTTP Provider");
 
         let rt = Runtime::new().unwrap();
         let block = rt.block_on(provider.get_block(17034973)).unwrap().unwrap();

@@ -37,8 +37,8 @@ fn get_test_circuit(network: Network, num_slots: usize) -> EthBlockStorageCircui
         Network::Mainnet => format!("{MAINNET_PROVIDER_URL}{infura_id}"),
         Network::Goerli => format!("{GOERLI_PROVIDER_URL}{infura_id}"),
     };
-    let provider = Provider::<Http>::try_from(provider_url.as_str())
-        .expect("could not instantiate HTTP Provider");
+    let provider =
+        Provider::new_client(&provider_url, 10, 500).expect("could not instantiate HTTP Provider");
     let addr;
     let block_number;
     match network {
