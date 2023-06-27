@@ -90,6 +90,17 @@ pub struct RlpArrayPrefixParsed<F: ScalarField> {
 }
 
 #[derive(Clone, Debug)]
+pub struct RlpPrefixParsed<F: ScalarField> {
+    is_field: AssignedValue<F>,
+    is_not_literal: AssignedValue<F>,
+    is_big: AssignedValue<F>,
+    
+    next_len: AssignedValue<F>,
+    len_len: AssignedValue<F>,
+}
+
+
+#[derive(Clone, Debug)]
 pub struct RlpFieldWitness<F: ScalarField> {
     prefix: AssignedValue<F>, // value of the prefix
     prefix_len: AssignedValue<F>,
@@ -144,6 +155,57 @@ pub struct RlpArrayTrace<F: ScalarField> {
     // to save memory we don't need this
     // pub array_trace: RlcTrace<F>,
 }
+
+
+#[derive(Clone, Debug)]
+pub struct RlpOfRlpTrace<F: ScalarField> {
+    pub len_trace: RlcTrace<F>,
+    pub item_trace: Vec<RlpItemTrace<F>>,
+    // to save memory we don't need this
+    // pub array_trace: RlcTrace<'v, F>,
+}
+
+
+#[derive(Clone, Debug)]
+pub struct RlpItemWitness<F: ScalarField> { // EDITING HERE ********
+    // NEED -- need enough to check that the segments have been copied honestly:
+    // i.e.:
+    // the length info
+    // the 
+    // prefix
+    // len_len
+    // len_cells (as array)
+    prefix: AssignedValue<F>, // value of the prefix
+    prefix_len: AssignedValue<F>,
+    len_len: AssignedValue<F>,
+    len_cells: Vec<AssignedValue<F>>,
+    max_len_len: usize,
+
+    pub item_len: AssignedValue<F>,
+    pub item_cells: Vec<AssignedValue<F>>,
+    max_item_len: usize,
+}
+
+#[derive(Clone, Debug)]
+pub struct RlpOfRlpTraceWitness<F: ScalarField> { 
+    // Do I also need... check whether it's a list or a string?
+    pub item_witness: Vec<RlpItemWitness<F>>,
+
+    pub len_len: AssignedValue<F>,
+    pub len_cells: Vec<AssignedValue<F>>,
+
+    pub rlp_len: AssignedValue<F>,
+    pub rlp_array: Vec<AssignedValue<F>>,
+}
+
+#[derive(Clone, Debug)]
+pub struct RlpItemTrace<F: ScalarField> {
+    pub prefix: AssignedValue<F>, // value of the prefix
+    pub prefix_len: AssignedValue<F>,
+    pub len_trace: RlcTrace<F>,
+    pub item_trace: RlcTrace<F>,
+}
+
 
 #[derive(Clone, Debug)]
 pub struct RlcGateConfig<F: ScalarField> {
@@ -269,6 +331,92 @@ impl<'range, F: ScalarField> RlpChip<'range, F> {
         let len_len = self.gate().mul(ctx, len_len, is_big);
 
         RlpArrayPrefixParsed { is_big, next_len, len_len }
+    }
+
+
+    pub fn parse_rlp_prefix(
+        &self,
+        ctx: &mut Context<F>,
+        prefix: AssignedValue<F>,
+    ) -> RlpPrefixParsed<F>{
+        let is_field = self.range.is_less_than(
+            ctx,
+            Existing(prefix),
+            Constant(self.gate().get_field_element(192)),
+            8,
+        );
+
+        let is_not_literal = self.range.is_less_than(
+            ctx,
+            Constant(self.gate().get_field_element(127)),
+            Existing(prefix),
+            8,
+        );
+
+        let field_prefix_shifted = self.gate().sub(
+            ctx, 
+            Existing(prefix),
+            Constant(self.gate().get_field_element(128)),
+        );
+
+        let array_prefix_shifted = self.gate().sub(
+            ctx, 
+            Existing(prefix),
+            Constant(self.gate().get_field_element(192)),
+        );
+
+        // If prefix < 192, this is prefix - 128; otherwise, prefix - 192
+        let prefix_shifted = self.gate().select(
+            ctx,
+            Existing(field_prefix_shifted),
+            Existing(array_prefix_shifted),
+            Existing(is_field),
+        );
+
+        // If prefix < 128, this is 0
+        // If 128 <= prefix < 192, this is prefix - 128
+        // If 192 <= prefix, this is prefix - 192
+        let prefix_shifted = self.gate().mul(
+            ctx,
+            Existing(prefix_shifted),
+            Existing(is_not_literal),
+        );
+
+        let is_big = self.range.is_less_than(
+            ctx,
+            Constant(self.gate().get_field_element(55)),
+            Existing(prefix_shifted),
+            8,
+        );
+
+        let len_len = self.gate().sub(
+            ctx,
+            Existing(prefix_shifted),
+            Constant(self.gate().get_field_element(55)),
+        );
+
+        let next_len = self.gate().select(
+            ctx,
+            Existing(len_len),
+            Existing(prefix_shifted),
+            Existing(is_big),
+        );
+
+        let len_len = self.gate().mul(
+            ctx,
+            Existing(len_len),
+            Existing(is_big),
+        );
+
+
+        RlpPrefixParsed { is_field: 
+            is_field,
+            is_not_literal,
+            is_big,
+            next_len,
+            len_len,
+        }
+
     }
 
     /// Given a full RLP encoding `rlp_cells` string, and the length in bytes of the length of the payload, `len_len`, parse the length of the payload.
@@ -625,4 +773,221 @@ impl<'range, F: ScalarField> RlpChip<'range, F> {
 
         RlpArrayTrace { len_trace, field_trace }
     }
+
+
+    pub fn decompose_rlp_of_rlp_phase0(
+        &self,
+        ctx: &mut Context<F>,
+        rlp_array: Vec<AssignedValue<F>>,
+        max_item_lens: &[usize],
+        is_variable_len: bool,
+    ) -> RlpOfRlpTraceWitness<F> {
+        //println!("Start decompose_rlp_of_rlp_phase0");
+
+
+        let max_rlp_array_len = rlp_array.len();
+        let max_len_len = max_rlp_len_len(max_rlp_array_len);
+
+        let prefix = rlp_array[0];
+        let prefix_parsed = self.parse_rlp_array_prefix(ctx, prefix);
+
+        let len_len = prefix_parsed.len_len;
+        self.range.check_less_than_safe(ctx, len_len, (max_len_len + 1) as u64);
+
+        let (len_cells, len_byte_val) = self.parse_rlp_len(ctx, &rlp_array, len_len, max_len_len);
+
+        let list_payload_len = self.gate().select(
+            ctx,
+            Existing(len_byte_val),
+            Existing(prefix_parsed.next_len),
+            Existing(prefix_parsed.is_big),
+        );
+        self.range.check_less_than_safe(
+            ctx,
+            list_payload_len,
+            (max_rlp_array_len - max_len_len) as u64,
+        );
+
+        // this is automatically <= max_rlp_array_len
+        let rlp_len = self
+            .gate()
+            .sum(ctx, [Constant(F::one()), Existing(len_len), Existing(list_payload_len)]);
+
+        let mut item_witness = Vec::with_capacity(max_item_lens.len());
+
+        let mut prefix_idx = self.gate().add(ctx, Constant(F::one()), Existing(len_len));
+        let mut running_max_len = max_len_len + 1; 
+
+        for &max_item_len in max_item_lens {
+            // compare lines 625-712
+            let mut prefix = self.gate().select_from_idx(
+                ctx,
+                rlp_array.iter().copied().take(running_max_len + 1),
+                prefix_idx,
+            );
+            let prefix_parsed = self.parse_rlp_prefix(ctx, prefix);
+
+            let mut len_len = prefix_parsed.len_len;
+            let max_item_len_len = max_rlp_len_len(max_item_len);
+            self.range.check_less_than_safe(ctx, len_len, (max_item_len_len + 1) as u64);
+            
+            let len_start_id = *prefix_parsed.is_not_literal.value() + prefix_idx.value();
+            let len_cells = witness_subarray(
+                ctx,
+                &rlp_array,
+                &len_start_id,
+                len_len.value(),
+                max_item_len_len,
+            );
+
+            let len_byte_val = evaluate_byte_array(ctx, self.gate(), &len_cells, len_len);
+
+
+            let mut item_len = self.gate().select(
+                ctx,
+                len_byte_val,
+                prefix_parsed.next_len,
+                prefix_parsed.is_big,
+            );
+
+            let mut prefix_idx_val = F::from(0u64); // to be simplified if possible
+            let mut item_len_val = F::from(0u64);
+            /*
+            prefix_idx.value().map(|x| {
+                prefix_idx_val = *x;
+            });
+            item_len.value().map(|x|  {
+                item_len_val = *x;
+            });
+            */
+            prefix_idx_val = *prefix_idx.value();
+            item_len_val = *item_len.value();
+            println!("This item starts at {:?} and has length {:?}", prefix_idx_val.get_lower_32(), item_len_val.get_lower_32());
+
+            self.range.check_less_than_safe(ctx, item_len, (max_item_len + 1) as u64);
+
+            let item_cells = witness_subarray(
+                ctx,
+                &rlp_array,
+                &(len_start_id + len_len.value()),
+                item_len.value(),
+                max_item_len,
+            );
+            running_max_len += 1 + max_item_len_len + max_item_len;
+
+            // prefix_len is either 0 or 1
+            let mut prefix_len = prefix_parsed.is_not_literal;
+
+            // here we need to handle is_variable_len
+
+            prefix = self.gate().mul(ctx, Existing(prefix), Existing(prefix_len));
+            prefix_idx = self.gate().sum(
+                ctx,
+                vec![
+                    Existing(prefix_idx),
+                    Existing(prefix_len),
+                    Existing(len_len),
+                    Existing(item_len),
+                ],
+            );
+
+            let witness = RlpItemWitness {
+                prefix,
+                prefix_len, // 0 or 1, depending whether it's literal
+                len_len,
+                len_cells, // have not constrained this copy
+                max_len_len,
+                item_len,
+                item_cells, // have not constrained this copy either
+                max_item_len,
+            };
+
+            item_witness.push(witness);
+        }
+
+        //println!("End decompose_rlp_of_rlp_phase0");
+
+
+        RlpOfRlpTraceWitness { item_witness, len_len, len_cells, rlp_len, rlp_array }
+
+    }
+
+
+    pub fn decompose_rlp_of_rlp_phase1(
+        &self,
+        (ctx_gate, ctx_rlc): RlcContextPair<F>,
+        rlp_witness: RlpOfRlpTraceWitness<F>,
+        _is_variable_len: bool,
+    ) -> RlpOfRlpTrace<F> {
+        //println!("Start decompose_rlp_of_rlp_phase1");
+
+        // TO VERIFY
+        // 1. parse_rlp_len -- gives len_cells from rlp_array and len_len
+        // 2. len_cells
+        // 3. item_cells
+
+        let RlpOfRlpTraceWitness { item_witness, len_len, len_cells, rlp_len, rlp_array } =
+            rlp_witness;
+        
+        let rlc = self.rlc();
+        let len_trace = rlc.compute_rlc((ctx_gate, ctx_rlc), self.gate(), len_cells, len_len);
+
+        let mut item_trace = Vec::with_capacity(item_witness.len());
+        for item_witness in item_witness {
+            let len_rlc = rlc.compute_rlc(
+                (ctx_gate, ctx_rlc),
+                self.gate(),
+                item_witness.len_cells,
+                item_witness.len_len,
+            );
+            let item_rlc = rlc.compute_rlc(
+                (ctx_gate, ctx_rlc),
+                self.gate(),
+                item_witness.item_cells,
+                item_witness.item_len,
+            );
+            item_trace.push(RlpItemTrace {  // need to define this
+                prefix: item_witness.prefix,
+                prefix_len: item_witness.prefix_len,
+                len_trace: len_rlc,
+                item_trace: item_rlc,
+            });
+        }
+
+
+        rlc.load_rlc_cache((ctx_gate, ctx_rlc), self.gate(), bit_length(rlp_array.len() as u64));
+
+        let prefix = rlp_array[0];
+        let one = ctx_gate.load_constant(F::one());
+        let rlp_rlc = rlc.compute_rlc((ctx_gate, ctx_rlc), self.gate(), rlp_array, rlp_len); 
+
+        let inputs = iter::empty()
+            .chain([
+                (prefix, one, 1),
+                (len_trace.rlc_val, len_trace.len, len_trace.max_len), 
+                            // or should this be... len_trace.max_len here and below??
+            ])
+            .chain(item_trace.iter().flat_map(|trace| {
+                [
+                    (trace.prefix, trace.prefix_len, 1),
+                    (trace.len_trace.rlc_val, trace.len_trace.len, trace.len_trace.max_len),
+                    (
+                        trace.item_trace.rlc_val,
+                        trace.item_trace.len,
+                        trace.item_trace.max_len,
+                    ),
+                ]
+            }));
+
+        rlc.constrain_rlc_concat(ctx_gate, self.gate(), inputs, (&rlp_rlc.rlc_val, &rlp_rlc.len));
+
+        //println!("End decompose_rlp_of_rlp_phase1");
+
+
+        RlpOfRlpTrace { len_trace, item_trace }
+
+        
+    }
+
+
 }

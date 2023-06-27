@@ -308,8 +308,25 @@ mod rlp {
         builder::{FnSynthesize, RlcThreadBuilder, RlpCircuitBuilder},
         *,
     };
-    use halo2_base::halo2_proofs::{dev::MockProver, halo2curves::bn256::Fr};
+    use halo2_base::halo2_proofs::{
+        dev::MockProver,
+        halo2curves::bn256::{Bn256, Fr, G1Affine},
+        plonk::{create_proof, keygen_pk, keygen_vk, verify_proof, Error},
+        poly::{
+            commitment::ParamsProver,
+            kzg::{
+                commitment::{KZGCommitmentScheme, ParamsKZG},
+                multiopen::{ProverSHPLONK, VerifierSHPLONK},
+                strategy::SingleStrategy,
+            },
+        },
+        transcript::{
+            Blake2bRead, Blake2bWrite, Challenge255, TranscriptReadBuffer,
+            TranscriptWriterBuffer,
+        },
+    };
     use hex::FromHex;
+    use rand::{rngs::StdRng, SeedableRng};
     use std::env::set_var;
     use test_log::test;
 
@@ -367,6 +384,34 @@ mod rlp {
                 chip.decompose_rlp_array_phase1(builder.rlc_ctx_pair(), witness, is_var_len);
             },
         );
+        if !prover {
+            circuit.config(DEGREE as usize, Some(6));
+        }
+        circuit
+    }
+
+    fn rlp_circuit<F: ScalarField>(
+        // should mimic rlp_list_circuit 30 lines above
+        mut builder: RlcThreadBuilder<F>,
+        encoded: Vec<u8>,
+        max_field_lens: &[usize],
+        is_var_len: bool,
+    ) -> RlpCircuitBuilder<F, impl FnSynthesize<F>> {
+        let prover = builder.witness_gen_only();
+        let ctx = builder.gate_builder.main(0);
+        let inputs = ctx.assign_witnesses(encoded.iter().map(|x| F::from(*x as u64)));
+        let range = RangeChip::default(8);
+        let chip = RlpChip::new(&range, None);
+        let witness = chip.decompose_rlp_of_rlp_phase0(ctx, inputs, max_field_lens, is_var_len);
+
+        let f = move |b: &mut RlcThreadBuilder<F>, rlc: &RlcChip<F>| {
+            let chip = RlpChip::new(&range, Some(rlc));
+            // closure captures `witness` variable
+            log::info!("phase 1 synthesize begin");
+            chip.decompose_rlp_of_rlp_phase1(b.rlc_ctx_pair(), witness, is_var_len);
+        };
+        let circuit = RlpCircuitBuilder::new(builder, None, f);
+        // auto-configure circuit if not in prover mode for convenience
         if !prover {
             circuit.config(DEGREE as usize, Some(6));
         }
@@ -440,4 +485,66 @@ mod rlp {
         let circuit = rlp_string_circuit(RlcThreadBuilder::<Fr>::mock(), input_bytes, 60);
         MockProver::run(k, &circuit, vec![]).unwrap().assert_satisfied();
     }
+
+    #[test]
+    pub fn test_prove_rlp_of_rlp_2() -> Result<(), Error> {
+        let k = DEGREE;
+        // ["nums", ["one", "two"], ["uno", "dos"]]
+        let input_bytes: Vec<u8> = vec![0xd7, 0x84, b'n', b'u', b'm', b's',
+            0xc8, 0x83, b'o', b'n', b'e', 0x83, b't', b'w', b'o',
+            0xc8, 0x83, b'u', b'n', b'o', 0x83, b'd', b'o', b's'];
+        let max_field_lens = vec![15, 9, 11];
+        let is_var_len = false;
+        
+        println!("Length of input is ... {:?}", input_bytes.len());
+        println!("Input string: {:?}", input_bytes);
+
+        let mut rng = StdRng::from_seed([0u8; 32]);
+        let params = ParamsKZG::<Bn256>::setup(k, &mut rng);
+        let circuit = rlp_circuit(
+            RlcThreadBuilder::keygen(), input_bytes.clone(), &max_field_lens, is_var_len
+        );
+
+
+
+        println!("vk gen started"); // 7:30-ish to here -- 11:23
+        let vk = keygen_vk(&params, &circuit)?;
+        println!("vk gen done");
+        let pk = keygen_pk(&params, vk, &circuit)?;
+        println!("pk gen done");
+        println!();
+        println!("==============STARTING PROOF GEN==================="); // 9:40 to here -- 13:20
+
+        drop(circuit);
+        let circuit = rlp_circuit(
+            RlcThreadBuilder::prover(), input_bytes.clone(), &max_field_lens, is_var_len
+        );
+
+
+        let mut transcript = Blake2bWrite::<_, _, Challenge255<_>>::init(vec![]);
+        create_proof::<
+            KZGCommitmentScheme<Bn256>,
+            ProverSHPLONK<'_, Bn256>,
+            Challenge255<G1Affine>,
+            _,
+            Blake2bWrite<Vec<u8>, G1Affine, Challenge255<G1Affine>>,
+            _,
+        >(&params, &pk, &[circuit], &[&[]], rng, &mut transcript)?;
+        let proof = transcript.finalize();
+        println!("proof gen done");
+        let verifier_params = params.verifier_params();
+        let strategy = SingleStrategy::new(verifier_params);
+        let mut transcript = Blake2bRead::<_, _, Challenge255<_>>::init(&proof[..]);
+        assert!(verify_proof::<
+            KZGCommitmentScheme<Bn256>,
+            VerifierSHPLONK<'_, Bn256>,
+            Challenge255<G1Affine>,
+            Blake2bRead<&[u8], G1Affine, Challenge255<G1Affine>>,
+            SingleStrategy<'_, Bn256>,
+        >(verifier_params, pk.get_vk(), strategy, &[&[]], &mut transcript)
+        .is_ok());
+        println!("verify done");
+        Ok(())
+    }
+
 }
