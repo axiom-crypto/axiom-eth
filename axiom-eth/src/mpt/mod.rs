@@ -2,12 +2,12 @@
 //!
 //! See https://hackmd.io/@axiom/ry35GZ4l3 for a technical walkthrough of circuit structure and logic
 use crate::{
-    keccak::{self, KeccakChip},
+    keccak::{self, ContainsParallelizableKeccakQueries, KeccakChip},
     rlp::{
         max_rlp_len_len,
         rlc::{
-            rlc_constrain_equal, rlc_is_equal, rlc_select, rlc_select_by_indicator,
-            rlc_select_from_idx, RlcContextPair, RlcTrace, RlcVar,
+            rlc_is_equal, rlc_select, rlc_select_by_indicator, rlc_select_from_idx, RlcContextPair,
+            RlcTrace, RlcVar,
         },
         RlpChip, RlpFieldTrace,
     },
@@ -24,6 +24,7 @@ use halo2_base::{
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use rlp::Rlp;
+use serde::{Deserialize, Serialize};
 use std::{
     cmp::max,
     iter::{self, once},
@@ -197,12 +198,9 @@ pub struct MPTFixedKeyProofWitness<F: Field> {
     pub key_hexs: AssignedNibbles<F>,
 }
 
-impl<F: Field> MPTFixedKeyProofWitness<F> {
-    /// Shifts all keccak query indices by `shift`. This is necessary when
-    /// joining parallel (multi-threaded) keccak chips into one.
-    ///
-    /// Currently all indices are with respect to `keccak.var_len_queries` (see [`EthChip::mpt_hash_phase0`]).
-    pub fn shift_query_indices(&mut self, shift: usize) {
+impl<F: Field> ContainsParallelizableKeccakQueries for MPTFixedKeyProofWitness<F> {
+    // Currently all indices are with respect to `keccak.var_len_queries` (see `EthChip::mpt_hash_phase0`).
+    fn shift_query_indices(&mut self, _: usize, shift: usize) {
         self.leaf_parsed.hash_query_idx += shift;
         for node in self.nodes.iter_mut() {
             node.ext.hash_query_idx += shift;
@@ -211,7 +209,7 @@ impl<F: Field> MPTFixedKeyProofWitness<F> {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Hash, Serialize, Deserialize)]
 /// The pre-assigned inputs for the MPT fixed key proof
 pub struct MPTFixedKeyInput {
     // claim specification: (path, value)
@@ -434,7 +432,7 @@ impl<'chip, F: Field> EthChip<'chip, F> {
         let (max_field_bytes, max_ext_bytes) = max_ext_lens(max_key_bytes);
         let max_branch_bytes = MAX_BRANCH_LENS.1;
         let max_ext_bytes = max(max_ext_bytes, max_branch_bytes);
-        debug_assert_eq!(ext_bytes.len(), max_ext_bytes);
+        assert_eq!(ext_bytes.len(), max_ext_bytes);
 
         let rlp_witness =
             self.rlp.decompose_rlp_array_phase0(ctx, ext_bytes, &max_field_bytes, false);
@@ -571,7 +569,7 @@ impl<'chip, F: Field> EthChip<'chip, F> {
             .nodes
             .into_iter()
             .map(|node| {
-                debug_assert_eq!(node.rlp_bytes.len(), node_max_byte_len);
+                assert_eq!(node.rlp_bytes.len(), node_max_byte_len);
                 let (ext_in, branch_in): (AssignedBytes<F>, AssignedBytes<F>) = node
                     .rlp_bytes
                     .iter()
@@ -599,7 +597,7 @@ impl<'chip, F: Field> EthChip<'chip, F> {
         // assert to avoid capacity checks?
         assert_eq!(proof.key_frag.len(), max_depth);
         for (idx, key_frag) in proof.key_frag.iter().enumerate() {
-            debug_assert_eq!(key_frag.nibbles.len(), 2 * key_byte_len);
+            assert_eq!(key_frag.nibbles.len(), 2 * key_byte_len);
             let leaf_path_bytes = hex_prefix_encode(
                 ctx,
                 self.gate(),
@@ -812,8 +810,11 @@ impl<'chip, F: Field> EthChip<'chip, F> {
                 witness.value_bytes,
                 witness.value_byte_len,
             );
-            // value doesn't matter if slot is empty; by default we will make value = 0 and leaf.value = 0 in that case
-            rlc_constrain_equal(ctx_gate, &value_rlc_trace, &leaf_parsed.value.field_trace);
+            // value doesn't matter if slot is empty; by default we will make leaf.value = 0 in that case
+            let value_equals_leaf =
+                rlc_is_equal(ctx_gate, self.gate(), value_rlc_trace, leaf_parsed.value.field_trace);
+            let value_check = self.gate().or(ctx_gate, value_equals_leaf, slot_is_empty);
+            self.gate().assert_is_const(ctx_gate, &value_check, &F::one());
         }
 
         // if proof_is_empty, then root_hash = keccak(rlp("")) = keccak(0x80) = 0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421
@@ -957,6 +958,8 @@ impl<'chip, F: Field> EthChip<'chip, F> {
     */
 }
 
+/// # Assumptions
+/// * `is_odd` is either 0 or 1
 pub fn hex_prefix_encode_first<F: ScalarField>(
     ctx: &mut Context<F>,
     gate: &impl GateInstructions<F>,
@@ -992,6 +995,8 @@ pub fn hex_prefix_encode_first<F: ScalarField>(
     }
 }
 
+/// # Assumptions
+/// * `is_odd` is either 0 or 1
 pub fn hex_prefix_encode<F: ScalarField>(
     ctx: &mut Context<F>,
     gate: &impl GateInstructions<F>,
@@ -1124,7 +1129,7 @@ impl MPTFixedKeyInput {
         process_node(&leaf);
         leaf.resize(max_leaf_bytes, 0);
 
-        // if slot_is_empty, we make modify key_frag so it still concatenates to `path`
+        // if slot_is_empty, we modify key_frag so it still concatenates to `path`
         if slot_is_empty {
             // remove just added leaf frag
             key_frag.pop().unwrap();

@@ -1,15 +1,35 @@
 {
-  "aggregation": {
-    "strategy": "Simple",
+  "params": {
     "degree": 22,
-    "num_advice": [93,1],
-    "num_lookup_advice": [1,0],
+    "num_rlc_columns": 1,
+    "num_range_advice": [
+      7,
+      0,
+      0
+    ],
+    "num_lookup_advice": [
+      1,
+      0,
+      0
+    ],
     "num_fixed": 1,
-    "lookup_bits": 21,
-    "limb_bits": 88,
-    "num_limbs": 3
+    "unusable_rows": 109,
+    "keccak_rows_per_round": 50,
+    "lookup_bits": 21
   },
-  "num_rlc_columns": 1,
-  "unusable_rows": 109,
-  "keccak_rows_per_round": 50
+  "break_points": {
+    "gate": [
+      [
+        4194194,
+        4194192,
+        4194194,
+        4194194,
+        4194192,
+        4194192
+      ],
+      [],
+      []
+    ],
+    "rlc": []
+  }
 }

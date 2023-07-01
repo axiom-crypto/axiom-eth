@@ -1,11 +1,5 @@
-use std::{
-    env::{set_var, var},
-    mem,
-};
+use std::mem;
 
-use crate::{block_header::EthBlockHeaderChainInstance, Field};
-#[cfg(feature = "display")]
-use ark_std::{end_timer, start_timer};
 use halo2_base::{
     gates::{
         builder::{CircuitBuilderStage, MultiPhaseThreadBreakPoints},
@@ -13,7 +7,7 @@ use halo2_base::{
     },
     halo2_proofs::{
         halo2curves::bn256::{Bn256, Fr},
-        poly::{commitment::Params, kzg::commitment::ParamsKZG},
+        poly::kzg::commitment::ParamsKZG,
     },
     utils::ScalarField,
     AssignedValue, Context,
@@ -21,6 +15,8 @@ use halo2_base::{
 };
 use itertools::Itertools;
 use snark_verifier_sdk::{halo2::aggregation::AggregationCircuit, Snark, LIMBS, SHPLONK};
+
+use crate::{AggregationPreCircuit, Field};
 
 mod final_merkle;
 pub use final_merkle::*;
@@ -34,8 +30,7 @@ pub struct EthBlockHeaderChainAggregationCircuit {
     pub initial_depth: usize,
     // because the aggregation circuit doesn't have a keccak chip, in the mountain range
     // vector we will store the `2^{max_depth - initial_depth}` "new roots" as well as the length `initial_depth` mountain range tail, which determines the smallest entries in the mountain range.
-    #[cfg(debug_assertions)]
-    pub chain_instance: EthBlockHeaderChainInstance,
+    // chain_instance: EthBlockHeaderChainInstance, // only needed for testing
 }
 
 impl EthBlockHeaderChainAggregationCircuit {
@@ -55,9 +50,9 @@ impl EthBlockHeaderChainAggregationCircuit {
         assert!(max_depth > initial_depth);
         assert!(num_blocks <= 1 << max_depth);
 
-        #[cfg(debug_assertions)]
+        /*
+        // OLD, no longer needed except for debugging
         let chain_instance = {
-            // OLD, no longer needed except for debugging
             // basically the same logic as `join_previous_instances` except in native rust
             let instance_start_idx = usize::from(initial_depth + 1 != max_depth) * 4 * LIMBS;
             let [instance0, instance1] = [0, 1].map(|i| {
@@ -100,21 +95,25 @@ impl EthBlockHeaderChainAggregationCircuit {
                 end_block_number: instance0.start_block_number + num_blocks - 1,
                 merkle_mountain_range: roots,
             }
-        };
+        };*/
         Self {
             snarks,
             num_blocks,
             max_depth,
             initial_depth,
-            #[cfg(debug_assertions)]
-            chain_instance,
+            // chain_instance,
         }
     }
 
-    /// `params` should be the universal trusted setup for the present aggregation circuit.
-    /// We assume the trusted setup for the previous SNARKs is compatible with `params` in the sense that
-    /// the generator point and toxic waste `tau` are the same.
-    pub fn create_circuit(
+    /// The number of instances NOT INCLUDING the accumulator
+    pub fn get_num_instance(max_depth: usize, initial_depth: usize) -> usize {
+        debug_assert!(max_depth >= initial_depth);
+        5 + 2 * ((1 << (max_depth - initial_depth)) + initial_depth)
+    }
+}
+
+impl AggregationPreCircuit for EthBlockHeaderChainAggregationCircuit {
+    fn create(
         self,
         stage: CircuitBuilderStage,
         break_points: Option<MultiPhaseThreadBreakPoints>,
@@ -124,10 +123,9 @@ impl EthBlockHeaderChainAggregationCircuit {
         let num_blocks = self.num_blocks;
         let max_depth = self.max_depth;
         let initial_depth = self.initial_depth;
-        #[cfg(feature = "display")]
-        let timer = start_timer!(|| {
-            format!("New EthBlockHeaderChainAggregationCircuit | num_blocks: {num_blocks} | max_depth: {max_depth} | initial_depth: {initial_depth}")
-        });
+        log::info!(
+            "New EthBlockHeaderChainAggregationCircuit | num_blocks: {num_blocks} | max_depth: {max_depth} | initial_depth: {initial_depth}"
+        );
         let mut aggregation = AggregationCircuit::new::<SHPLONK>(
             stage,
             break_points,
@@ -151,26 +149,8 @@ impl EthBlockHeaderChainAggregationCircuit {
         );
         drop(builder);
         aggregation.inner.assigned_instances.append(&mut new_instances);
-        #[cfg(feature = "display")]
-        end_timer!(timer);
 
-        #[cfg(not(feature = "production"))]
-        match stage {
-            CircuitBuilderStage::Prover => {}
-            _ => {
-                let minimum_rows =
-                    var("UNUSABLE_ROWS").map(|s| s.parse().unwrap_or(10)).unwrap_or(10);
-                set_var("LOOKUP_BITS", lookup_bits.to_string());
-                aggregation.config(params.k(), Some(minimum_rows));
-            }
-        }
         aggregation
-    }
-
-    /// The number of instances NOT INCLUDING the accumulator
-    pub fn get_num_instance(max_depth: usize, initial_depth: usize) -> usize {
-        debug_assert!(max_depth >= initial_depth);
-        5 + 2 * ((1 << (max_depth - initial_depth)) + initial_depth)
     }
 }
 

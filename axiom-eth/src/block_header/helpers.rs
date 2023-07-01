@@ -5,15 +5,15 @@ use super::{
     EthBlockHeaderChainCircuit,
 };
 use crate::{
-    rlp::builder::RlcThreadBuilder,
     util::{
         circuit::{AnyCircuit, PinnableCircuit},
         circuit::{PreCircuit, PublicAggregationCircuit},
         scheduler::{self, EthScheduler, Scheduler},
         AggregationConfigPinning, EthConfigPinning, Halo2ConfigPinning,
     },
-    Network,
+    AggregationPreCircuit, Network,
 };
+use any_circuit_derive::AnyCircuit;
 use core::cmp::min;
 use halo2_base::{
     gates::builder::CircuitBuilderStage,
@@ -90,6 +90,26 @@ impl CircuitType {
     }
 }
 
+impl scheduler::CircuitType for CircuitType {
+    fn name(&self) -> String {
+        format!("{}{}", self.fname_prefix(), self.fname_suffix())
+    }
+
+    fn get_degree_from_pinning(&self, path: impl AsRef<Path>) -> u32 {
+        let CircuitType { network: _, depth, initial_depth, finality } = self;
+        if depth == initial_depth {
+            EthConfigPinning::from_path(path).degree()
+        } else {
+            match finality {
+                Finality::None | Finality::Evm(_) => {
+                    AggregationConfigPinning::from_path(path).degree()
+                }
+                Finality::Merkle => EthConfigPinning::from_path(path).degree(),
+            }
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct Task {
     pub start: u32,
@@ -109,9 +129,7 @@ impl scheduler::Task for Task {
     fn circuit_type(&self) -> Self::CircuitType {
         self.circuit_type
     }
-    fn type_name(circuit_type: Self::CircuitType) -> String {
-        format!("{}{}", circuit_type.fname_prefix(), circuit_type.fname_suffix())
-    }
+
     fn name(&self) -> String {
         format!(
             "{}_{:06x}_{:06x}{}",
@@ -140,9 +158,9 @@ impl scheduler::Task for Task {
 
 /// The public/private inputs for various circuits.
 // This is an enum of `PreCircuit`s.
-// We implement `AnyCircuit` for `CircuitRouter` by passing through the implementations from each enum variant. TODO: use procedural macro for this (enum_dispatch does not quite work, not sure about enum_delegate)
+// We implement `AnyCircuit` for `CircuitRouter` by passing through the implementations from each enum variant using a procedural macro.
 // This is because Rust traits do not allow a single type to output different kinds of `PreCircuit`s.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, AnyCircuit)]
 pub enum CircuitRouter {
     Initial(EthBlockHeaderChainCircuit<Fr>),
     Intermediate(EthBlockHeaderChainAggregationCircuit),
@@ -155,26 +173,6 @@ pub type BlockHeaderScheduler = EthScheduler<Task>;
 impl Scheduler for BlockHeaderScheduler {
     type Task = Task;
     type CircuitRouter = CircuitRouter;
-
-    fn get_degree(&self, circuit_type: CircuitType) -> u32 {
-        if let Some(k) = self.degree.read().unwrap().get(&circuit_type) {
-            return *k;
-        }
-        let path = self.pinning_path(circuit_type);
-        let CircuitType { network: _, depth, initial_depth, finality } = circuit_type;
-        let k = if depth == initial_depth {
-            EthConfigPinning::from_path(path).params.degree
-        } else {
-            match finality {
-                Finality::None | Finality::Evm(_) => {
-                    AggregationConfigPinning::from_path(path).params.degree
-                }
-                Finality::Merkle => EthConfigPinning::from_path(path).params.degree,
-            }
-        };
-        self.degree.write().unwrap().insert(circuit_type, k);
-        k
-    }
 
     fn get_circuit(&self, task: Task, mut snarks: Vec<Snark>) -> CircuitRouter {
         let Task { start, end, circuit_type } = task;
@@ -219,31 +217,12 @@ impl Scheduler for BlockHeaderScheduler {
                 }
                 Finality::Evm(_) => {
                     assert_eq!(snarks.len(), 1); // currently just passthrough
-                    CircuitRouter::ForEvm(PublicAggregationCircuit {
-                        snarks,
-                        has_prev_accumulators: true,
-                    })
+                    CircuitRouter::ForEvm(PublicAggregationCircuit::new(
+                        snarks.into_iter().map(|snark| (snark, true)).collect(),
+                    ))
                 }
             }
         }
-    }
-}
-
-impl PreCircuit for EthBlockHeaderChainCircuit<Fr> {
-    type Pinning = EthConfigPinning;
-
-    fn create_circuit(
-        self,
-        stage: CircuitBuilderStage,
-        pinning: Option<Self::Pinning>,
-        _: &ParamsKZG<Bn256>,
-    ) -> impl PinnableCircuit<Fr> {
-        let builder = match stage {
-            CircuitBuilderStage::Prover => RlcThreadBuilder::new(true),
-            _ => RlcThreadBuilder::new(false),
-        };
-        let break_points = pinning.map(|p| p.break_points());
-        EthBlockHeaderChainCircuit::create_circuit(self, builder, break_points)
     }
 }
 
@@ -256,15 +235,14 @@ impl PreCircuit for EthBlockHeaderChainAggregationCircuit {
         pinning: Option<Self::Pinning>,
         params: &ParamsKZG<Bn256>,
     ) -> impl PinnableCircuit<Fr> {
-        let lookup_bits = var("LOOKUP_BITS").expect("LOOKUP_BITS is not set").parse().unwrap();
+        // look for lookup_bits either from pinning, if available, or from env var
+        let lookup_bits = pinning
+            .as_ref()
+            .map(|p| p.params.lookup_bits)
+            .or_else(|| var("LOOKUP_BITS").map(|v| v.parse().unwrap()).ok())
+            .expect("LOOKUP_BITS is not set");
         let break_points = pinning.map(|p| p.break_points());
-        EthBlockHeaderChainAggregationCircuit::create_circuit(
-            self,
-            stage,
-            break_points,
-            lookup_bits,
-            params,
-        )
+        AggregationPreCircuit::create_circuit(self, stage, break_points, lookup_bits, params)
     }
 }
 
@@ -277,7 +255,12 @@ impl PreCircuit for EthBlockHeaderChainFinalAggregationCircuit {
         pinning: Option<Self::Pinning>,
         params: &ParamsKZG<Bn256>,
     ) -> impl PinnableCircuit<Fr> {
-        let lookup_bits = var("LOOKUP_BITS").expect("LOOKUP_BITS is not set").parse().unwrap();
+        // look for lookup_bits either from pinning, if available, or from env var
+        let lookup_bits = pinning
+            .as_ref()
+            .map(|p| p.params.lookup_bits.unwrap())
+            .or_else(|| var("LOOKUP_BITS").map(|v| v.parse().unwrap()).ok())
+            .expect("LOOKUP_BITS is not set");
         let break_points = pinning.map(|p| p.break_points());
         EthBlockHeaderChainFinalAggregationCircuit::create_circuit(
             self,
@@ -286,97 +269,5 @@ impl PreCircuit for EthBlockHeaderChainFinalAggregationCircuit {
             lookup_bits,
             params,
         )
-    }
-}
-
-// just copy/paste.. cannot find better way right now
-impl AnyCircuit for CircuitRouter {
-    fn read_or_create_pk(
-        self,
-        params: &ParamsKZG<Bn256>,
-        pk_path: impl AsRef<Path>,
-        pinning_path: impl AsRef<Path>,
-        read_only: bool,
-    ) -> ProvingKey<G1Affine> {
-        // does almost the same thing for each circuit type; don't know how to get around this with rust
-        match self {
-            Self::Initial(pre_circuit) => {
-                pre_circuit.read_or_create_pk(params, pk_path, pinning_path, read_only)
-            }
-            Self::Intermediate(pre_circuit) => {
-                pre_circuit.read_or_create_pk(params, pk_path, pinning_path, read_only)
-            }
-            Self::Final(pre_circuit) => {
-                pre_circuit.read_or_create_pk(params, pk_path, pinning_path, read_only)
-            }
-            Self::ForEvm(pre_circuit) => {
-                pre_circuit.read_or_create_pk(params, pk_path, pinning_path, read_only)
-            }
-        }
-    }
-
-    fn gen_snark_shplonk(
-        self,
-        params: &ParamsKZG<Bn256>,
-        pk: &ProvingKey<G1Affine>,
-        pinning_path: impl AsRef<Path>,
-        path: Option<impl AsRef<Path>>,
-    ) -> Snark {
-        match self {
-            Self::Initial(pre_circuit) => {
-                pre_circuit.gen_snark_shplonk(params, pk, pinning_path, path)
-            }
-            Self::Intermediate(pre_circuit) => {
-                pre_circuit.gen_snark_shplonk(params, pk, pinning_path, path)
-            }
-            Self::Final(pre_circuit) => {
-                pre_circuit.gen_snark_shplonk(params, pk, pinning_path, path)
-            }
-            Self::ForEvm(pre_circuit) => {
-                pre_circuit.gen_snark_shplonk(params, pk, pinning_path, path)
-            }
-        }
-    }
-
-    fn gen_evm_verifier_shplonk(
-        self,
-        params: &ParamsKZG<Bn256>,
-        pk: &ProvingKey<G1Affine>,
-        yul_path: impl AsRef<Path>,
-    ) -> Vec<u8> {
-        match self {
-            Self::Initial(pre_circuit) => {
-                pre_circuit.gen_evm_verifier_shplonk(params, pk, yul_path)
-            }
-            Self::Intermediate(pre_circuit) => {
-                pre_circuit.gen_evm_verifier_shplonk(params, pk, yul_path)
-            }
-            Self::Final(pre_circuit) => pre_circuit.gen_evm_verifier_shplonk(params, pk, yul_path),
-            Self::ForEvm(pre_circuit) => pre_circuit.gen_evm_verifier_shplonk(params, pk, yul_path),
-        }
-    }
-
-    fn gen_calldata(
-        self,
-        params: &ParamsKZG<Bn256>,
-        pk: &ProvingKey<G1Affine>,
-        pinning_path: impl AsRef<Path>,
-        path: impl AsRef<Path>,
-        deployment_code: Option<Vec<u8>>,
-    ) -> String {
-        match self {
-            Self::Initial(pre_circuit) => {
-                pre_circuit.gen_calldata(params, pk, pinning_path, path, deployment_code)
-            }
-            Self::Intermediate(pre_circuit) => {
-                pre_circuit.gen_calldata(params, pk, pinning_path, path, deployment_code)
-            }
-            Self::Final(pre_circuit) => {
-                pre_circuit.gen_calldata(params, pk, pinning_path, path, deployment_code)
-            }
-            Self::ForEvm(pre_circuit) => {
-                pre_circuit.gen_calldata(params, pk, pinning_path, path, deployment_code)
-            }
-        }
     }
 }

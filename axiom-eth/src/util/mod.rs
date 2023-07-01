@@ -12,7 +12,7 @@ use halo2_base::{
     },
     utils::{bit_length, decompose, decompose_fe_to_u64_limbs, BigPrimeField, ScalarField},
     AssignedValue, Context,
-    QuantumCell::{Constant, Witness},
+    QuantumCell::{Constant, Existing, Witness},
 };
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
@@ -31,7 +31,9 @@ pub mod scheduler;
 
 pub(crate) const NUM_BYTES_IN_U128: usize = 16;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+pub type AssignedH256<F> = [AssignedValue<F>; 2]; // H256 as hi-lo (u128, u128)
+
+#[derive(Default, Clone, Debug, Serialize, Deserialize)]
 pub struct EthConfigParams {
     pub degree: u32,
     // number of SecondPhase advice columns used in RlcConfig
@@ -52,23 +54,6 @@ impl EthConfigParams {
     pub fn from_path<P: AsRef<Path>>(path: P) -> Self {
         serde_json::from_reader(File::open(&path).expect("path does not exist")).unwrap()
     }
-    /* MAYBE DELETE
-    pub fn get_header() -> Self {
-        let path =
-            var("BLOCK_HEADER_CONFIG").unwrap_or_else(|_| "configs/block_header.json".to_string());
-        serde_json::from_reader(
-            File::open(&path).unwrap_or_else(|e| panic!("{path} does not exist. {e:?}")),
-        )
-        .unwrap()
-    }
-    pub fn get_storage() -> Self {
-        let path = var("STORAGE_CONFIG").unwrap_or_else(|_| "configs/storage.json".to_string());
-        serde_json::from_reader(
-            File::open(&path).unwrap_or_else(|e| panic!("{path} does not exist. {e:?}")),
-        )
-        .unwrap()
-    }
-    */
 }
 
 pub trait Halo2ConfigPinning: Serialize {
@@ -85,7 +70,7 @@ pub trait Halo2ConfigPinning: Serialize {
     fn degree(&self) -> u32;
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Default, Clone, Debug, Serialize, Deserialize)]
 pub struct EthConfigPinning {
     pub params: EthConfigParams,
     pub break_points: RlcThreadBreakPoints,
@@ -182,15 +167,13 @@ impl Halo2ConfigPinning for AggregationConfigPinning {
     }
 }
 
-pub type AssignedH256<F> = [AssignedValue<F>; 2]; // H256 as hi-lo (u128, u128)
-
 pub fn get_merkle_mountain_range(leaves: &[H256], max_depth: usize) -> Vec<H256> {
     let num_leaves = leaves.len();
     let mut merkle_roots = Vec::with_capacity(max_depth + 1);
     let mut start_idx = 0;
     for depth in (0..max_depth + 1).rev() {
         if (num_leaves >> depth) & 1 == 1 {
-            merkle_roots.push(hash_tree_root(&leaves[start_idx..start_idx + (1 << depth)]));
+            merkle_roots.push(h256_tree_root(&leaves[start_idx..start_idx + (1 << depth)]));
             start_idx += 1 << depth;
         } else {
             merkle_roots.push(H256::zero());
@@ -199,23 +182,28 @@ pub fn get_merkle_mountain_range(leaves: &[H256], max_depth: usize) -> Vec<H256>
     merkle_roots
 }
 
-pub fn hash_tree_root(leaves: &[H256]) -> H256 {
+/// # Assumptions
+/// * `leaves` should not be empty
+pub fn h256_tree_root(leaves: &[H256]) -> H256 {
+    assert!(!leaves.is_empty(), "leaves should not be empty");
     let depth = leaves.len().ilog2();
     assert_eq!(leaves.len(), 1 << depth);
     if depth == 0 {
         return leaves[0];
     }
-    let mut hash_bytes = leaves
-        .chunks(2)
-        .map(|pair| keccak256([pair[0].as_bytes(), pair[1].as_bytes()].concat()))
-        .collect_vec();
-    for d in (0..depth - 1).rev() {
+    keccak256_tree_root(leaves.iter().map(|leaf| leaf.as_bytes().to_vec()).collect())
+}
+
+pub fn keccak256_tree_root(mut leaves: Vec<Vec<u8>>) -> H256 {
+    assert!(leaves.len() > 1);
+    let depth = leaves.len().ilog2();
+    assert_eq!(leaves.len(), 1 << depth, "leaves.len() must be a power of 2");
+    for d in (0..depth).rev() {
         for i in 0..(1 << d) {
-            hash_bytes[i] =
-                keccak256([&hash_bytes[2 * i][..], &hash_bytes[2 * i + 1][..]].concat());
+            leaves[i] = keccak256([&leaves[2 * i][..], &leaves[2 * i + 1][..]].concat()).to_vec();
         }
     }
-    H256::from_slice(&hash_bytes[0])
+    H256::from_slice(&leaves[0])
 }
 
 pub fn u256_to_bytes32_be(input: &U256) -> Vec<u8> {
@@ -225,25 +213,25 @@ pub fn u256_to_bytes32_be(input: &U256) -> Vec<u8> {
 }
 
 // Field is has PrimeField<Repr = [u8; 32]>
-/// Takes hash as bytes32 and returns (hash[..16], hash[16..]) represented as big endian numbers in the prime field
+/// Takes `hash` as `bytes32` and returns `(hash[..16], hash[16..])` represented as big endian numbers in the prime field
 pub fn encode_h256_to_field<F: Field>(hash: &H256) -> [F; 2] {
     let mut bytes = hash.as_bytes().to_vec();
     bytes.reverse();
     // repr is in little endian
     let mut repr = [0u8; 32];
     repr[..16].copy_from_slice(&bytes[16..]);
-    let val1 = F::from_repr(repr).unwrap();
+    let val1 = F::from_bytes_le(&repr);
     let mut repr = [0u8; 32];
     repr[..16].copy_from_slice(&bytes[..16]);
-    let val2 = F::from_repr(repr).unwrap();
+    let val2 = F::from_bytes_le(&repr);
     [val1, val2]
 }
 
 pub fn decode_field_to_h256<F: Field>(fe: &[F]) -> H256 {
     assert_eq!(fe.len(), 2);
     let mut bytes = [0u8; 32];
-    bytes[..16].copy_from_slice(&fe[1].to_repr()[..16]);
-    bytes[16..].copy_from_slice(&fe[0].to_repr()[..16]);
+    bytes[..16].copy_from_slice(&fe[1].to_bytes_le()[..16]);
+    bytes[16..].copy_from_slice(&fe[0].to_bytes_le()[..16]);
     bytes.reverse();
     H256(bytes)
 }
@@ -255,18 +243,18 @@ pub fn encode_u256_to_field<F: Field>(input: &U256) -> [F; 2] {
     // repr is in little endian
     let mut repr = [0u8; 32];
     repr[..16].copy_from_slice(&bytes[16..]);
-    let val1 = F::from_repr(repr).unwrap();
+    let val1 = F::from_bytes_le(&repr);
     let mut repr = [0u8; 32];
     repr[..16].copy_from_slice(&bytes[..16]);
-    let val2 = F::from_repr(repr).unwrap();
+    let val2 = F::from_bytes_le(&repr);
     [val1, val2]
 }
 
 pub fn decode_field_to_u256<F: Field>(fe: &[F]) -> U256 {
     assert_eq!(fe.len(), 2);
     let mut bytes = [0u8; 32];
-    bytes[16..].copy_from_slice(&fe[0].to_repr()[..16]);
-    bytes[..16].copy_from_slice(&fe[1].to_repr()[..16]);
+    bytes[16..].copy_from_slice(&fe[0].to_bytes_le()[..16]);
+    bytes[..16].copy_from_slice(&fe[1].to_bytes_le()[..16]);
     U256::from_little_endian(&bytes)
 }
 
@@ -275,17 +263,66 @@ pub fn encode_addr_to_field<F: Field>(input: &Address) -> F {
     bytes.reverse();
     let mut repr = [0u8; 32];
     repr[..20].copy_from_slice(&bytes);
-    F::from_repr(repr).unwrap()
+    F::from_bytes_le(&repr)
 }
 
 pub fn decode_field_to_addr<F: Field>(fe: &F) -> Address {
     let mut bytes = [0u8; 20];
-    bytes.copy_from_slice(&fe.to_repr()[..20]);
+    bytes.copy_from_slice(&fe.to_bytes_le()[..20]);
     bytes.reverse();
     Address::from_slice(&bytes)
 }
 
 // circuit utils:
+
+/// Loads boolean `val` as witness and asserts it is a bit.
+pub fn load_bool<F: ScalarField>(
+    ctx: &mut Context<F>,
+    gate: &impl GateInstructions<F>,
+    val: bool,
+) -> AssignedValue<F> {
+    let bit = ctx.load_witness(F::from(val));
+    gate.assert_bit(ctx, bit);
+    bit
+}
+
+/// Enforces `lhs` equals `rhs` only if `cond` is true.
+///
+/// Assumes that `cond` is a bit.
+pub fn enforce_conditional_equality<F: ScalarField>(
+    ctx: &mut Context<F>,
+    gate: &impl GateInstructions<F>,
+    lhs: AssignedValue<F>,
+    rhs: AssignedValue<F>,
+    cond: AssignedValue<F>,
+) {
+    let [lhs, rhs] = [lhs, rhs].map(|x| gate.mul(ctx, x, cond));
+    ctx.constrain_equal(&lhs, &rhs);
+}
+
+/// `array2d` is an array of fixed length arrays.
+/// Assumes:
+/// * `array2d[i].len() = array2d[j].len()` for all `i,j`.
+/// * the values of `indicator` are boolean and that `indicator` has at most one `1` bit.
+/// * the lengths of `array2d` and `indicator` are the same.
+///
+/// Returns the "dot product" of `array2d` with `indicator` as a fixed length (1d) array of length `array2d[0].len()`.
+pub fn select_array_by_indicator<F: ScalarField>(
+    ctx: &mut Context<F>,
+    gate: &impl GateInstructions<F>,
+    array2d: &[impl AsRef<[AssignedValue<F>]>],
+    indicator: &[AssignedValue<F>],
+) -> Vec<AssignedValue<F>> {
+    (0..array2d[0].as_ref().len())
+        .map(|j| {
+            gate.select_by_indicator(
+                ctx,
+                array2d.iter().map(|array_i| array_i.as_ref()[j]),
+                indicator.iter().copied(),
+            )
+        })
+        .collect()
+}
 
 /// Assumes that `bytes` have witnesses that are bytes.
 pub fn bytes_be_to_u128<F: BigPrimeField>(
@@ -302,6 +339,7 @@ pub(crate) fn limbs_be_to_u128<F: BigPrimeField>(
     limbs: &[AssignedValue<F>],
     limb_bits: usize,
 ) -> Vec<AssignedValue<F>> {
+    assert!(!limbs.is_empty(), "limbs must not be empty");
     assert_eq!(128 % limb_bits, 0);
     limbs
         .chunks(128 / limb_bits)
@@ -315,7 +353,9 @@ pub(crate) fn limbs_be_to_u128<F: BigPrimeField>(
         .collect_vec()
 }
 
-// `num` in u64
+/// Decomposes `num` into `num_bytes` bytes in big endian and constrains the decomposition holds.
+///
+/// Assumes `num` has value in `u64`.
 pub fn num_to_bytes_be<F: ScalarField>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
@@ -356,21 +396,32 @@ pub fn bytes_be_var_to_fixed<F: ScalarField>(
 
     // If `bytes` is an RLP field, then `len <= bytes.len()` was already checked during `decompose_rlp_array_phase0` so we don't need to do it again:
     // range.range_check(ctx, len, bit_length(bytes.len() as u64));
-
-    // TODO: the indicator for byte_idx can maybe be created from indicator for len just by shifts and 0 pads since out_len and idx are not witnesses, but this function isn't used that often so not optimizing for now
-    // out[idx] = len >= out_len - idx ? bytes[idx + len - out_len] : 0
-    (0..out_len)
-        .map(|idx| {
-            let byte_idx =
-                gate.sub(ctx, len, Constant(gate.get_field_element((out_len - idx) as u64)));
-            // If `len - (out_len - idx) < 0` then the `F` value will be >= `bytes.len()` provided that `out_len` is not too big -- namely `bit_length(out_len) <= F::CAPACITY - 1`
-            // Thus select_from_idx at idx < 0 will return 0
-            gate.select_from_idx(ctx, bytes.iter().copied(), byte_idx)
-        })
-        .collect()
+    let mut padded_bytes = bytes.to_vec();
+    padded_bytes.resize(out_len, padded_bytes[0]);
+    // We use a barrel shifter to shift `bytes` to the right by `out_len - len` bits.
+    let shift = gate.sub(ctx, Constant(gate.get_field_element(out_len as u64)), len);
+    let shift_bits = gate.num_to_bits(ctx, shift, bit_length(out_len as u64));
+    for (i, shift_bit) in shift_bits.into_iter().enumerate() {
+        let shifted_bytes = (0..out_len)
+            .map(|j| {
+                if j >= (1 << i) {
+                    Existing(padded_bytes[j - (1 << i)])
+                } else {
+                    Constant(F::zero())
+                }
+            })
+            .collect_vec();
+        padded_bytes = padded_bytes
+            .into_iter()
+            .zip(shifted_bytes)
+            .map(|(noshift, shift)| gate.select(ctx, shift, noshift, shift_bit))
+            .collect_vec();
+    }
+    padded_bytes
 }
 
-/// See [`num_to_bytes_be`] for details. Here `uint` can now be any uint that fits into `F`.
+/// Decomposes `uint` into `num_bytes` bytes and constrains the decomposition.
+/// Here `uint` can be any uint that fits into `F`.
 pub fn uint_to_bytes_be<F: BigPrimeField>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
@@ -427,4 +478,25 @@ pub fn bytes_be_to_uint<F: ScalarField>(
         input[..num_bytes].iter().rev().copied(),
         (0..num_bytes).map(|idx| Constant(gate.pow_of_two()[8 * idx])),
     )
+}
+
+/// Converts a fixed length array of `u128` values into a fixed length array of big endian bytes.
+pub fn u128s_to_bytes_be<F: BigPrimeField>(
+    ctx: &mut Context<F>,
+    range: &RangeChip<F>,
+    u128s: &[AssignedValue<F>],
+) -> Vec<AssignedValue<F>> {
+    u128s.iter().map(|u128| uint_to_bytes_be(ctx, range, u128, 16)).concat()
+}
+
+/// Returns 1 if all entries of `input` are zero, 0 otherwise.
+pub fn is_zero_vec<F: ScalarField>(
+    ctx: &mut Context<F>,
+    gate: &impl GateInstructions<F>,
+    input: &[AssignedValue<F>],
+) -> AssignedValue<F> {
+    let is_zeros = input.iter().map(|x| gate.is_zero(ctx, *x)).collect_vec();
+    let sum = gate.sum(ctx, is_zeros);
+    let total_len = gate.get_field_element(input.len() as u64);
+    gate.is_equal(ctx, sum, Constant(total_len))
 }

@@ -1,21 +1,22 @@
 {
   "params": {
     "degree": 21,
-    "num_advice": 9,
-    "num_lookup_advice": 1,
+    "num_advice": 10,
+    "num_lookup_advice": 2,
     "num_fixed": 1,
     "lookup_bits": 20
   },
   "break_points": [
     [
-      2097141,
-      2097141,
       2097142,
-      2097141,
       2097142,
       2097140,
       2097142,
-      2097140
+      2097142,
+      2097142,
+      2097142,
+      2097140,
+      2097141
     ],
     [],
     []

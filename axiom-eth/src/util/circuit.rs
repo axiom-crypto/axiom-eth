@@ -1,19 +1,26 @@
 use super::{AggregationConfigPinning, EthConfigPinning, Halo2ConfigPinning};
-use crate::{keccak::FnSynthesize, rlp::builder::RlcThreadBreakPoints, EthCircuitBuilder, Field};
+use crate::{
+    keccak::FnSynthesize,
+    rlp::builder::{RlcThreadBreakPoints, RlcThreadBuilder},
+    EthCircuitBuilder, EthPreCircuit, Field,
+};
 use halo2_base::{
-    gates::builder::{CircuitBuilderStage, MultiPhaseThreadBreakPoints},
+    gates::builder::{
+        CircuitBuilderStage, MultiPhaseThreadBreakPoints, RangeWithInstanceCircuitBuilder,
+    },
     halo2_proofs::{
         halo2curves::bn256::{Bn256, Fr, G1Affine},
         plonk::{Circuit, ProvingKey, VerifyingKey},
         poly::{commitment::Params, kzg::commitment::ParamsKZG},
     },
+    utils::ScalarField,
 };
 #[cfg(feature = "evm")]
 use snark_verifier_sdk::evm::{gen_evm_proof_shplonk, gen_evm_verifier_shplonk};
 use snark_verifier_sdk::{
     gen_pk,
     halo2::{aggregation::AggregationCircuit, gen_snark_shplonk},
-    read_pk, CircuitExt, Snark, SHPLONK,
+    read_pk, CircuitExt, Snark, LIMBS, SHPLONK,
 };
 use std::{env::var, fs::File, path::Path};
 
@@ -42,6 +49,14 @@ impl PinnableCircuit<Fr> for AggregationCircuit {
 
     fn break_points(&self) -> MultiPhaseThreadBreakPoints {
         AggregationCircuit::break_points(self)
+    }
+}
+
+impl<F: ScalarField> PinnableCircuit<F> for RangeWithInstanceCircuitBuilder<F> {
+    type Pinning = AggregationConfigPinning;
+
+    fn break_points(&self) -> MultiPhaseThreadBreakPoints {
+        RangeWithInstanceCircuitBuilder::break_points(self)
     }
 }
 
@@ -86,6 +101,11 @@ pub trait AnyCircuit: Sized {
 pub trait PreCircuit: Sized {
     type Pinning: Halo2ConfigPinning;
 
+    /// Creates a [`PinnableCircuit`], auto-configuring the circuit if not in production or prover mode.
+    ///
+    /// `params` should be the universal trusted setup for the present aggregation circuit.
+    /// We assume the trusted setup for the previous SNARKs is compatible with `params` in the sense that
+    /// the generator point and toxic waste `tau` are the same.
     fn create_circuit(
         self,
         stage: CircuitBuilderStage,
@@ -100,6 +120,8 @@ pub trait PreCircuit: Sized {
         custom_read_pk(path, &circuit)
     }
 
+    /// Creates the proving key for the pre-circuit if file at `pk_path` is not found.
+    /// If a new proving key is created, the new pinning data is written to `pinning_path`.
     fn create_pk(
         self,
         params: &ParamsKZG<Bn256>,
@@ -114,6 +136,26 @@ pub trait PreCircuit: Sized {
             circuit.write_pinning(pinning_path);
         }
         pk
+    }
+
+    fn get_degree(pinning_path: impl AsRef<Path>) -> u32 {
+        let pinning = Self::Pinning::from_path(pinning_path);
+        pinning.degree()
+    }
+}
+
+impl<C: EthPreCircuit> PreCircuit for C {
+    type Pinning = EthConfigPinning;
+
+    fn create_circuit(
+        self,
+        stage: CircuitBuilderStage,
+        pinning: Option<Self::Pinning>,
+        _: &ParamsKZG<Bn256>,
+    ) -> impl PinnableCircuit<Fr> {
+        let builder = RlcThreadBuilder::from_stage(stage);
+        let break_points = pinning.map(|p| p.break_points());
+        EthPreCircuit::create_circuit(self, builder, break_points)
     }
 }
 
@@ -172,16 +214,35 @@ impl<C: PreCircuit> AnyCircuit for C {
 
 /// Aggregates snarks and re-exposes previous public inputs.
 ///
-/// If `has_prev_accumulators` is true, then it assumes all previous snarks are already aggregation circuits and does not re-expose the old accumulators as public inputs.
 #[derive(Clone, Debug)]
 pub struct PublicAggregationCircuit {
-    pub snarks: Vec<Snark>,
-    pub has_prev_accumulators: bool,
+    /// The previous snarks to aggregate.
+    /// `snarks` consists of a vector of `(snark, has_prev_accumulator)` pairs, where `snark` is [Snark] and `has_prev_accumulator` is boolean. If `has_prev_accumulator` is true, then it assumes `snark` is already an
+    /// aggregation circuit and does not re-expose the old accumulator from `snark` as public inputs.
+    pub snarks: Vec<(Snark, bool)>,
 }
 
 impl PublicAggregationCircuit {
-    pub fn new(snarks: Vec<Snark>, has_prev_accumulators: bool) -> Self {
-        Self { snarks, has_prev_accumulators }
+    pub fn new(snarks: Vec<(Snark, bool)>) -> Self {
+        Self { snarks }
+    }
+
+    // excludes old accumulators from prev instance
+    pub fn private(
+        self,
+        stage: CircuitBuilderStage,
+        break_points: Option<MultiPhaseThreadBreakPoints>,
+        lookup_bits: usize,
+        params: &ParamsKZG<Bn256>,
+    ) -> AggregationCircuit {
+        let (snarks, has_prev_acc): (Vec<_>, Vec<_>) = self.snarks.into_iter().unzip();
+        let mut private =
+            AggregationCircuit::new::<SHPLONK>(stage, break_points, lookup_bits, params, snarks);
+        for (prev_instance, has_acc) in private.previous_instances.iter_mut().zip(has_prev_acc) {
+            let start = (has_acc as usize) * 4 * LIMBS;
+            *prev_instance = prev_instance.split_off(start);
+        }
+        private
     }
 }
 
@@ -194,27 +255,29 @@ impl PreCircuit for PublicAggregationCircuit {
         pinning: Option<Self::Pinning>,
         params: &ParamsKZG<Bn256>,
     ) -> impl PinnableCircuit<Fr> {
-        let lookup_bits = var("LOOKUP_BITS").expect("LOOKUP_BITS is not set").parse().unwrap();
+        // look for lookup_bits either from pinning, if available, or from env var
+        let lookup_bits = pinning
+            .as_ref()
+            .map(|p| p.params.lookup_bits)
+            .or_else(|| var("LOOKUP_BITS").map(|v| v.parse().unwrap()).ok())
+            .expect("LOOKUP_BITS is not set");
         let break_points = pinning.map(|p| p.break_points());
-        let circuit = AggregationCircuit::public::<SHPLONK>(
-            stage,
-            break_points,
-            lookup_bits,
-            params,
-            self.snarks.clone(),
-            self.has_prev_accumulators,
-        );
+        let mut private = self.private(stage, break_points, lookup_bits, params);
+        for prev in &private.previous_instances {
+            private.inner.assigned_instances.extend_from_slice(prev);
+        }
+
         #[cfg(not(feature = "production"))]
         match stage {
             CircuitBuilderStage::Prover => {}
             _ => {
-                circuit.config(
+                private.config(
                     params.k(),
                     Some(var("MINIMUM_ROWS").unwrap_or_else(|_| "10".to_string()).parse().unwrap()),
                 );
             }
         }
-        circuit
+        private
     }
 }
 

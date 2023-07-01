@@ -322,8 +322,8 @@ impl<'range, F: ScalarField> RlpChip<'range, F> {
         //
         // * rlp_field_rlc.rlc_len = 1 + len_rlc.rlc_len + field_rlc.rlc_len
         // * len_rlc.rlc_len = prefix_parsed.is_big * prefix_parsed.next_len
-        // * field_rlc.rlc_len = prefix_parsed.is_big * prefix_parsed.next_len
-        //                       + (1 - prefix_parsed.is_big) * byte_value(len)
+        // * field_rlc.rlc_len = (1 - prefix_parsed.is_big) * prefix_parsed.next_len
+        //                       + prefix_parsed.is_big * byte_value(len)
         //
         // * rlp_field_rlc = accumulate(
         //                       [(prefix, 1),

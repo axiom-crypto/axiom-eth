@@ -1,9 +1,9 @@
 use super::*;
-use crate::util::scheduler::evm_wrapper::ForEvm;
+use crate::util::EthConfigParams;
 use crate::{
     halo2_proofs::{
         dev::MockProver,
-        halo2curves::bn256::{Bn256, Fr, G1Affine},
+        halo2curves::bn256::{Bn256, G1Affine},
         plonk::*,
         poly::commitment::ParamsProver,
         poly::kzg::{
@@ -16,19 +16,17 @@ use crate::{
         },
     },
     providers::{GOERLI_PROVIDER_URL, MAINNET_PROVIDER_URL},
-    storage::helpers::{StorageScheduler, StorageTask},
-    util::scheduler::Scheduler,
 };
 use ark_std::{end_timer, start_timer};
 use ethers_core::utils::keccak256;
 use halo2_base::utils::fs::gen_srs;
 use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
+use std::env::var;
 use std::{
     env::set_var,
     fs::File,
     io::{BufReader, Write},
-    path::PathBuf,
 };
 use test_log::test;
 
@@ -39,8 +37,8 @@ fn get_test_circuit(network: Network, num_slots: usize) -> EthBlockStorageCircui
         Network::Mainnet => format!("{MAINNET_PROVIDER_URL}{infura_id}"),
         Network::Goerli => format!("{GOERLI_PROVIDER_URL}{infura_id}"),
     };
-    let provider = Provider::<Http>::try_from(provider_url.as_str())
-        .expect("could not instantiate HTTP Provider");
+    let provider =
+        Provider::new_client(&provider_url, 10, 500).expect("could not instantiate HTTP Provider");
     let addr;
     let block_number;
     match network {
@@ -66,6 +64,7 @@ fn get_test_circuit(network: Network, num_slots: usize) -> EthBlockStorageCircui
         })
         .collect::<Vec<_>>();
     slots.extend(slot_nums.iter().map(|x| H256::from_low_u64_be(*x)));
+    slots.truncate(num_slots);
     // let slots: Vec<_> = (0..num_slots).map(|x| H256::from_low_u64_be(x as u64)).collect();
     slots.truncate(num_slots);
     EthBlockStorageCircuit::from_provider(&provider, block_number, addr, slots, 8, 8, network)
@@ -77,30 +76,10 @@ pub fn test_mock_single_eip1186() -> Result<(), Box<dyn std::error::Error>> {
     set_var("ETH_CONFIG_PARAMS", serde_json::to_string(&params).unwrap());
     let k = params.degree;
 
-    let input = get_test_circuit(Network::Mainnet, 10);
-    let circuit = input.create_circuit::<Fr>(RlcThreadBuilder::mock(), None);
+    let input = get_test_circuit(Network::Mainnet, 1);
+    let circuit = input.create_circuit(RlcThreadBuilder::mock(), None);
     MockProver::run(k, &circuit, vec![circuit.instance()]).unwrap().assert_satisfied();
     Ok(())
-}
-
-#[test]
-pub fn test_storage_scheduler() {
-    let network = Network::Mainnet;
-    let scheduler = StorageScheduler::new(
-        network,
-        false,
-        false,
-        PathBuf::from("configs/storage"),
-        PathBuf::from("data/storage"),
-    );
-    let slots = (0..10).map(|x| H256::from_low_u64_be(x as u64)).collect::<Vec<_>>();
-    let task = StorageTask::new(
-        16356350,
-        "0xb47e3cd837dDF8e4c57F05d70Ab865de6e193BBB".parse::<Address>().unwrap(),
-        slots,
-        network,
-    );
-    scheduler.get_calldata(ForEvm(task), true);
 }
 
 #[derive(Serialize, Deserialize)]
@@ -230,8 +209,7 @@ pub fn bench_evm_eip1186() -> Result<(), Box<dyn std::error::Error>> {
             let pk = gen_pk(&params, &circuit, None);
             let break_points = circuit.circuit.break_points.take();
             let storage_proof_time = start_timer!(|| "Storage Proof SHPLONK");
-            let circuit =
-                input.create_circuit::<Fr>(RlcThreadBuilder::prover(), Some(break_points));
+            let circuit = input.create_circuit(RlcThreadBuilder::prover(), Some(break_points));
             let snark = gen_snark_shplonk(&params, &pk, circuit, None::<&str>);
             end_timer!(storage_proof_time);
             (snark, storage_proof_time)

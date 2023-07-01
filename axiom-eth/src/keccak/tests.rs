@@ -53,7 +53,8 @@ fn test_keccak_circuit<F: Field>(
         let bytes = input.to_vec();
         let mut bytes_assigned =
             ctx.assign_witnesses(bytes.iter().map(|byte| F::from(*byte as u64)));
-        let len = if var_len { rng.gen_range(0..bytes.len()) } else { bytes.len() };
+        let len =
+            if var_len && !bytes.is_empty() { rng.gen_range(0..bytes.len()) } else { bytes.len() };
         for byte in bytes_assigned[len..].iter_mut() {
             *byte = ctx.load_zero();
         }

@@ -1,16 +1,11 @@
 [package]
 name = "axiom-eth"
-version = "0.1.1"
+version = "0.2.1"
 edition = "2021"
-autobins = false
 
 [[bin]]
 name = "header_chain"
 required-features = ["aggregation", "clap"]
-
-[[bin]]
-name = "storage_proof"
-required-features = ["aggregation", "clap", "evm"]
 
 [dependencies]
 itertools = "0.10"
@@ -31,36 +26,38 @@ serde_with = { version = "2.2", optional = true }
 
 # halo2
 ff = "0.12"
-halo2-base = { git = "https://github.com/axiom-crypto/halo2-lib.git", branch = "community-edition", default-features = false }
-zkevm-keccak = { git = "https://github.com/axiom-crypto/halo2-lib.git", branch = "community-edition", default-features = false }
+halo2-base = { git = "https://github.com/axiom-crypto/halo2-lib.git", tag = "v0.3.0", default-features = false }
+zkevm-keccak = { git = "https://github.com/axiom-crypto/halo2-lib.git", tag = "v0.3.0", default-features = false }
+# macro
+any_circuit_derive = { path = "../any_circuit_derive", optional = true }
 
 # crypto
-rlp = "0.5.2"
-ethers-core = { version = "=2.0.6" } # used by halo2-mpt already
+rlp = "=0.5.2"
+ethers-core = { version = "=2.0.6" }
 rand_core = { version = "0.6", default-features = false, features = ["getrandom"] }
 rand = "0.8"
 rand_chacha = "0.3.1"
 
 # aggregation 
-snark-verifier = { git = "https://github.com/axiom-crypto/snark-verifier.git", branch = "community-edition", default-features = false, features = ["loader_halo2"], optional = true }
-snark-verifier-sdk = { git = "https://github.com/axiom-crypto/snark-verifier.git", branch = "community-edition", default-features = false, features = ["loader_halo2"], optional = true }
+snark-verifier = { git = "https://github.com/axiom-crypto/snark-verifier.git", tag = "v0.1.1", default-features = false, features = ["loader_halo2"], optional = true }
+snark-verifier-sdk = { git = "https://github.com/axiom-crypto/snark-verifier.git", tag = "v0.1.1", default-features = false, features = ["loader_halo2"], optional = true }
 
 # generating circuit inputs from blockchain
-ethers-providers = { version = "2.0.2", optional = true }  
-tokio = { version = "1.26", default-features = false, features = ["rt", "rt-multi-thread"], optional = true }
+ethers-providers = { version = "=2.0.6", optional = true }
+tokio = { version = "=1.28", default-features = false, features = ["rt", "rt-multi-thread"], optional = true }
+futures = { version = "=0.3", optional = true }
 
 [dev-dependencies]
 hex = "0.4.3"
 ark-std = { version = "0.3.0", features = ["print-trace"] }
 log = "0.4"
 test-log = "0.2.11"
-test-case = "3.1.0"
 
 [features]
 default = ["halo2-axiom", "jemallocator", "display", "aggregation", "clap", "evm"]
-aggregation = ["dep:snark-verifier", "snark-verifier-sdk", "providers"]
+aggregation = ["dep:snark-verifier", "snark-verifier-sdk", "providers", "dep:any_circuit_derive"]
 evm = ["snark-verifier-sdk?/loader_evm", "aggregation"]
-providers = ["dep:ethers-providers", "dep:tokio", "dep:bincode", "dep:base64", "dep:serde_with"]
+providers = ["dep:ethers-providers", "dep:tokio", "dep:bincode", "dep:base64", "dep:serde_with", "dep:futures"]
 display = ["zkevm-keccak/display", "snark-verifier-sdk?/display", "dep:ark-std"]
 clap = ["dep:clap", "dep:clap-num"]
 # 'production' feature turns off circuit auto-configuration and forces trusted setup SRS to be read (and not generated)

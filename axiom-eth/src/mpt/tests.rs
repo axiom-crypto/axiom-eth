@@ -151,15 +151,6 @@ pub fn test_mpt_noninclusion_extension_fixed() {
 }
 
 #[test]
-pub fn test_mpt_empty_root() {
-    let params = EthConfigParams::from_path("configs/tests/mpt.json");
-    let k = params.degree;
-    let input = mpt_input("scripts/input_gen/empty_storage_pf.json", true, 5);
-    let circuit = test_mpt_circuit(k, RlcThreadBuilder::<Fr>::mock(), input);
-    MockProver::run(k, &circuit, vec![]).unwrap().assert_satisfied();
-}
-
-#[test]
 fn bench_mpt_inclusion_fixed() -> Result<(), Box<dyn std::error::Error>> {
     let bench_params_file = File::open("configs/bench/mpt.json").unwrap();
     std::fs::create_dir_all("data/bench")?;

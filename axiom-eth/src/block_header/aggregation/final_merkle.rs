@@ -7,7 +7,7 @@ use crate::{
         builder::{RlcThreadBreakPoints, RlcThreadBuilder},
         RlpChip,
     },
-    util::{bytes_be_to_u128, get_merkle_mountain_range, num_to_bytes_be, NUM_BYTES_IN_U128},
+    util::{bytes_be_to_u128, num_to_bytes_be, NUM_BYTES_IN_U128},
     EthCircuitBuilder,
 };
 #[cfg(feature = "display")]
@@ -38,14 +38,13 @@ impl EthBlockHeaderChainFinalAggregationCircuit {
         max_depth: usize,
         initial_depth: usize,
     ) -> Self {
-        let mut inner = EthBlockHeaderChainAggregationCircuit::new(
+        let inner = EthBlockHeaderChainAggregationCircuit::new(
             snarks,
             num_blocks,
             max_depth,
             initial_depth,
         );
-        #[cfg(debug_assertions)]
-        {
+        /* // Only for testing
             let leaves =
                 &inner.chain_instance.merkle_mountain_range[..num_blocks as usize >> initial_depth];
             let mut new_mmr = get_merkle_mountain_range(leaves, max_depth - initial_depth);
@@ -53,7 +52,7 @@ impl EthBlockHeaderChainFinalAggregationCircuit {
                 &inner.chain_instance.merkle_mountain_range[1 << (max_depth - initial_depth)..],
             );
             inner.chain_instance.merkle_mountain_range = new_mmr;
-        }
+        */
         Self(inner)
     }
 
@@ -157,10 +156,5 @@ impl EthBlockHeaderChainFinalAggregationCircuit {
             circuit.config(config_params.degree as usize, Some(config_params.unusable_rows));
         }
         circuit
-    }
-
-    /// The number of instances NOT INCLUDING the accumulator
-    pub fn get_num_instance(max_depth: usize) -> usize {
-        5 + 2 * (max_depth + 1)
     }
 }

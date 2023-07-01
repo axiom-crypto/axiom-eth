@@ -1,9 +1,26 @@
+use std::cell::RefCell;
+
+use crate::util::EthConfigParams;
+
+use super::{
+    builder::*,
+    rlc::{RlcChip, RlcConfig},
+    RlcGateConfig, RlpConfig,
+};
+use halo2_base::{
+    gates::flex_gate::{FlexGateConfig, GateStrategy},
+    halo2_proofs::{
+        circuit::{Layouter, SimpleFloorPlanner},
+        plonk::{Advice, Circuit, Column, ConstraintSystem, Error, Selector},
+    },
+    utils::ScalarField,
+    SKIP_FIRST_PASS,
+};
+
 mod rlc {
+    use super::RlcCircuitBuilder;
     use halo2_base::{
-        gates::{
-            builder::{GateCircuitBuilder, GateThreadBuilder},
-            GateChip,
-        },
+        gates::GateChip,
         halo2_proofs::{
             dev::MockProver,
             halo2curves::bn256::{Bn256, Fr, G1Affine},
@@ -21,15 +38,14 @@ mod rlc {
                 TranscriptWriterBuffer,
             },
         },
-        utils::{bit_length, ScalarField},
+        utils::ScalarField,
     };
     use itertools::Itertools;
     use rand::{rngs::StdRng, SeedableRng};
-    use test_case::test_case;
     use test_log::test;
 
     use crate::rlp::{
-        builder::{FnSynthesize, RlcCircuitBuilder, RlcThreadBuilder},
+        builder::{FnSynthesize, RlcThreadBuilder},
         rlc::RlcChip,
     };
 
@@ -60,9 +76,6 @@ mod rlc {
     }
 
     fn compute_rlc_acc<F: ScalarField>(msg: &[F], r: F) -> F {
-        if msg.is_empty() {
-            return F::from(0);
-        }
         let mut rlc = msg[0];
         for val in msg.iter().skip(1) {
             rlc = rlc * r + val;
@@ -86,165 +99,6 @@ mod rlc {
 
         circuit.config(k as usize, Some(6));
         MockProver::run(k, &circuit, vec![]).unwrap().assert_satisfied();
-    }
-
-    #[test_case([0,0,0,0].map(Fr::from).to_vec(); "RLC([0,0,0,0]) = 0")]
-    pub fn test_rlc_chip_zero<F: ScalarField>(inputs: Vec<F>) {
-        let mut builder = RlcThreadBuilder::mock();
-        let ctx = builder.gate_builder.main(0);
-        let inputs = ctx.assign_witnesses(inputs);
-        let len = ctx.load_witness(F::from(inputs.len() as u64));
-
-        let circuit = RlcCircuitBuilder::new(
-            builder,
-            None,
-            move |builder: &mut RlcThreadBuilder<F>, rlc: &RlcChip<F>| {
-                let gate = GateChip::default();
-                let (ctx_gate, ctx_rlc) = builder.rlc_ctx_pair();
-                let rlc_trace = rlc.compute_rlc((ctx_gate, ctx_rlc), &gate, inputs, len);
-                let rlc_val = *rlc_trace.rlc_val.value();
-                assert_eq!(rlc_val, F::from(0));
-            },
-        );
-
-        circuit.config(DEGREE as usize, Some(6));
-        MockProver::run(DEGREE, &circuit, vec![]).unwrap().assert_satisfied();
-    }
-
-    #[derive(PartialEq, Debug)]
-    pub enum RlcTestErrors {
-        RlcValError,
-        RlcValAError,
-        RlcValBError,
-        GammaPowError,
-        DynamicRlcError,
-    }
-
-    #[test_case(([1, 2, 3, 4, 5, 6, 7, 8].map(Fr::from).to_vec(), [1, 2, 3, 4, 5, 6, 7, 8].map(Fr::from).to_vec(), 8, 8, 16) => Ok(()) ; "Dynamic RLC test, var len 1")]
-    #[test_case(([1, 2, 3].map(Fr::from).to_vec(), [1, 2, 3, 4, 5, 6, 7, 8].map(Fr::from).to_vec(), 3, 8, 11) => Ok(()) ; "Dynamic RLC test, var len 2")]
-    #[test_case(([1, 2, 3].map(Fr::from).to_vec(), [1, 2, 3, 4, 5, 6, 7, 8].map(Fr::from).to_vec(), 5, 8, 11) => Err(RlcTestErrors::DynamicRlcError) ; "Dynamic RLC test, c_len too small")]
-    #[test_case(([1, 2, 3].map(Fr::from).to_vec(), [1, 2, 3, 4, 5, 6, 7, 8].map(Fr::from).to_vec(), 1, 8, 11) => Err(RlcTestErrors::RlcValError) ; "Dynamic RLC test, c_len too big")]
-    #[test_case(([1, 2, 3].map(Fr::from).to_vec(), [1, 2, 3, 4, 5, 6, 7, 8].map(Fr::from).to_vec(), 0, 8, 11) => Err(RlcTestErrors::RlcValError) ; "Dynamic RLC test, c_len too small 2")]
-    #[test_case(([1, 2, 3].map(Fr::from).to_vec(), [1, 2, 3, 4, 5, 6, 7, 8].map(Fr::from).to_vec(), 3, 6, 11) => Err(RlcTestErrors::RlcValError) ; "Dynamic RLC test, c_len too big 2")]
-    #[test_case(([1, 2, 3].map(Fr::from).to_vec(), [1, 2, 3, 4, 5, 6, 7, 8].map(Fr::from).to_vec(), 3, 10, 11) => Err(RlcTestErrors::DynamicRlcError) ; "Dynamic RLC test, c_len too small 3")]
-    #[test_case(([1, 2, 3].map(Fr::from).to_vec(), [1, 2, 3, 4, 5, 6, 7, 8].map(Fr::from).to_vec(), 3, 0, 11) => Err(RlcTestErrors::RlcValError) ; "Dynamic RLC test, c_len too big 3")]
-    #[test_case(([1, 2, 3].map(Fr::from).to_vec(), [1, 2, 3, 4, 5, 6, 7, 8].map(Fr::from).to_vec(), 2, 5, 7) => Ok(()) ; "Dynamic RLC test, a_len + b_len = c_len")]
-    #[test_case((Vec::<Fr>::new(), [1, 2, 3, 4, 5, 6, 7, 8].map(Fr::from).to_vec(), 0, 8, 8) => Ok(()) ; "Dynamic RLC test, a_len = 0")]
-    #[test_case(([1, 2, 3].map(Fr::from).to_vec(), Vec::<Fr>::new(), 3, 0, 3) => Ok(()) ; "Dynamic RLC test, b_len = 0")]
-    pub fn test_rlc_dynamic_var_len<F: ScalarField>(
-        inputs: (Vec<F>, Vec<F>, u64, u64, u64),
-    ) -> Result<(), RlcTestErrors> {
-        let mut rlc_builder = RlcThreadBuilder::mock();
-        let mut builder = GateThreadBuilder::mock();
-        let ctx = builder.main(0);
-
-        let a_b_joined = inputs
-            .0
-            .iter()
-            .take(inputs.2 as usize)
-            .chain(inputs.1.iter().take(inputs.3 as usize))
-            .cloned();
-        let a_b = ctx.assign_witnesses(a_b_joined.clone());
-        let a_b_len = ctx.load_witness(F::from(inputs.4));
-
-        let a_len = ctx.load_witness(F::from(inputs.2));
-        let mut a = inputs.0.clone().iter().take(inputs.2 as usize).cloned().collect_vec();
-        a.resize(inputs.4 as usize, F::from(0));
-        let witness_a = ctx.assign_witnesses(a.clone());
-
-        let b_len = ctx.load_witness(F::from(inputs.3));
-        let mut b = inputs.1.clone().iter().take(inputs.3 as usize).cloned().collect_vec();
-        b.resize(inputs.4 as usize, F::from(0));
-        let witness_b = ctx.assign_witnesses(b.clone());
-
-        let gate = GateChip::default();
-        let (ctx_gate, ctx_rlc) = rlc_builder.rlc_ctx_pair();
-        let rlc = RlcChip::new(F::from(2));
-        let rlc_trace = rlc.compute_rlc((ctx_gate, ctx_rlc), &gate, a_b, a_b_len);
-        let rlc_val = *rlc_trace.rlc_val.value();
-        let real_rlc_val = compute_rlc_acc(&a_b_joined.collect_vec(), *rlc.gamma());
-
-        if rlc_val != real_rlc_val {
-            return Err(RlcTestErrors::RlcValError);
-        }
-
-        let rlc_trace_a = rlc.compute_rlc((ctx_gate, ctx_rlc), &gate, witness_a, a_len);
-        let rlc_val_a = *rlc_trace_a.rlc_val.value();
-        let real_rlc_val_a = compute_rlc_acc(&a[..inputs.2 as usize], *rlc.gamma());
-
-        if rlc_val_a != real_rlc_val_a {
-            return Err(RlcTestErrors::RlcValAError);
-        }
-
-        let rlc_trace_b = rlc.compute_rlc((ctx_gate, ctx_rlc), &gate, witness_b, b_len);
-        let rlc_val_b = *rlc_trace_b.rlc_val.value();
-        let real_rlc_val_b = compute_rlc_acc(&b[..inputs.3 as usize], *rlc.gamma());
-
-        if rlc_val_b != real_rlc_val_b {
-            return Err(RlcTestErrors::RlcValBError);
-        }
-
-        rlc.load_rlc_cache((ctx_gate, ctx_rlc), &gate, inputs.4 as usize);
-        let gamma_pow = rlc.rlc_pow(ctx_gate, &gate, b_len, bit_length(inputs.4 as u64));
-        let real_gamma_pow = rlc.gamma().pow_vartime(&[inputs.3 as u64]);
-
-        if *gamma_pow.value() != real_gamma_pow {
-            return Err(RlcTestErrors::GammaPowError);
-        }
-
-        if rlc_val != rlc_val_a * gamma_pow.value() + rlc_val_b {
-            return Err(RlcTestErrors::DynamicRlcError);
-        }
-
-        builder.config(6, Some(9));
-        let circuit = GateCircuitBuilder::mock(builder);
-        MockProver::run(6, &circuit, vec![]).unwrap().assert_satisfied();
-        Ok(())
-    }
-
-    #[test_case(([1, 2, 3, 4, 5, 6, 7, 8].map(Fr::from).to_vec(), [1, 2, 3, 4, 5, 6, 7, 8].map(Fr::from).to_vec()) ; "Dynamic RLC test, fixed len 1")]
-    #[test_case(([1, 2, 3].map(Fr::from).to_vec(), [1, 2, 3, 4, 5, 6, 7, 8].map(Fr::from).to_vec()) ; "Dynamic RLC test, fixed len 2")]
-    pub fn test_rlc_dynamic_fixed_len<F: ScalarField>(inputs: (Vec<F>, Vec<F>)) {
-        let mut rlc_builder = RlcThreadBuilder::mock();
-        let mut builder = GateThreadBuilder::mock();
-        let ctx = builder.main(0);
-
-        let a_b = ctx.assign_witnesses(inputs.0.iter().chain(inputs.1.iter()).cloned());
-        let combined_len = inputs.0.len() as u64 + inputs.1.len() as u64;
-        let a = ctx.assign_witnesses(inputs.0.clone());
-        let b_len = ctx.load_witness(F::from(inputs.1.len() as u64));
-        let b = ctx.assign_witnesses(inputs.1.clone());
-
-        let gate = GateChip::default();
-        let (ctx_gate, ctx_rlc) = rlc_builder.rlc_ctx_pair();
-        let rlc = RlcChip::new(F::from(2));
-        let rlc_trace = rlc.compute_rlc_fixed_len(ctx_rlc, a_b);
-        let rlc_val = *rlc_trace.rlc_val.value();
-        let real_rlc_val = compute_rlc_acc(
-            &inputs.0.iter().chain(inputs.1.iter()).cloned().collect_vec(),
-            *rlc.gamma(),
-        );
-        assert_eq!(rlc_val, real_rlc_val);
-
-        let rlc_trace_a = rlc.compute_rlc_fixed_len(ctx_rlc, a);
-        let rlc_val_a = *rlc_trace_a.rlc_val.value();
-        let real_rlc_val_a = compute_rlc_acc(&inputs.0, *rlc.gamma());
-        assert_eq!(rlc_val_a, real_rlc_val_a);
-
-        let rlc_trace_b = rlc.compute_rlc_fixed_len(ctx_rlc, b);
-        let rlc_val_b = *rlc_trace_b.rlc_val.value();
-        let real_rlc_val_b = compute_rlc_acc(&inputs.1, *rlc.gamma());
-        assert_eq!(rlc_val_b, real_rlc_val_b);
-
-        rlc.load_rlc_cache((ctx_gate, ctx_rlc), &gate, combined_len as usize);
-        let gamma_pow = rlc.rlc_pow(ctx_gate, &gate, b_len, bit_length(combined_len as u64));
-        let real_gamma_pow = rlc.gamma().pow_vartime(&[inputs.1.len() as u64]);
-        assert_eq!(*gamma_pow.value(), real_gamma_pow);
-        assert_eq!(rlc_val, rlc_val_a * gamma_pow.value() + rlc_val_b);
-
-        builder.config(6, Some(9));
-        let circuit = GateCircuitBuilder::mock(builder);
-        MockProver::run(6, &circuit, vec![]).unwrap().assert_satisfied()
     }
 
     #[test]
@@ -304,8 +158,9 @@ mod rlc {
 }
 
 mod rlp {
+    use super::RlpCircuitBuilder;
     use crate::rlp::{
-        builder::{FnSynthesize, RlcThreadBuilder, RlpCircuitBuilder},
+        builder::{FnSynthesize, RlcThreadBuilder},
         *,
     };
     use halo2_base::halo2_proofs::{dev::MockProver, halo2curves::bn256::Fr};
@@ -352,6 +207,7 @@ mod rlp {
         let prover = builder.witness_gen_only();
         let ctx = builder.gate_builder.main(0);
         let inputs = ctx.assign_witnesses(encoded.iter().map(|x| F::from(*x as u64)));
+        set_var("LOOKUP_BITS", "8");
         let range = RangeChip::default(8);
         let chip = RlpChip::new(&range, None);
         let witness = chip.decompose_rlp_array_phase0(ctx, inputs, max_field_lens, is_var_len);
@@ -438,5 +294,263 @@ mod rlp {
 
         let circuit = rlp_string_circuit(RlcThreadBuilder::<Fr>::mock(), input_bytes, 60);
         MockProver::run(k, &circuit, vec![]).unwrap().assert_satisfied();
+    }
+}
+
+// The circuits below are mostly used for testing.
+// Unfortunately for `KeccakCircuitBuilder` we still need to do some more custom stuff beyond what's in this circuit
+// due to the intricacies of 2-phase challenge API.
+
+/// A wrapper struct to auto-build a circuit from a `RlcThreadBuilder`.
+///
+/// This struct is trickier because it uses the Multi-phase Challenge API. The intended use is as follows:
+/// * The user can run phase 0 calculations on `builder` outside of the circuit (as usual) and supply the builder to construct the circuit.
+/// * The user also specifies a closure `synthesize_phase1(builder, challenge)` that specifies all calculations that should be done in phase 1.
+/// The builder will then handle the process of assigning all advice cells in phase 1, squeezing a challenge value `challenge` from the backend API, and then using that value to do all phase 1 witness generation.
+pub struct RlcCircuitBuilder<F: ScalarField, FnPhase1>
+where
+    FnPhase1: FnSynthesize<F>,
+{
+    pub builder: RefCell<RlcThreadBuilder<F>>,
+    pub break_points: RefCell<RlcThreadBreakPoints>, // `RefCell` allows the circuit to record break points in a keygen call of `synthesize` for use in later witness gen
+    // we guarantee that `synthesize_phase1` is called *exactly once* during the proving stage, but since `Circuit::synthesize` takes `&self`, and `assign_region` takes a `Fn` instead of `FnOnce`, we need some extra engineering:
+    pub synthesize_phase1: RefCell<Option<FnPhase1>>,
+}
+
+impl<F: ScalarField, FnPhase1> RlcCircuitBuilder<F, FnPhase1>
+where
+    FnPhase1: FnSynthesize<F>,
+{
+    pub fn new(
+        builder: RlcThreadBuilder<F>,
+        break_points: Option<RlcThreadBreakPoints>,
+        synthesize_phase1: FnPhase1,
+    ) -> Self {
+        Self {
+            builder: RefCell::new(builder),
+            break_points: RefCell::new(break_points.unwrap_or_default()),
+            synthesize_phase1: RefCell::new(Some(synthesize_phase1)),
+        }
+    }
+
+    pub fn config(&self, k: usize, minimum_rows: Option<usize>) -> EthConfigParams {
+        // clone everything so we don't alter the circuit in any way for later calls
+        let mut builder = self.builder.borrow().clone();
+        let f = self.synthesize_phase1.borrow().clone().expect("synthesize_phase1 should exist");
+        f(&mut builder, &RlcChip::new(F::zero()));
+        builder.config(k, minimum_rows)
+    }
+
+    // re-usable function for synthesize
+    pub fn two_phase_synthesize(
+        &self,
+        gate: &FlexGateConfig<F>,
+        lookup_advice: &[Vec<Column<Advice>>],
+        q_lookup: &[Option<Selector>],
+        rlc: &RlcConfig<F>,
+        layouter: &mut impl Layouter<F>,
+    ) {
+        let mut first_pass = SKIP_FIRST_PASS;
+        #[cfg(feature = "halo2-axiom")]
+        let witness_gen_only = self.builder.borrow().witness_gen_only();
+        // in non halo2-axiom, the prover calls `synthesize` twice: first just to get FirstPhase advice columns, commit, and then generate challenge value; then the second time to actually compute SecondPhase advice
+        // our "Prover" implementation is heavily optimized for the Axiom version, which only calls `synthesize` once
+        #[cfg(not(feature = "halo2-axiom"))]
+        let witness_gen_only = false;
+
+        let mut gamma = None;
+        if !witness_gen_only {
+            // in these cases, synthesize is called twice, and challenge can be gotten after the first time, or we use dummy value 0
+            layouter.get_challenge(rlc.gamma).map(|gamma_| gamma = Some(gamma_));
+        }
+
+        layouter
+            .assign_region(
+                || "RlcCircuitBuilder generated circuit",
+                |mut region| {
+                    if first_pass {
+                        first_pass = false;
+                        return Ok(());
+                    }
+                    if !witness_gen_only {
+                        let mut builder = self.builder.borrow().clone();
+                        let f = self
+                            .synthesize_phase1
+                            .borrow()
+                            .clone()
+                            .expect("synthesize_phase1 should exist");
+                        // call the actual synthesize function
+                        let rlc_chip = RlcChip::new(gamma.unwrap_or_else(|| F::zero()));
+                        f(&mut builder, &rlc_chip);
+                        let KeygenAssignments {
+                            assigned_advices: _,
+                            assigned_constants: _,
+                            break_points,
+                        } = builder.assign_all(
+                            gate,
+                            lookup_advice,
+                            q_lookup,
+                            rlc,
+                            &mut region,
+                            Default::default(),
+                        );
+                        *self.break_points.borrow_mut() = break_points;
+                    } else {
+                        let builder = &mut self.builder.borrow_mut();
+                        let break_points = &mut self.break_points.borrow_mut();
+                        assign_prover_phase0(
+                            &mut region,
+                            gate,
+                            lookup_advice,
+                            builder,
+                            break_points,
+                        );
+                        // this is a special backend API function (in halo2-axiom only) that computes the KZG commitments for all columns in FirstPhase and performs Fiat-Shamir on them to return the challenge value
+                        #[cfg(feature = "halo2-axiom")]
+                        region.next_phase();
+                        // get challenge value
+                        let mut gamma = None;
+                        #[cfg(feature = "halo2-axiom")]
+                        region.get_challenge(rlc.gamma).map(|gamma_| {
+                            log::info!("gamma: {gamma_:?}");
+                            gamma = Some(gamma_);
+                        });
+                        let rlc_chip =
+                            RlcChip::new(gamma.expect("Could not get challenge in second phase"));
+                        let f = RefCell::take(&self.synthesize_phase1)
+                            .expect("synthesize_phase1 should exist"); // we `take` the closure during proving to avoid cloning captured variables (the captured variables would be the AssignedValue payload sent from FirstPhase to SecondPhase)
+                        assign_prover_phase1(
+                            &mut region,
+                            gate,
+                            lookup_advice,
+                            rlc,
+                            &rlc_chip,
+                            builder,
+                            break_points,
+                            f,
+                        );
+                    }
+                    Ok(())
+                },
+            )
+            .unwrap();
+    }
+}
+
+impl<F: ScalarField, FnPhase1> Circuit<F> for RlcCircuitBuilder<F, FnPhase1>
+where
+    FnPhase1: FnSynthesize<F>,
+{
+    type Config = RlcGateConfig<F>;
+    type FloorPlanner = SimpleFloorPlanner;
+
+    fn without_witnesses(&self) -> Self {
+        unimplemented!()
+    }
+
+    fn configure(meta: &mut ConstraintSystem<F>) -> RlcGateConfig<F> {
+        let EthConfigParams {
+            degree,
+            num_rlc_columns,
+            num_range_advice,
+            num_lookup_advice: _,
+            num_fixed,
+            unusable_rows: _,
+            keccak_rows_per_round: _,
+            lookup_bits: _,
+        } = serde_json::from_str(&std::env::var("ETH_CONFIG_PARAMS").unwrap()).unwrap();
+        let mut gate = FlexGateConfig::configure(
+            meta,
+            GateStrategy::Vertical,
+            &num_range_advice,
+            num_fixed,
+            degree as usize,
+        );
+        let rlc = RlcConfig::configure(meta, num_rlc_columns);
+        // number of blinding factors may have changed due to introduction of new RLC gate
+        gate.max_rows = (1 << degree) - meta.minimum_rows();
+        RlcGateConfig { gate, rlc }
+    }
+
+    fn synthesize(
+        &self,
+        config: Self::Config,
+        mut layouter: impl Layouter<F>,
+    ) -> Result<(), Error> {
+        self.two_phase_synthesize(&config.gate, &[], &[], &config.rlc, &mut layouter);
+        Ok(())
+    }
+}
+
+/// A wrapper around RlcCircuitBuilder where Gate is replaced by Range in the circuit
+pub struct RlpCircuitBuilder<F: ScalarField, FnPhase1>(RlcCircuitBuilder<F, FnPhase1>)
+where
+    FnPhase1: FnSynthesize<F>;
+
+impl<F: ScalarField, FnPhase1> RlpCircuitBuilder<F, FnPhase1>
+where
+    FnPhase1: FnSynthesize<F>,
+{
+    pub fn new(
+        builder: RlcThreadBuilder<F>,
+        break_points: Option<RlcThreadBreakPoints>,
+        synthesize_phase1: FnPhase1,
+    ) -> Self {
+        Self(RlcCircuitBuilder::new(builder, break_points, synthesize_phase1))
+    }
+
+    pub fn config(&self, k: usize, minimum_rows: Option<usize>) -> EthConfigParams {
+        self.0.config(k, minimum_rows)
+    }
+}
+
+impl<F: ScalarField, FnPhase1> Circuit<F> for RlpCircuitBuilder<F, FnPhase1>
+where
+    FnPhase1: FnSynthesize<F>,
+{
+    type Config = RlpConfig<F>;
+    type FloorPlanner = SimpleFloorPlanner;
+
+    fn without_witnesses(&self) -> Self {
+        unimplemented!()
+    }
+
+    fn configure(meta: &mut ConstraintSystem<F>) -> RlpConfig<F> {
+        let EthConfigParams {
+            degree,
+            num_rlc_columns,
+            num_range_advice,
+            num_lookup_advice,
+            num_fixed,
+            unusable_rows: _,
+            keccak_rows_per_round: _,
+            lookup_bits: _,
+        } = serde_json::from_str(&std::env::var("ETH_CONFIG_PARAMS").unwrap()).unwrap();
+        let lookup_bits = std::env::var("LOOKUP_BITS").unwrap().parse().unwrap();
+        RlpConfig::configure(
+            meta,
+            num_rlc_columns,
+            &num_range_advice,
+            &num_lookup_advice,
+            num_fixed,
+            lookup_bits,
+            degree as usize,
+        )
+    }
+
+    fn synthesize(
+        &self,
+        config: Self::Config,
+        mut layouter: impl Layouter<F>,
+    ) -> Result<(), Error> {
+        config.range.load_lookup_table(&mut layouter)?;
+        self.0.two_phase_synthesize(
+            &config.range.gate,
+            &config.range.lookup_advice,
+            &config.range.q_lookup,
+            &config.rlc,
+            &mut layouter,
+        );
+        Ok(())
     }
 }
