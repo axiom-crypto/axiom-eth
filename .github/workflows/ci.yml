@@ -1,0 +1,54 @@
+name: Tests
+
+on:
+  push:
+    branches: ["main", "community-edition"]
+  pull_request:
+    branches: ["main", "community-edition"]
+
+env:
+  CARGO_TERM_COLOR: always
+  INFURA_ID: ${{ vars.INFURA_ID }}
+  JSON_RPC_URL: ${{ vars.JSON_RPC_URL }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest-m
+
+    steps:
+      - uses: actions/checkout@v3
+      - name: Build
+        run: cargo build --verbose
+      - name: Run axiom-eth tests MockProver
+        run: |
+          export INFURA_ID=${{ vars.INFURA_ID }}
+          export JSON_RPC_URL=${{ vars.JSON_RPC_URL }}
+          cd axiom-eth
+          cargo test -- test_mock_account_queries_empty
+          cargo test -- test_mock_account_queries_genesis
+          cargo test -- test_mock_account_queries_simple
+          cargo test -- test_genesis_block
+          cargo test -- test_mock_block_queries_random
+          cargo test -- test_mock_row_consistency_nouns
+          cargo test -- test_default_storage_query
+          cargo test -- test_mock_storage_queries_empty
+          cargo test -- test_mock_storage_queries_mapping
+          cargo test -- test_mock_storage_queries_slot0
+          cargo test -- test_mock_storage_queries_uni_v3
+          cargo test -- test_multi_goerli_header_mock
+          cargo test -- test_one_mainnet_header_before_london_mock
+          cargo test -- test_one_mainnet_header_mock
+          cargo test -- test_one_mainnet_header_withdrawals_mock
+          cargo test -- test_keccak
+          cargo test -- test_mock_mpt_inclusion_fixed
+          cargo test -- test_mpt_empty_root
+          cargo test -- test_mpt_noninclusion_branch_fixed
+          cargo test -- test_mpt_noninclusion_extension_fixed
+          cargo test -- test_mock_rlc
+          cargo test -- test_mock_rlp_array
+          cargo test -- test_mock_rlp_field
+          cargo test -- test_mock_rlp_literal
+          cargo test -- test_mock_rlp_long_field
+          cargo test -- test_mock_rlp_long_long_field
+          cargo test -- test_mock_rlp_short_field
+          cargo test -- test_mock_single_eip1186
