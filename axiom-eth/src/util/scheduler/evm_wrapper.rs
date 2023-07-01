@@ -1,6 +1,6 @@
 ///! A simple scheduler that just wraps a `PreCircuit` with a `PublicAggregationCircuit` circuit, to produce a SNARK that is cheap to verify in EVM
 ///
-use super::{EthScheduler, Scheduler, Task};
+use super::{CircuitType, EthScheduler, Scheduler, Task};
 use crate::{
     util::{
         circuit::{AnyCircuit, PreCircuit, PublicAggregationCircuit},
@@ -8,7 +8,7 @@ use crate::{
     },
     Network,
 };
-use ethers_providers::{Http, Provider};
+use ethers_providers::{Http, Provider, RetryClient};
 use halo2_base::halo2_proofs::{
     halo2curves::bn256::{Bn256, G1Affine},
     plonk::ProvingKey,
@@ -25,6 +25,23 @@ pub enum Wrapper<T> {
 // commonly used
 pub use Wrapper::ForEvm;
 
+impl<T: CircuitType> CircuitType for Wrapper<T> {
+    fn get_degree_from_pinning(&self, pinning_path: impl AsRef<Path>) -> u32 {
+        match self {
+            Self::Initial(t) => t.get_degree_from_pinning(pinning_path),
+            Self::ForEvm(_) => {
+                let pinning = AggregationConfigPinning::from_path(pinning_path);
+                pinning.degree()
+            }
+        }
+    }
+    fn name(&self) -> String {
+        match self {
+            Self::Initial(t) => t.name(),
+            Self::ForEvm(t) => format!("{}_evm", t.name()),
+        }
+    }
+}
 impl<T: Task> Task for Wrapper<T> {
     type CircuitType = Wrapper<T::CircuitType>;
 
@@ -32,12 +49,6 @@ impl<T: Task> Task for Wrapper<T> {
         match self {
             Self::Initial(t) => Wrapper::Initial(t.circuit_type()),
             Self::ForEvm(t) => Wrapper::ForEvm(t.circuit_type()),
-        }
-    }
-    fn type_name(circuit_type: Self::CircuitType) -> String {
-        match circuit_type {
-            Wrapper::Initial(circuit_type) => T::type_name(circuit_type),
-            Wrapper::ForEvm(circuit_type) => format!("{}_evm", T::type_name(circuit_type)),
         }
     }
     fn name(&self) -> String {
@@ -57,7 +68,11 @@ impl<T: Task> Task for Wrapper<T> {
 pub trait SimpleTask: Task {
     type PreCircuit: PreCircuit + Clone;
 
-    fn get_circuit(&self, provider: Arc<Provider<Http>>, network: Network) -> Self::PreCircuit;
+    fn get_circuit(
+        &self,
+        provider: Arc<Provider<RetryClient<Http>>>,
+        network: Network,
+    ) -> Self::PreCircuit;
 }
 
 #[derive(Clone, Debug)]
@@ -72,19 +87,6 @@ impl<T: SimpleTask> Scheduler for EvmWrapper<T> {
     type Task = Wrapper<T>;
     type CircuitRouter = WrapperRouter<T::PreCircuit>;
 
-    fn get_degree(&self, circuit_type: Wrapper<T::CircuitType>) -> u32 {
-        if let Some(k) = self.degree.read().unwrap().get(&circuit_type) {
-            return *k;
-        }
-        let path = self.pinning_path(circuit_type);
-        let k = match circuit_type {
-            Wrapper::Initial(_) => <T::PreCircuit as PreCircuit>::Pinning::from_path(path).degree(),
-            Wrapper::ForEvm(_) => AggregationConfigPinning::from_path(path).degree(),
-        };
-        self.degree.write().unwrap().insert(circuit_type, k);
-        k
-    }
-
     fn get_circuit(&self, task: Self::Task, prev_snarks: Vec<Snark>) -> Self::CircuitRouter {
         match task {
             Wrapper::Initial(t) => {
@@ -93,7 +95,10 @@ impl<T: SimpleTask> Scheduler for EvmWrapper<T> {
             }
             Wrapper::ForEvm(_) => {
                 assert_eq!(prev_snarks.len(), 1);
-                WrapperRouter::ForEvm(PublicAggregationCircuit::new(prev_snarks, false))
+                WrapperRouter::ForEvm(PublicAggregationCircuit::new(vec![(
+                    prev_snarks[0].clone(),
+                    false,
+                )]))
             }
         }
     }

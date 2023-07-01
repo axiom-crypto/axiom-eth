@@ -26,6 +26,8 @@ use crate::Network;
 
 use super::circuit::AnyCircuit;
 
+pub mod evm_wrapper;
+
 /// This is a tag for the type of a circuit, independent of the circuit's inputs.
 /// For example, it can be used to fetch the proving key for the circuit.
 pub trait CircuitType: Clone + Debug + Eq + Hash {

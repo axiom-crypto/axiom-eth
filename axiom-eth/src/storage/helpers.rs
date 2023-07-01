@@ -1,12 +1,10 @@
 use crate::{
-    rlp::builder::RlcThreadBuilder,
     util::{
-        circuit::{PinnableCircuit, PreCircuit},
         scheduler::{
             evm_wrapper::{EvmWrapper, SimpleTask},
-            Task,
+            CircuitType, Task,
         },
-        EthConfigPinning,
+        EthConfigPinning, Halo2ConfigPinning,
     },
     Network,
 };
@@ -14,14 +12,7 @@ use ethers_core::{
     types::{Address, H256},
     utils::keccak256,
 };
-use ethers_providers::{Http, Provider};
-use halo2_base::{
-    gates::builder::CircuitBuilderStage,
-    halo2_proofs::{
-        halo2curves::bn256::{Bn256, Fr},
-        poly::kzg::commitment::ParamsKZG,
-    },
-};
+use ethers_providers::{Http, Provider, RetryClient};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -55,17 +46,24 @@ impl StorageTask {
     }
 }
 
+impl CircuitType for (Network, usize) {
+    fn name(&self) -> String {
+        format!("{}_{}", self.0, self.1)
+    }
+    fn get_degree_from_pinning(&self, pinning_path: impl AsRef<std::path::Path>) -> u32 {
+        let pinning_path = pinning_path.as_ref();
+        let pinning = EthConfigPinning::from_path(pinning_path);
+        pinning.degree()
+    }
+}
 impl Task for StorageTask {
     type CircuitType = (Network, usize); // num slots
 
     fn circuit_type(&self) -> Self::CircuitType {
         (self.network(), self.slots.len())
     }
-    fn type_name((network, num_slots): Self::CircuitType) -> String {
-        format!("{network}_{num_slots}")
-    }
     fn name(&self) -> String {
-        format!("{}_{:?}", Self::type_name(self.circuit_type()), self.digest())
+        format!("{}_{:?}", self.circuit_type().name(), self.digest())
     }
     fn dependencies(&self) -> Vec<Self> {
         vec![]
@@ -75,7 +73,11 @@ impl Task for StorageTask {
 impl SimpleTask for StorageTask {
     type PreCircuit = EthBlockStorageCircuit;
 
-    fn get_circuit(&self, provider: Arc<Provider<Http>>, network: Network) -> Self::PreCircuit {
+    fn get_circuit(
+        &self,
+        provider: Arc<Provider<RetryClient<Http>>>,
+        network: Network,
+    ) -> Self::PreCircuit {
         EthBlockStorageCircuit::from_provider(
             &provider,
             self.block_number,
@@ -85,23 +87,5 @@ impl SimpleTask for StorageTask {
             STORAGE_PROOF_MAX_DEPTH,
             network,
         )
-    }
-}
-
-impl PreCircuit for EthBlockStorageCircuit {
-    type Pinning = EthConfigPinning;
-
-    fn create_circuit(
-        self,
-        stage: CircuitBuilderStage,
-        pinning: Option<Self::Pinning>,
-        _: &ParamsKZG<Bn256>,
-    ) -> impl PinnableCircuit<Fr> {
-        let builder = match stage {
-            CircuitBuilderStage::Prover => RlcThreadBuilder::new(true),
-            _ => RlcThreadBuilder::new(false),
-        };
-        let break_points = pinning.map(|p| p.break_points);
-        self.create_circuit::<Fr>(builder, break_points)
     }
 }
