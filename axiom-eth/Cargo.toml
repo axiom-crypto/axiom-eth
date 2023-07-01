@@ -26,8 +26,8 @@ serde_with = { version = "2.2", optional = true }
 
 # halo2
 ff = "0.12"
-halo2-base = { git = "https://github.com/axiom-crypto/halo2-lib.git", tag = "v0.3.0", default-features = false }
-zkevm-keccak = { git = "https://github.com/axiom-crypto/halo2-lib.git", tag = "v0.3.0", default-features = false }
+halo2-base = { git = "https://github.com/axiom-crypto/halo2-lib.git", branch = "community-edition", default-features = false }
+zkevm-keccak = { git = "https://github.com/axiom-crypto/halo2-lib.git", branch = "community-edition", default-features = false }
 # macro
 any_circuit_derive = { path = "../any_circuit_derive", optional = true }
 
@@ -39,8 +39,8 @@ rand = "0.8"
 rand_chacha = "0.3.1"
 
 # aggregation 
-snark-verifier = { git = "https://github.com/axiom-crypto/snark-verifier.git", tag = "v0.1.1", default-features = false, features = ["loader_halo2"], optional = true }
-snark-verifier-sdk = { git = "https://github.com/axiom-crypto/snark-verifier.git", tag = "v0.1.1", default-features = false, features = ["loader_halo2"], optional = true }
+snark-verifier = { git = "https://github.com/axiom-crypto/snark-verifier.git", tag = "community-edition", default-features = false, features = ["loader_halo2"], optional = true }
+snark-verifier-sdk = { git = "https://github.com/axiom-crypto/snark-verifier.git", tag = "community-edition", default-features = false, features = ["loader_halo2"], optional = true }
 
 # generating circuit inputs from blockchain
 ethers-providers = { version = "=2.0.6", optional = true }
