@@ -30,7 +30,7 @@ use ethers_core::{
     utils::keccak256,
 };
 #[cfg(feature = "providers")]
-use ethers_providers::{Http, Provider};
+use ethers_providers::{JsonRpcClient, Provider};
 use halo2_base::{
     gates::{GateInstructions, RangeChip, RangeInstructions},
     halo2_proofs::halo2curves::bn256::G1Affine,
@@ -231,8 +231,8 @@ impl MultiStorageCircuit {
 
     /// Creates circuit inputs from a JSON-RPC provider.
     #[cfg(feature = "providers")]
-    pub fn from_provider(
-        provider: &Provider<Http>,
+    pub fn from_provider<P: JsonRpcClient>(
+        provider: &Provider<P>,
         block_responses: Vec<(Fr, u32)>,
         account_responses: Vec<(Fr, Address)>,
         queries: Vec<(u64, Address, H256)>,

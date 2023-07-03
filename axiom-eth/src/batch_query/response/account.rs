@@ -24,7 +24,7 @@ use crate::{
 };
 use ethers_core::types::Address;
 #[cfg(feature = "providers")]
-use ethers_providers::{Http, Provider};
+use ethers_providers::{JsonRpcClient, Provider};
 use halo2_base::{
     gates::{GateInstructions, RangeChip, RangeInstructions},
     halo2_proofs::halo2curves::bn256::G1Affine,
@@ -257,8 +257,8 @@ impl MultiAccountCircuit {
 
     /// Creates circuit inputs from a JSON-RPC provider.
     #[cfg(feature = "providers")]
-    pub fn from_provider(
-        provider: &Provider<Http>,
+    pub fn from_provider<P: JsonRpcClient>(
+        provider: &Provider<P>,
         block_responses: Vec<(Fr, u32)>,
         queries: Vec<(u64, Address)>,
         not_empty: Vec<bool>,
