@@ -50,7 +50,7 @@ pub mod util;
 #[cfg(feature = "providers")]
 pub mod providers;
 
-pub(crate) const ETH_LOOKUP_BITS: usize = 8; // always want 8 to range check bytes
+pub const ETH_LOOKUP_BITS: usize = 8; // always want 8 to range check bytes
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
