@@ -608,7 +608,7 @@ mod circuit_builder {
     }
 
     /// A wrapper around RlcCircuitBuilder where Gate is replaced by Range in the circuit
-    pub struct RlpCircuitBuilder<F: ScalarField, FnPhase1>(RlcCircuitBuilder<F, FnPhase1>)
+    pub struct RlpCircuitBuilder<F: ScalarField, FnPhase1>(pub RlcCircuitBuilder<F, FnPhase1>)
     where
         FnPhase1: FnSynthesize<F>;
 

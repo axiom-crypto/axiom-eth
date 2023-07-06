@@ -505,20 +505,24 @@ mod rlp {
             RlcThreadBuilder::keygen(), input_bytes.clone(), &max_field_lens, is_var_len
         );
 
+        circuit.config(k as usize, Some(6));
 
 
-        println!("vk gen started"); // 7:30-ish to here -- 11:23
+        println!("vk gen started");
         let vk = keygen_vk(&params, &circuit)?;
         println!("vk gen done");
         let pk = keygen_pk(&params, vk, &circuit)?;
         println!("pk gen done");
         println!();
-        println!("==============STARTING PROOF GEN==================="); // 9:40 to here -- 13:20
+        println!("==============STARTING PROOF GEN==================="); 
+
+        let break_points = circuit.0.break_points.take();
 
         drop(circuit);
         let circuit = rlp_circuit(
             RlcThreadBuilder::prover(), input_bytes.clone(), &max_field_lens, is_var_len
         );
+        *circuit.0.break_points.borrow_mut() = break_points;
 
 
         let mut transcript = Blake2bWrite::<_, _, Challenge255<_>>::init(vec![]);
