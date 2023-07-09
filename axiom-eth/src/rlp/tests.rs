@@ -486,6 +486,102 @@ mod rlp {
         MockProver::run(k, &circuit, vec![]).unwrap().assert_satisfied();
     }
 
+    // TESTS
+    // need to test: byte literal, len literal for item, len len for item,
+    // len literal for list, len len for list
+
+    // list of three literals: one byte, one len, one len len
+    // list of two lists: one len, one len len
+
+    #[test]
+    pub fn test_mock_rlp_of_rlp_1() {
+        let k = DEGREE;
+        let input_bytes: Vec<u8> = Vec::from_hex("f8472083000000b84000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000").unwrap();
+        //let input_bytes: Vec<u8> = Vec::from_hex("f842b84000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000").unwrap();
+        //let input_bytes: Vec<u8> = Vec::from_hex("f845820000b84000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000").unwrap();
+        // does not appear to work when one item is a byte literal
+        // [(1-byte str), (3-byte str), (64-byte str)] -- tot 71-byte payload
+        let max_field_lens = vec![100, 100, 100];
+        let is_var_len = true;
+
+        let circuit = rlp_circuit(RlcThreadBuilder::<Fr>::mock(), input_bytes, &max_field_lens, is_var_len);
+        MockProver::run(k, &circuit, vec![]).unwrap().assert_satisfied();
+    }
+
+    #[test]
+    pub fn test_mock_rlp_of_rlp_2() {
+        let k = DEGREE;
+        let input_bytes: Vec<u8> = vec![0xd7, 0x84, b'n', b'u', b'm', b's',
+        0xc8, 0x83, b'o', b'n', b'e', 0x83, b't', b'w', b'o',
+        0xc8, 0x83, b'u', b'n', b'o', 0x83, b'd', b'o', b's'];
+        let max_field_lens = vec![15, 9, 11];
+        let is_var_len = true;
+
+        let circuit = rlp_circuit(RlcThreadBuilder::<Fr>::mock(), input_bytes, &max_field_lens, is_var_len);
+        MockProver::run(k, &circuit, vec![]).unwrap().assert_satisfied();
+    }
+
+    #[test]
+    pub fn test_mock_rlp_of_rlp_3() {
+        // list of two lists: one len, one len len
+        let k = DEGREE;
+        let input_bytes: Vec<u8> = Vec::from_hex("f852c88300000083000000f8472083000000b84000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000").unwrap();
+        let max_field_lens = vec![100, 100, 100];
+        let is_var_len = true;
+
+        let circuit = rlp_circuit(RlcThreadBuilder::<Fr>::mock(), input_bytes, &max_field_lens, is_var_len);
+        MockProver::run(k, &circuit, vec![]).unwrap().assert_satisfied();
+    }
+
+    #[test]
+    pub fn test_mock_rlp_of_rlp_4() {
+        let k = DEGREE;
+        let input_bytes: Vec<u8> = Vec::from_hex("c88300000083000000").unwrap();
+
+        let max_field_lens = vec![200, 200]; // with 4 20's it fails
+        let is_var_len = false;
+
+        let circuit = rlp_circuit(RlcThreadBuilder::<Fr>::mock(), input_bytes, &max_field_lens, is_var_len);
+        MockProver::run(k, &circuit, vec![]).unwrap().assert_satisfied();
+    }
+
+    #[test]
+    pub fn test_mock_rlp_of_rlp_5() {
+        let k = DEGREE;
+        let input_bytes: Vec<u8> = Vec::from_hex("c88300000083000000").unwrap();
+
+        let max_field_lens = vec![200, 200]; // with 4 20's it fails
+        let is_var_len = true;
+
+        let circuit = rlp_circuit(RlcThreadBuilder::<Fr>::mock(), input_bytes, &max_field_lens, is_var_len);
+        MockProver::run(k, &circuit, vec![]).unwrap().assert_satisfied();
+    }
+
+    #[test]
+    pub fn test_mock_rlp_of_rlp_6() {
+        let k = DEGREE;
+        let input_bytes: Vec<u8> = Vec::from_hex("c88300000083000000").unwrap();
+
+        let max_field_lens = vec![200, 200, 200, 200]; // with 4 20's it fails
+        let is_var_len = true;
+
+        let circuit = rlp_circuit(RlcThreadBuilder::<Fr>::mock(), input_bytes, &max_field_lens, is_var_len);
+        MockProver::run(k, &circuit, vec![]).unwrap().assert_satisfied();
+    }
+
+    #[test]
+    pub fn test_mock_rlp_of_rlp_7() {
+        let k = DEGREE;
+        let input_bytes: Vec<u8> = Vec::from_hex("c100").unwrap();
+        // [(1-byte str), (3-byte str), (64-byte str)] -- tot 71-byte payload
+        let max_field_lens = vec![100, 100, 100];
+        let is_var_len = true;
+
+        let circuit = rlp_circuit(RlcThreadBuilder::<Fr>::mock(), input_bytes, &max_field_lens, is_var_len);
+        MockProver::run(k, &circuit, vec![]).unwrap().assert_satisfied();
+    }
+
+
     #[test]
     pub fn test_prove_rlp_of_rlp_2() -> Result<(), Error> {
         let k = DEGREE;

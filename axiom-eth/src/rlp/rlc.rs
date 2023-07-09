@@ -222,6 +222,7 @@ impl<F: ScalarField> RlcChip<F> {
 
         let (mut running_rlc, mut running_len, _) = inputs.next().unwrap();
         for (input, len, max_len) in inputs {
+            println!("Looping 225: {:?}", max_len);
             running_len = gate.add(ctx_gate, running_len, len);
             let gamma_pow = self.rlc_pow(ctx_gate, gate, len, bit_length(max_len as u64));
             running_rlc = gate.mul_add(ctx_gate, running_rlc, gamma_pow, input);
@@ -331,6 +332,7 @@ impl<F: ScalarField> RlcChip<F> {
         if pow_bits == 0 {
             pow_bits = 1;
         }
+        println!("assertion {}>={}", self.gamma_pow_cached().len(), pow_bits);
         assert!(pow_bits <= self.gamma_pow_cached().len());
 
         let bits = gate.num_to_bits(ctx_gate, pow, pow_bits);

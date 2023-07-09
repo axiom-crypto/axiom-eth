@@ -43,6 +43,7 @@ pub fn witness_subarray<F: ScalarField>(
     // `u32` should be enough for array indices
     let [start_id, sub_len] = [start_id, sub_len].map(|fe| fe.get_lower_32() as usize);
     debug_assert!(sub_len <= max_len);
+    println!("About to have problem at {} {}", start_id, sub_len);
     ctx.assign_witnesses(
         array[start_id..start_id + sub_len]
             .iter()
@@ -395,6 +396,9 @@ impl<'range, F: ScalarField> RlpChip<'range, F> {
             Constant(self.gate().get_field_element(55)),
         );
 
+        // If item is byte literal, 0
+        // If item is short, len
+        // If item is long, len_len
         let next_len = self.gate().select(
             ctx,
             Existing(len_len),
@@ -402,6 +406,8 @@ impl<'range, F: ScalarField> RlpChip<'range, F> {
             Existing(is_big),
         );
 
+        // If item is big, this is the length of the length field
+        // Else 0
         let len_len = self.gate().mul(
             ctx,
             Existing(len_len),
@@ -782,8 +788,6 @@ impl<'range, F: ScalarField> RlpChip<'range, F> {
         max_item_lens: &[usize],
         is_variable_len: bool,
     ) -> RlpOfRlpTraceWitness<F> {
-        //println!("Start decompose_rlp_of_rlp_phase0");
-
 
         let max_rlp_array_len = rlp_array.len();
         let max_len_len = max_rlp_len_len(max_rlp_array_len);
@@ -794,14 +798,26 @@ impl<'range, F: ScalarField> RlpChip<'range, F> {
         let len_len = prefix_parsed.len_len;
         self.range.check_less_than_safe(ctx, len_len, (max_len_len + 1) as u64);
 
+        // len_byte_val -- len if big, 0 otherwise
         let (len_cells, len_byte_val) = self.parse_rlp_len(ctx, &rlp_array, len_len, max_len_len);
 
-        let list_payload_len = self.gate().select(
+        // 0 if byte literal
+        // else len
+        let mut list_payload_len = self.gate().select(
             ctx,
             Existing(len_byte_val),
             Existing(prefix_parsed.next_len),
             Existing(prefix_parsed.is_big),
         );
+
+        //list_payload_len = self.gate().select(
+        //    ctx,
+        //    list_payload_len,
+        //    Constant(F::one()),
+        //    prefix_parsed.
+        //)
+
+        // if byte literal -- might be off by 1
         self.range.check_less_than_safe(
             ctx,
             list_payload_len,
@@ -809,6 +825,10 @@ impl<'range, F: ScalarField> RlpChip<'range, F> {
         );
 
         // this is automatically <= max_rlp_array_len
+        // if end: should be 0
+        // if literal: 1
+        // if short: 1 + len
+        // if long: 1 + len_len + len
         let rlp_len = self
             .gate()
             .sum(ctx, [Constant(F::one()), Existing(len_len), Existing(list_payload_len)]);
@@ -819,12 +839,12 @@ impl<'range, F: ScalarField> RlpChip<'range, F> {
         let mut running_max_len = max_len_len + 1; 
 
         for &max_item_len in max_item_lens {
-            // compare lines 625-712
             let mut prefix = self.gate().select_from_idx(
                 ctx,
                 rlp_array.iter().copied().take(running_max_len + 1),
                 prefix_idx,
             );
+            println!("Prefix: {:?}", prefix);
             let prefix_parsed = self.parse_rlp_prefix(ctx, prefix);
 
             let mut len_len = prefix_parsed.len_len;
@@ -832,6 +852,7 @@ impl<'range, F: ScalarField> RlpChip<'range, F> {
             self.range.check_less_than_safe(ctx, len_len, (max_item_len_len + 1) as u64);
             
             let len_start_id = *prefix_parsed.is_not_literal.value() + prefix_idx.value();
+            // len_cells is empty if terminal, literal, or short
             let len_cells = witness_subarray(
                 ctx,
                 &rlp_array,
@@ -840,9 +861,12 @@ impl<'range, F: ScalarField> RlpChip<'range, F> {
                 max_item_len_len,
             );
 
+            // 0 if terminal, literal or short
+            // len if long
             let len_byte_val = evaluate_byte_array(ctx, self.gate(), &len_cells, len_len);
 
-
+            // len if short or long
+            // 0 if terminal or literal
             let mut item_len = self.gate().select(
                 ctx,
                 len_byte_val,
@@ -850,22 +874,71 @@ impl<'range, F: ScalarField> RlpChip<'range, F> {
                 prefix_parsed.is_big,
             );
 
-            let mut prefix_idx_val = F::from(0u64); // to be simplified if possible
+            // len if short or long
+            // 1 if terminal or literal
+            item_len = self.gate().select(
+                ctx,
+                item_len,
+                Constant(F::one()),
+                prefix_parsed.is_not_literal,
+            );
+
+
+            // prefix_len is 0 if literal
+            // 1 otherwise
+            let mut prefix_len = prefix_parsed.is_not_literal;
+
+
+            if is_variable_len{
+                let item_in_list = self.range.is_less_than(
+                    ctx,
+                    prefix_idx,
+                    rlp_len,
+                    bit_length(max_rlp_array_len as u64),
+                );
+
+                // len if short or long
+                // 1 if literal
+                // 0 if terminal
+                item_len = self.gate().select(
+                    ctx,
+                    item_len,
+                    Constant(F::zero()),
+                    item_in_list,
+                );
+                // If `prefix_idx >= rlp_len`, that means we are done
+                //let item_in_list = self.range.is_less_than(
+                //    ctx,
+                //    prefix_idx,
+                //    rlp_len,
+                //    bit_length(max_rlp_array_len as u64),
+                //);
+                // In cases where the RLP sequence is a list of unknown variable length, we keep track
+                // of whether the corresponding index actually is a list item by constraining that
+                // all of `prefix_len, len_len, field_len` are 0 when the current field should be treated
+                // as a dummy and not actually in the list
+                prefix_len = self.gate().mul(ctx, prefix_len, item_in_list);
+                len_len = self.gate().mul(ctx, len_len, item_in_list);
+                //item_len = self.gate().mul(ctx, item_len, item_in_list);
+            }
+
+            // this is just print for debug
+            let mut prefix_idx_val = F::from(0u64);
             let mut item_len_val = F::from(0u64);
-            /*
-            prefix_idx.value().map(|x| {
-                prefix_idx_val = *x;
-            });
-            item_len.value().map(|x|  {
-                item_len_val = *x;
-            });
-            */
+
             prefix_idx_val = *prefix_idx.value();
             item_len_val = *item_len.value();
             println!("This item starts at {:?} and has length {:?}", prefix_idx_val.get_lower_32(), item_len_val.get_lower_32());
+            // if literal, is the length wrong?
+            // end print for debug
 
+
+
+            // if literal: should item_len be 1?
             self.range.check_less_than_safe(ctx, item_len, (max_item_len + 1) as u64);
+                // must be after the block
 
+            // if literal: item_len should be 1.  item_cells should have length 1
             let item_cells = witness_subarray(
                 ctx,
                 &rlp_array,
@@ -875,10 +948,8 @@ impl<'range, F: ScalarField> RlpChip<'range, F> {
             );
             running_max_len += 1 + max_item_len_len + max_item_len;
 
-            // prefix_len is either 0 or 1
-            let mut prefix_len = prefix_parsed.is_not_literal;
 
-            // here we need to handle is_variable_len
+
 
             prefix = self.gate().mul(ctx, Existing(prefix), Existing(prefix_len));
             prefix_idx = self.gate().sum(
@@ -905,9 +976,6 @@ impl<'range, F: ScalarField> RlpChip<'range, F> {
             item_witness.push(witness);
         }
 
-        //println!("End decompose_rlp_of_rlp_phase0");
-
-
         RlpOfRlpTraceWitness { item_witness, len_len, len_cells, rlp_len, rlp_array }
 
     }
@@ -919,7 +987,6 @@ impl<'range, F: ScalarField> RlpChip<'range, F> {
         rlp_witness: RlpOfRlpTraceWitness<F>,
         _is_variable_len: bool,
     ) -> RlpOfRlpTrace<F> {
-        //println!("Start decompose_rlp_of_rlp_phase1");
 
         // TO VERIFY
         // 1. parse_rlp_len -- gives len_cells from rlp_array and len_len
@@ -933,6 +1000,8 @@ impl<'range, F: ScalarField> RlpChip<'range, F> {
         let len_trace = rlc.compute_rlc((ctx_gate, ctx_rlc), self.gate(), len_cells, len_len);
 
         let mut item_trace = Vec::with_capacity(item_witness.len());
+        let mut cml_max_len: usize = 0;
+
         for item_witness in item_witness {
             let len_rlc = rlc.compute_rlc(
                 (ctx_gate, ctx_rlc),
@@ -952,10 +1021,11 @@ impl<'range, F: ScalarField> RlpChip<'range, F> {
                 len_trace: len_rlc,
                 item_trace: item_rlc,
             });
+            cml_max_len += item_witness.max_item_len;
         }
 
 
-        rlc.load_rlc_cache((ctx_gate, ctx_rlc), self.gate(), bit_length(rlp_array.len() as u64));
+        rlc.load_rlc_cache((ctx_gate, ctx_rlc), self.gate(), cml_max_len);
 
         let prefix = rlp_array[0];
         let one = ctx_gate.load_constant(F::one());
