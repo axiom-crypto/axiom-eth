@@ -487,20 +487,15 @@ mod rlp {
     }
 
     // TESTS
-    // need to test: byte literal, len literal for item, len len for item,
+    // test: byte literal, len literal for item, len len for item,
     // len literal for list, len len for list
-
-    // list of three literals: one byte, one len, one len len
-    // list of two lists: one len, one len len
 
     #[test]
     pub fn test_mock_rlp_of_rlp_1() {
+        // list of three literals: one byte, one len, one len len
         let k = DEGREE;
         let input_bytes: Vec<u8> = Vec::from_hex("f8472083000000b84000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000").unwrap();
-        //let input_bytes: Vec<u8> = Vec::from_hex("f842b84000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000").unwrap();
-        //let input_bytes: Vec<u8> = Vec::from_hex("f845820000b84000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000").unwrap();
-        // does not appear to work when one item is a byte literal
-        // [(1-byte str), (3-byte str), (64-byte str)] -- tot 71-byte payload
+        // [(1-byte literal), (3-byte str), (64-byte str)] -- tot 71-byte payload
         let max_field_lens = vec![100, 100, 100];
         let is_var_len = true;
 
@@ -514,6 +509,7 @@ mod rlp {
         let input_bytes: Vec<u8> = vec![0xd7, 0x84, b'n', b'u', b'm', b's',
         0xc8, 0x83, b'o', b'n', b'e', 0x83, b't', b'w', b'o',
         0xc8, 0x83, b'u', b'n', b'o', 0x83, b'd', b'o', b's'];
+        // ["nums", ["one", "two"], ["uno", "dos"]]
         let max_field_lens = vec![15, 9, 11];
         let is_var_len = true;
 
@@ -533,13 +529,16 @@ mod rlp {
         MockProver::run(k, &circuit, vec![]).unwrap().assert_satisfied();
     }
 
+
+
+
     #[test]
     pub fn test_mock_rlp_of_rlp_4() {
         let k = DEGREE;
-        let input_bytes: Vec<u8> = Vec::from_hex("c88300000083000000").unwrap();
-
-        let max_field_lens = vec![200, 200]; // with 4 20's it fails
-        let is_var_len = false;
+        let input_bytes: Vec<u8> = Vec::from_hex("c0").unwrap();
+        // empty list
+        let max_field_lens = vec![100, 100, 100];
+        let is_var_len = true;
 
         let circuit = rlp_circuit(RlcThreadBuilder::<Fr>::mock(), input_bytes, &max_field_lens, is_var_len);
         MockProver::run(k, &circuit, vec![]).unwrap().assert_satisfied();
@@ -547,23 +546,28 @@ mod rlp {
 
     #[test]
     pub fn test_mock_rlp_of_rlp_5() {
+        // set-theoretical representation of three
+        // https://ethereum.org/en/developers/docs/data-structures-and-encoding/rlp/
         let k = DEGREE;
-        let input_bytes: Vec<u8> = Vec::from_hex("c88300000083000000").unwrap();
-
-        let max_field_lens = vec![200, 200]; // with 4 20's it fails
+        let input_bytes: Vec<u8> = Vec::from_hex("c7c0c1c0c3c0c1c0").unwrap();
+        let max_field_lens = vec![100, 100, 100, 100, 100];
         let is_var_len = true;
 
         let circuit = rlp_circuit(RlcThreadBuilder::<Fr>::mock(), input_bytes, &max_field_lens, is_var_len);
         MockProver::run(k, &circuit, vec![]).unwrap().assert_satisfied();
     }
 
+
+
     #[test]
     pub fn test_mock_rlp_of_rlp_6() {
+        // list of two string literals
+        // is_var_len == false
         let k = DEGREE;
         let input_bytes: Vec<u8> = Vec::from_hex("c88300000083000000").unwrap();
 
-        let max_field_lens = vec![200, 200, 200, 200]; // with 4 20's it fails
-        let is_var_len = true;
+        let max_field_lens = vec![200, 200];
+        let is_var_len = false;
 
         let circuit = rlp_circuit(RlcThreadBuilder::<Fr>::mock(), input_bytes, &max_field_lens, is_var_len);
         MockProver::run(k, &circuit, vec![]).unwrap().assert_satisfied();
@@ -571,15 +575,113 @@ mod rlp {
 
     #[test]
     pub fn test_mock_rlp_of_rlp_7() {
+        // list of two string literals
+        // is_var_len == true, 
+        // no phantom items
+        let k = DEGREE;
+        let input_bytes: Vec<u8> = Vec::from_hex("c88300000083000000").unwrap();
+
+        let max_field_lens = vec![200, 200];
+        let is_var_len = true;
+
+        let circuit = rlp_circuit(RlcThreadBuilder::<Fr>::mock(), input_bytes, &max_field_lens, is_var_len);
+        MockProver::run(k, &circuit, vec![]).unwrap().assert_satisfied();
+    }
+
+    #[test]
+    pub fn test_mock_rlp_of_rlp_8() {
+        // list of two string literals
+        // is_var_len == true,
+        // phantom items
+        let k = DEGREE;
+        let input_bytes: Vec<u8> = Vec::from_hex("c88300000083000000").unwrap();
+
+        let max_field_lens = vec![200, 200, 200, 200];
+        let is_var_len = true;
+
+        let circuit = rlp_circuit(RlcThreadBuilder::<Fr>::mock(), input_bytes, &max_field_lens, is_var_len);
+        MockProver::run(k, &circuit, vec![]).unwrap().assert_satisfied();
+    }
+
+    #[test]
+    pub fn test_mock_rlp_of_rlp_9() {
         let k = DEGREE;
         let input_bytes: Vec<u8> = Vec::from_hex("c100").unwrap();
-        // [(1-byte str), (3-byte str), (64-byte str)] -- tot 71-byte payload
+        // list consists of a single string literal
         let max_field_lens = vec![100, 100, 100];
         let is_var_len = true;
 
         let circuit = rlp_circuit(RlcThreadBuilder::<Fr>::mock(), input_bytes, &max_field_lens, is_var_len);
         MockProver::run(k, &circuit, vec![]).unwrap().assert_satisfied();
     }
+
+
+
+
+    #[test]
+    pub fn test_prove_rlp_of_rlp_1() -> Result<(), Error> {
+        let k = DEGREE;
+        let input_bytes: Vec<u8> = Vec::from_hex("f8472083000000b84000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000").unwrap();
+        // [(1-byte literal), (3-byte str), (64-byte str)] -- tot 71-byte payload
+        let max_field_lens = vec![100, 100, 100];
+        let is_var_len = true;
+
+        
+        println!("Length of input is ... {:?}", input_bytes.len());
+        println!("Input string: {:?}", input_bytes);
+
+        let mut rng = StdRng::from_seed([0u8; 32]);
+        let params = ParamsKZG::<Bn256>::setup(k, &mut rng);
+        let circuit = rlp_circuit(
+            RlcThreadBuilder::keygen(), input_bytes.clone(), &max_field_lens, is_var_len
+        );
+
+        circuit.config(k as usize, Some(6));
+
+
+        println!("vk gen started");
+        let vk = keygen_vk(&params, &circuit)?;
+        println!("vk gen done");
+        let pk = keygen_pk(&params, vk, &circuit)?;
+        println!("pk gen done");
+        println!();
+        println!("==============STARTING PROOF GEN==================="); 
+
+        let break_points = circuit.0.break_points.take();
+
+        drop(circuit);
+        let circuit = rlp_circuit(
+            RlcThreadBuilder::prover(), input_bytes.clone(), &max_field_lens, is_var_len
+        );
+        *circuit.0.break_points.borrow_mut() = break_points;
+
+
+        let mut transcript = Blake2bWrite::<_, _, Challenge255<_>>::init(vec![]);
+        create_proof::<
+            KZGCommitmentScheme<Bn256>,
+            ProverSHPLONK<'_, Bn256>,
+            Challenge255<G1Affine>,
+            _,
+            Blake2bWrite<Vec<u8>, G1Affine, Challenge255<G1Affine>>,
+            _,
+        >(&params, &pk, &[circuit], &[&[]], rng, &mut transcript)?;
+        let proof = transcript.finalize();
+        println!("proof gen done");
+        let verifier_params = params.verifier_params();
+        let strategy = SingleStrategy::new(verifier_params);
+        let mut transcript = Blake2bRead::<_, _, Challenge255<_>>::init(&proof[..]);
+        assert!(verify_proof::<
+            KZGCommitmentScheme<Bn256>,
+            VerifierSHPLONK<'_, Bn256>,
+            Challenge255<G1Affine>,
+            Blake2bRead<&[u8], G1Affine, Challenge255<G1Affine>>,
+            SingleStrategy<'_, Bn256>,
+        >(verifier_params, pk.get_vk(), strategy, &[&[]], &mut transcript)
+        .is_ok());
+        println!("verify done");
+        Ok(())
+    }
+
 
 
     #[test]
@@ -592,6 +694,203 @@ mod rlp {
         let max_field_lens = vec![15, 9, 11];
         let is_var_len = false;
         
+        println!("Length of input is ... {:?}", input_bytes.len());
+        println!("Input string: {:?}", input_bytes);
+
+        let mut rng = StdRng::from_seed([0u8; 32]);
+        let params = ParamsKZG::<Bn256>::setup(k, &mut rng);
+        let circuit = rlp_circuit(
+            RlcThreadBuilder::keygen(), input_bytes.clone(), &max_field_lens, is_var_len
+        );
+
+        circuit.config(k as usize, Some(6));
+
+
+        println!("vk gen started");
+        let vk = keygen_vk(&params, &circuit)?;
+        println!("vk gen done");
+        let pk = keygen_pk(&params, vk, &circuit)?;
+        println!("pk gen done");
+        println!();
+        println!("==============STARTING PROOF GEN==================="); 
+
+        let break_points = circuit.0.break_points.take();
+
+        drop(circuit);
+        let circuit = rlp_circuit(
+            RlcThreadBuilder::prover(), input_bytes.clone(), &max_field_lens, is_var_len
+        );
+        *circuit.0.break_points.borrow_mut() = break_points;
+
+
+        let mut transcript = Blake2bWrite::<_, _, Challenge255<_>>::init(vec![]);
+        create_proof::<
+            KZGCommitmentScheme<Bn256>,
+            ProverSHPLONK<'_, Bn256>,
+            Challenge255<G1Affine>,
+            _,
+            Blake2bWrite<Vec<u8>, G1Affine, Challenge255<G1Affine>>,
+            _,
+        >(&params, &pk, &[circuit], &[&[]], rng, &mut transcript)?;
+        let proof = transcript.finalize();
+        println!("proof gen done");
+        let verifier_params = params.verifier_params();
+        let strategy = SingleStrategy::new(verifier_params);
+        let mut transcript = Blake2bRead::<_, _, Challenge255<_>>::init(&proof[..]);
+        assert!(verify_proof::<
+            KZGCommitmentScheme<Bn256>,
+            VerifierSHPLONK<'_, Bn256>,
+            Challenge255<G1Affine>,
+            Blake2bRead<&[u8], G1Affine, Challenge255<G1Affine>>,
+            SingleStrategy<'_, Bn256>,
+        >(verifier_params, pk.get_vk(), strategy, &[&[]], &mut transcript)
+        .is_ok());
+        println!("verify done");
+        Ok(())
+    }
+
+
+
+    #[test]
+    pub fn test_prove_rlp_of_rlp_3() -> Result<(), Error> {
+        let k = DEGREE;
+        // list of two lists: one len, one len len
+        let input_bytes: Vec<u8> = Vec::from_hex("f852c88300000083000000f8472083000000b84000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000").unwrap();
+        let max_field_lens = vec![100, 100, 100];
+        let is_var_len = true;
+        
+        println!("Length of input is ... {:?}", input_bytes.len());
+        println!("Input string: {:?}", input_bytes);
+
+        let mut rng = StdRng::from_seed([0u8; 32]);
+        let params = ParamsKZG::<Bn256>::setup(k, &mut rng);
+        let circuit = rlp_circuit(
+            RlcThreadBuilder::keygen(), input_bytes.clone(), &max_field_lens, is_var_len
+        );
+
+        circuit.config(k as usize, Some(6));
+
+
+        println!("vk gen started");
+        let vk = keygen_vk(&params, &circuit)?;
+        println!("vk gen done");
+        let pk = keygen_pk(&params, vk, &circuit)?;
+        println!("pk gen done");
+        println!();
+        println!("==============STARTING PROOF GEN==================="); 
+
+        let break_points = circuit.0.break_points.take();
+
+        drop(circuit);
+        let circuit = rlp_circuit(
+            RlcThreadBuilder::prover(), input_bytes.clone(), &max_field_lens, is_var_len
+        );
+        *circuit.0.break_points.borrow_mut() = break_points;
+
+
+        let mut transcript = Blake2bWrite::<_, _, Challenge255<_>>::init(vec![]);
+        create_proof::<
+            KZGCommitmentScheme<Bn256>,
+            ProverSHPLONK<'_, Bn256>,
+            Challenge255<G1Affine>,
+            _,
+            Blake2bWrite<Vec<u8>, G1Affine, Challenge255<G1Affine>>,
+            _,
+        >(&params, &pk, &[circuit], &[&[]], rng, &mut transcript)?;
+        let proof = transcript.finalize();
+        println!("proof gen done");
+        let verifier_params = params.verifier_params();
+        let strategy = SingleStrategy::new(verifier_params);
+        let mut transcript = Blake2bRead::<_, _, Challenge255<_>>::init(&proof[..]);
+        assert!(verify_proof::<
+            KZGCommitmentScheme<Bn256>,
+            VerifierSHPLONK<'_, Bn256>,
+            Challenge255<G1Affine>,
+            Blake2bRead<&[u8], G1Affine, Challenge255<G1Affine>>,
+            SingleStrategy<'_, Bn256>,
+        >(verifier_params, pk.get_vk(), strategy, &[&[]], &mut transcript)
+        .is_ok());
+        println!("verify done");
+        Ok(())
+    }
+
+
+
+    #[test]
+    pub fn test_prove_rlp_of_rlp_4() -> Result<(), Error> {
+        let k = DEGREE;
+        let input_bytes: Vec<u8> = Vec::from_hex("c0").unwrap();
+        // empty list
+        let max_field_lens = vec![100, 100, 100];
+        let is_var_len = true;
+        
+        println!("Length of input is ... {:?}", input_bytes.len());
+        println!("Input string: {:?}", input_bytes);
+
+        let mut rng = StdRng::from_seed([0u8; 32]);
+        let params = ParamsKZG::<Bn256>::setup(k, &mut rng);
+        let circuit = rlp_circuit(
+            RlcThreadBuilder::keygen(), input_bytes.clone(), &max_field_lens, is_var_len
+        );
+
+        circuit.config(k as usize, Some(6));
+
+
+        println!("vk gen started");
+        let vk = keygen_vk(&params, &circuit)?;
+        println!("vk gen done");
+        let pk = keygen_pk(&params, vk, &circuit)?;
+        println!("pk gen done");
+        println!();
+        println!("==============STARTING PROOF GEN==================="); 
+
+        let break_points = circuit.0.break_points.take();
+
+        drop(circuit);
+        let circuit = rlp_circuit(
+            RlcThreadBuilder::prover(), input_bytes.clone(), &max_field_lens, is_var_len
+        );
+        *circuit.0.break_points.borrow_mut() = break_points;
+
+
+        let mut transcript = Blake2bWrite::<_, _, Challenge255<_>>::init(vec![]);
+        create_proof::<
+            KZGCommitmentScheme<Bn256>,
+            ProverSHPLONK<'_, Bn256>,
+            Challenge255<G1Affine>,
+            _,
+            Blake2bWrite<Vec<u8>, G1Affine, Challenge255<G1Affine>>,
+            _,
+        >(&params, &pk, &[circuit], &[&[]], rng, &mut transcript)?;
+        let proof = transcript.finalize();
+        println!("proof gen done");
+        let verifier_params = params.verifier_params();
+        let strategy = SingleStrategy::new(verifier_params);
+        let mut transcript = Blake2bRead::<_, _, Challenge255<_>>::init(&proof[..]);
+        assert!(verify_proof::<
+            KZGCommitmentScheme<Bn256>,
+            VerifierSHPLONK<'_, Bn256>,
+            Challenge255<G1Affine>,
+            Blake2bRead<&[u8], G1Affine, Challenge255<G1Affine>>,
+            SingleStrategy<'_, Bn256>,
+        >(verifier_params, pk.get_vk(), strategy, &[&[]], &mut transcript)
+        .is_ok());
+        println!("verify done");
+        Ok(())
+    }
+
+
+
+    #[test]
+    pub fn test_prove_rlp_of_rlp_5() -> Result<(), Error> {
+        let k = DEGREE;
+        // set-theoretical representation of three
+        // https://ethereum.org/en/developers/docs/data-structures-and-encoding/rlp/
+        let k = DEGREE;
+        let input_bytes: Vec<u8> = Vec::from_hex("c7c0c1c0c3c0c1c0").unwrap();
+        let max_field_lens = vec![100, 100, 100, 100, 100];
+        let is_var_len = true;
+
         println!("Length of input is ... {:?}", input_bytes.len());
         println!("Input string: {:?}", input_bytes);
 
