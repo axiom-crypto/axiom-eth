@@ -43,7 +43,6 @@ pub fn witness_subarray<F: ScalarField>(
     // `u32` should be enough for array indices
     let [start_id, sub_len] = [start_id, sub_len].map(|fe| fe.get_lower_32() as usize);
     debug_assert!(sub_len <= max_len);
-    println!("About to have problem at {} {}", start_id, sub_len);
     ctx.assign_witnesses(
         array[start_id..start_id + sub_len]
             .iter()
@@ -847,7 +846,6 @@ impl<'range, F: ScalarField> RlpChip<'range, F> {
                 rlp_array.iter().copied().take(running_max_len + 1),
                 prefix_idx,
             );
-            println!("Prefix: {:?}", prefix);
             let prefix_parsed = self.parse_rlp_prefix(ctx, prefix); // constrained correct
 
             let mut len_len = prefix_parsed.len_len;
