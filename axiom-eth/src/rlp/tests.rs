@@ -439,6 +439,33 @@ mod rlp {
         }
     }
 
+    #[test] // fail
+    pub fn test_mock_rlp_array_1() {
+        let k = DEGREE;
+        let input_bytes: Vec<u8> = vec![0xc8, 0x83, b'c', b'a', b't', 0x83, b'd', b'o', b'g'];
+        let circuit = rlp_list_circuit(
+            RlcThreadBuilder::<Fr>::mock(), 
+            input_bytes, 
+            &[100, 100], 
+            true,
+        );
+        MockProver::run(k, &circuit, vec![]).unwrap().assert_satisfied();
+    }
+
+    #[test] // fail
+    pub fn test_mock_rlp_array_2() {
+        let k = DEGREE;
+        let input_bytes: Vec<u8> = vec![0xc8, 0x83, b'c', b'a', b't', 0x83, b'd', b'o', b'g'];
+        let circuit = rlp_list_circuit(
+            RlcThreadBuilder::<Fr>::mock(), 
+            input_bytes, 
+            &[5, 5, 5],
+            true,
+        );
+        MockProver::run(k, &circuit, vec![]).unwrap().assert_satisfied();
+    }
+
+
     #[test]
     pub fn test_mock_rlp_field() {
         let k = DEGREE;
