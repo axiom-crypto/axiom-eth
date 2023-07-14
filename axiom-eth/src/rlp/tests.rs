@@ -465,6 +465,19 @@ mod rlp {
         MockProver::run(k, &circuit, vec![]).unwrap().assert_satisfied();
     }
 
+    #[test] // pass
+    pub fn test_mock_rlp_array_3() {
+        let k = DEGREE;
+        let input_bytes: Vec<u8> = vec![0xc3, 0x00, 0x00, 0x00,];
+        let circuit = rlp_list_circuit(
+            RlcThreadBuilder::<Fr>::mock(), 
+            input_bytes, 
+            &[5, 5, 5],
+            true,
+        );
+        MockProver::run(k, &circuit, vec![]).unwrap().assert_satisfied();
+    }
+
 
     #[test]
     pub fn test_mock_rlp_field() {
@@ -634,6 +647,18 @@ mod rlp {
     pub fn test_mock_rlp_of_rlp_9() {
         let k = DEGREE;
         let input_bytes: Vec<u8> = Vec::from_hex("c100").unwrap();
+        // list consists of a single string literal
+        let max_field_lens = vec![100, 100, 100];
+        let is_var_len = true;
+
+        let circuit = rlp_circuit(RlcThreadBuilder::<Fr>::mock(), input_bytes, &max_field_lens, is_var_len);
+        MockProver::run(k, &circuit, vec![]).unwrap().assert_satisfied();
+    }
+
+    #[test]
+    pub fn test_mock_rlp_of_rlp_10() {
+        let k = DEGREE;
+        let input_bytes: Vec<u8> = Vec::from_hex("c100000000000000").unwrap();
         // list consists of a single string literal
         let max_field_lens = vec![100, 100, 100];
         let is_var_len = true;
