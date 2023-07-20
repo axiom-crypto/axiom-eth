@@ -218,6 +218,8 @@ pub trait EthBlockHeaderChip<F: Field> {
     ///
     /// This is the preparation step that computes the witnesses. This MUST be done in `FirstPhase`.
     /// The accompanying `decompose_block_header_finalize` must be called in `SecondPhase` to constrain the RLCs associated to the RLP decoding.
+    /// `block_header_rlp` should have entries with byte values (0-255); it is not constrained here, but the keccak circuit guarantees the input rlc
+    /// is an rlc of bytes if used on later on.
     fn decompose_block_header_phase0(
         &self,
         ctx: &mut Context<F>,
@@ -582,10 +584,11 @@ impl<F: Field> EthBlockHeaderChainCircuit<F> {
 
         // ==== Load RLP encoding and decode ====
         // The block header RLPs are assigned as witnesses in this function
+        let max_len = get_block_header_rlp_max_lens(self.network).0;
         let block_headers = self
             .header_rlp_encodings
             .into_iter()
-            .map(|rlp| assign_vec(ctx, rlp, MAINNET_BLOCK_HEADER_RLP_MAX_BYTES))
+            .map(|rlp| assign_vec(ctx, rlp, max_len))
             .collect_vec();
         let block_chain_witness = chip.decompose_block_header_chain_phase0(
             &mut builder.gate_builder,
