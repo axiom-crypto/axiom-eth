@@ -90,3 +90,13 @@ cargo run --bin only_receipts --release -- --network goerli --path data/receipts
 ```
 
 See [solc version](#solc-version) if running into problems with contract creation. The SNARK verifier Yul code will be generated in `data/receipts`, as will the calldata for your particular task.
+
+## Merkle Mountain Range API
+
+The above task files require getting Merkle Mountain Ranges of block hashes and generating merkle proofs into them. You can do this using an API call via:
+
+```
+cargo run --bin mmr_api -- --block-number <block number> --chain_id <chain id>
+```
+
+This is simply a pass-through call to [this endpoint](https://api-docs.axiom.xyz/block/gets-the-merkle-mountain-range-proof-for-the-block).
