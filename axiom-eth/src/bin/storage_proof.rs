@@ -41,8 +41,8 @@ fn main() {
         args.network,
         srs_readonly,
         args.readonly,
-        args.config_path.unwrap_or_else(|| PathBuf::from("configs")),
-        args.data_path.unwrap_or_else(|| PathBuf::from("data")),
+        args.config_path.unwrap_or_else(|| PathBuf::from("configs/storage")),
+        args.data_path.unwrap_or_else(|| PathBuf::from("data/storage")),
     );
     let task: StorageTask = serde_json::from_reader(File::open(args.json_path).unwrap()).unwrap();
 
