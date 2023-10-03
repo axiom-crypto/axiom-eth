@@ -20,7 +20,7 @@ use halo2_base::{
 mod rlc {
     use super::RlcCircuitBuilder;
     use halo2_base::{
-        gates::GateChip,
+        gates::{GateChip, GateInstructions},
         halo2_proofs::{
             dev::MockProver,
             halo2curves::bn256::{Bn256, Fr, G1Affine},
@@ -39,9 +39,11 @@ mod rlc {
             },
         },
         utils::ScalarField,
+        QuantumCell::{Constant, Existing},
     };
     use itertools::Itertools;
-    use rand::{rngs::StdRng, SeedableRng};
+    use rand::{rngs::StdRng, Rng, SeedableRng};
+
     use test_log::test;
 
     use crate::rlp::{
@@ -96,6 +98,114 @@ mod rlc {
         let len = 32;
 
         let circuit = rlc_test_circuit(RlcThreadBuilder::mock(), input_bytes, len);
+
+        circuit.config(k as usize, Some(6));
+        MockProver::run(k, &circuit, vec![]).unwrap().assert_satisfied();
+    }
+
+    // Enforce that a(x) * b(x) = c(x)
+    // This is done using the Challenge API to get a challenge `gamma` and then enforce that a(gamma) * b(gamma) = c(gamma)
+    // The polynomials are given in coefficients form starting from the highest degree term.
+    fn poly_eval_test_circuit<F: ScalarField>(
+        mut builder: RlcThreadBuilder<F>,
+        _poly_a: Vec<F>,
+        _poly_b: Vec<F>,
+        _poly_c: Vec<F>,
+        _a_len: usize,
+        _b_len: usize,
+        _c_len: usize,
+    ) -> RlcCircuitBuilder<F, impl FnSynthesize<F>> {
+        let ctx = builder.gate_builder.main(0);
+        let poly_a = ctx.assign_witnesses(_poly_a.clone());
+        let poly_b = ctx.assign_witnesses(_poly_b.clone());
+        let poly_c = ctx.assign_witnesses(_poly_c.clone());
+        let a_len = ctx.load_witness(F::from(_a_len as u64));
+        let b_len = ctx.load_witness(F::from(_b_len as u64));
+        let c_len = ctx.load_witness(F::from(_c_len as u64));
+
+        let synthesize_phase1 = move |builder: &mut RlcThreadBuilder<F>, rlc: &RlcChip<F>| {
+            // the closure captures the `inputs` variable
+            log::info!("phase 1 synthesize begin");
+            let gate = GateChip::default();
+
+            let (ctx_gate, ctx_rlc) = builder.rlc_ctx_pair();
+            let poly_a_trace = rlc.compute_rlc((ctx_gate, ctx_rlc), &gate, poly_a, a_len);
+            let poly_a_eval_value = *poly_a_trace.rlc_val.value();
+            let poly_a_eval_assigned = poly_a_trace.rlc_val;
+
+            let poly_b_trace = rlc.compute_rlc((ctx_gate, ctx_rlc), &gate, poly_b, b_len);
+            let poly_b_eval_value = *poly_b_trace.rlc_val.value();
+            let poly_b_eval_assigned = poly_b_trace.rlc_val;
+
+            let poly_c_trace = rlc.compute_rlc((ctx_gate, ctx_rlc), &gate, poly_c, c_len);
+            let poly_c_eval_value = *poly_c_trace.rlc_val.value();
+            let poly_c_eval_assigned = poly_c_trace.rlc_val;
+
+            let real_poly_a_eval = evaluate_poly(&_poly_a[.._a_len], *rlc.gamma());
+            let real_poly_b_eval = evaluate_poly(&_poly_b[.._b_len], *rlc.gamma());
+            let real_poly_c_eval = evaluate_poly(&_poly_c[.._c_len], *rlc.gamma());
+
+            assert_eq!(real_poly_a_eval, poly_a_eval_value);
+            assert_eq!(real_poly_b_eval, poly_b_eval_value);
+            assert_eq!(real_poly_c_eval, poly_c_eval_value);
+
+            gate.is_equal(ctx_gate, poly_a_eval_assigned, poly_b_eval_assigned);
+
+            // enforce gate a(gamma) * b(gamma) - c(gamma) = 0
+            ctx_gate.assign_region(
+                [
+                    Constant(F::from(0)),
+                    Existing(poly_a_eval_assigned),
+                    Existing(poly_b_eval_assigned),
+                    Existing(poly_c_eval_assigned),
+                ],
+                [0],
+            );
+        };
+
+        RlcCircuitBuilder::new(builder, None, synthesize_phase1)
+    }
+
+    /// Evaluate a polynomial at a point in the field. The polynomial is given in coefficients form starting from the highest degree term.
+    fn evaluate_poly<F: ScalarField>(coeffs: &[F], x: F) -> F {
+        let mut acc = coeffs[0];
+        for coeff in coeffs.iter().skip(1) {
+            acc = acc * x + coeff;
+        }
+        acc
+    }
+
+    #[test]
+    pub fn test_mock_poly_eval() {
+        let k = DEGREE;
+
+        let mut rng = StdRng::from_seed([0u8; 32]);
+
+        let len_a = 5;
+        let poly_a_coeffs: Vec<Fr> =
+            (0..len_a).map(|_| Fr::from(rng.gen::<u8>() as u64)).collect_vec();
+
+        let len_b = 5;
+        let poly_b_coeffs: Vec<Fr> =
+            (0..len_b).map(|_| Fr::from(rng.gen::<u8>() as u64)).collect_vec();
+
+        let len_c = len_a + len_b - 1;
+        let mut poly_c_coeffs = vec![Fr::zero(); len_c];
+        for (i, a) in poly_a_coeffs.iter().enumerate() {
+            for (j, b) in poly_b_coeffs.iter().enumerate() {
+                poly_c_coeffs[i + j] += a * b;
+            }
+        }
+
+        let circuit = poly_eval_test_circuit(
+            RlcThreadBuilder::mock(),
+            poly_a_coeffs,
+            poly_b_coeffs,
+            poly_c_coeffs,
+            len_a,
+            len_b,
+            len_c,
+        );
 
         circuit.config(k as usize, Some(6));
         MockProver::run(k, &circuit, vec![]).unwrap().assert_satisfied();
