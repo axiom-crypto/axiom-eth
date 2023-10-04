@@ -149,8 +149,6 @@ mod rlc {
             assert_eq!(real_poly_b_eval, poly_b_eval_value);
             assert_eq!(real_poly_c_eval, poly_c_eval_value);
 
-            gate.is_equal(ctx_gate, poly_a_eval_assigned, poly_b_eval_assigned);
-
             // enforce gate a(gamma) * b(gamma) - c(gamma) = 0
             ctx_gate.assign_region(
                 [
