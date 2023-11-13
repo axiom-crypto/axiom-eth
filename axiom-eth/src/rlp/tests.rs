@@ -405,6 +405,56 @@ mod rlp {
     }
 
     #[test]
+    pub fn test_proofgen_rlp_field() {
+        let k = DEGREE;
+        let input_bytes: Vec<u8> =
+            Vec::from_hex("a012341234123412341234123412341234123412341234123412341234123412340000")
+                .unwrap();
+
+        let mut rng = StdRng::from_seed([0u8; 32]);
+        let params = ParamsKZG::<Bn256>::setup(k, &mut rng);
+        let circuit = rlp_string_circuit(RlcThreadBuilder::<Fr>::keygen(), input_bytes.clone(), 34);
+        circuit.config(k as usize, Some(6));
+
+        println!("vk gen started");
+        let vk = keygen_vk(&params, &circuit).unwrap();
+        println!("vk gen done");
+        let pk = keygen_pk(&params, vk, &circuit).unwrap();
+        println!("pk gen done");
+        println!();
+        println!("==============STARTING PROOF GEN===================");
+        let break_points = circuit.0.break_points.take();
+        drop(circuit);
+        let circuit = rlp_string_circuit(RlcThreadBuilder::<Fr>::prover(), input_bytes, 34);
+        *circuit.0.break_points.borrow_mut() = break_points;
+
+        let mut transcript = Blake2bWrite::<_, _, Challenge255<_>>::init(vec![]);
+        create_proof::<
+            KZGCommitmentScheme<Bn256>,
+            ProverSHPLONK<'_, Bn256>,
+            Challenge255<G1Affine>,
+            _,
+            Blake2bWrite<Vec<u8>, G1Affine, Challenge255<G1Affine>>,
+            _,
+        >(&params, &pk, &[circuit], &[&[]], rng, &mut transcript)
+        .unwrap();
+        let proof = transcript.finalize();
+        println!("proof gen done");
+        let verifier_params = params.verifier_params();
+        let strategy = SingleStrategy::new(verifier_params);
+        let mut transcript = Blake2bRead::<_, _, Challenge255<_>>::init(&proof[..]);
+        verify_proof::<
+            KZGCommitmentScheme<Bn256>,
+            VerifierSHPLONK<'_, Bn256>,
+            Challenge255<G1Affine>,
+            Blake2bRead<&[u8], G1Affine, Challenge255<G1Affine>>,
+            SingleStrategy<'_, Bn256>,
+        >(verifier_params, pk.get_vk(), strategy, &[&[]], &mut transcript)
+        .unwrap();
+        println!("verify done");
+    }
+
+    #[test]
     pub fn test_mock_rlp_short_field() {
         let k = DEGREE;
         let mut input_bytes: Vec<u8> = vec![127];
