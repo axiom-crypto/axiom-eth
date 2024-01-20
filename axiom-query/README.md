@@ -52,7 +52,7 @@ The join is currently done in the `table` module; it will be moved to `MultiProm
 
 The reason this component circuit has no component output is that the true outputs of the circuit are: `resultsRoot`, `resultsRootPoseidon`, and `subqueryHash`s. These are outward/user facing outputs, and for future compatibilty their format depends on the number of subqueries (e.g., `resultsRoot` is a padded Merkle root up to next power of 2 of `numSubqueries`). As such there is no automatic way to compute these commitments and we have custom implementations for them.
 
-## [Keccak Component Shard Circuit](https://github.com/axiom-crypto/halo2-lib/blob/release-0.4.1-rc/hashes/zkevm/src/keccak/component/circuit/shard.rs)
+## [Keccak Component Shard Circuit](https://github.com/axiom-crypto/halo2-lib/blob/main/hashes/zkevm/src/keccak/component/circuit/shard.rs)
 
 The base `KeccakComponentShardCircuit` in `halo2-lib/zkevm-hashes` is a component circuit by our [definition](../axiom-eth/src/utils/README.md#definition-of-component-circuit).
 We have added adapters to [`axiom-eth`](../axiom-eth/src/keccak/README.md) so that it can be promise called as a component circuit in our framework.

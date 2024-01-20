@@ -8,7 +8,7 @@ This crate is the main library for building ZK circuits that prove data about th
 
 The rest of this crate makes heavy use of the following primitives:
 
-- [`halo2-base`](https://github.com/axiom-crypto/halo2-lib/tree/release-0.4.1-rc/halo2-base) Specifically the `BaseCircuitBuilder` and `LookupAnyManager`.
+- [`halo2-base`](https://github.com/axiom-crypto/halo2-lib/tree/main/halo2-base) Specifically the `BaseCircuitBuilder` and `LookupAnyManager`.
 - `rlc`: In this crate we introduce a new custom gate, which is a vertical gate (1 advice column, 1 selector column) using 3 rotations.
   This is in [`PureRlcConfig`](./src/rlc/circuit/mod.rs). We extend `BaseCircuitBuilder` to support this gate in [`RlcCircuitBuilder`](./src/rlc/circuit/builder.rs).
   `RlcCircuitBuilder` is the core circuit builder that is used in the rest of this crate.
