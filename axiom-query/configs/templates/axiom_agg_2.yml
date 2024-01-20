@@ -1,0 +1,106 @@
+AxiomAgg2:
+  k: 21
+  force_params:
+    - num_advice: 1
+    - num_lookup_advice: 1
+    - num_fixed: 1
+  axiom_agg1_intent:
+    k: 21
+    intent_verify_compute:
+      k: 20
+      core_params:
+        subquery_results_capacity: 1
+        svk: "0100000000000000000000000000000000000000000000000000000000000000"
+        client_metadata:
+          version: 0
+          numAdvicePerPhase: [4]
+          numLookupAdvicePerPhase: [1]
+          numRlcColumns: 0
+          numFixed: 1
+          numInstance: [2304]
+          numChallenge: [0]
+          maxOutputs: 128
+          isAggregation: false
+        preprocessed_len: 13
+      loader_params:
+        comp_loader_params: # keccak
+          max_height: 2
+          shard_caps:
+            - 50
+    intent_keccak:
+      Node:
+        k: 20
+        num_children: 2
+        child_intent:
+          Leaf:
+            k: 18
+            core_params:
+              capacity: 50
+    intent_subquery_agg:
+      k: 21
+      deps:
+        - Header:
+            Node:
+              k: 20
+              num_children: 2
+              child_intent:
+                Leaf:
+                  k: 20
+                  core_params:
+                    max_extra_data_bytes: 32
+                    capacity: 1
+                  loader_params:
+                    - comp_loader_params: # keccak
+                        max_height: 2
+                        shard_caps:
+                          - 50
+
+        - Receipt:
+            Leaf:
+              k: 20
+              core_params:
+                chip_params:
+                  max_data_byte_len: 512
+                  max_log_num: 20
+                  topic_num_bounds:
+                    - 0
+                    - 4
+                  network: null
+                capacity: 1
+              loader_params:
+                - comp_loader_params: # keccak
+                    max_height: 2
+                    shard_caps:
+                      - 50
+                - comp_loader_params: # header
+                    max_height: 1
+                    shard_caps:
+                      - 1
+
+        - ResultsRoot:
+            Leaf:
+              k: 20
+              core_params:
+                enabled_types:
+                  - false # Null
+                  - true # Header
+                  - false # Account
+                  - false # Storage
+                  - false # Transaction
+                  - true # Receipt
+                  - false # SolidityNestedMapping
+                capacity: 1
+              loader_params:
+                - comp_loader_params: # keccak
+                    max_height: 2
+                    shard_caps:
+                      - 50
+                - params_per_component:
+                    "axiom-query:ComponentTypeHeaderSubquery":
+                      max_height: 1
+                      shard_caps:
+                        - 1
+                    "axiom-query:ComponentTypeReceiptSubquery":
+                      max_height: 1
+                      shard_caps:
+                        - 1

@@ -1,9 +1,0 @@
-{
-  "degree": 15,
-  "num_rlc_columns": 2,
-  "num_range_advice": [18, 10],
-  "num_lookup_advice": [1, 1],
-  "num_fixed": 1,
-  "unusable_rows": 65,
-  "keccak_rows_per_round": 22
-}

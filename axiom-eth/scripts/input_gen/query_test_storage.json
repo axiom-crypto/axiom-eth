@@ -3,8 +3,8 @@
   "jsonrpc": "2.0",
   "method": "eth_getProof",
   "params": [
-    "0x0000000000000000000000000000000000000000",
-    [],
-    "0xf929e6"
+    "0xd5Df13DC9A72319dDfbd226Fece1E438aA920D55",
+    ["0x0"],
+    "0x103ec96"
   ]
 }

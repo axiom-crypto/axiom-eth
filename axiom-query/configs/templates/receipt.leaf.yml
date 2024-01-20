@@ -1,0 +1,22 @@
+Subquery:
+  Receipt:
+    Leaf:
+      k: 16
+      core_params:
+        chip_params:
+          max_data_byte_len: 512
+          max_log_num: 20
+          topic_num_bounds:
+            - 0
+            - 4
+          network: null
+        capacity: 8
+      loader_params:
+        - comp_loader_params: # keccak
+            max_height: 0
+            shard_caps:
+              - 200
+        - comp_loader_params: # header
+            max_height: 0
+            shard_caps:
+              - 33

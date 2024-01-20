@@ -1,0 +1,34 @@
+name: Lints
+
+on:
+  push:
+    branches: ["main", "develop"]
+  pull_request:
+    branches: ["main", "develop"]
+
+jobs:
+  lint:
+    name: Lint
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          override: false
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v1
+        with:
+          cache-on-failure: true
+
+      - name: Run fmt
+        run: |
+          export AXIOM_SKIP_CONSTANT_GEN=1
+          cargo fmt --all -- --check
+
+      - name: Run clippy
+        run: cargo clippy --all -- -D warnings

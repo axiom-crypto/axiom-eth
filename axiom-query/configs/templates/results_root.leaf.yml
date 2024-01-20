@@ -1,0 +1,28 @@
+Subquery:
+  ResultsRoot:
+    Leaf:
+      k: 20
+      core_params:
+        enabled_types:
+          - false # Null
+          - true # Header
+          - false # Account
+          - false # Storage
+          - false # Transaction
+          - true # Receipt
+          - false # SolidityNestedMapping
+        capacity: 1
+      loader_params:
+        - comp_loader_params: # keccak
+            max_height: 2
+            shard_caps:
+              - 50
+        - params_per_component:
+            "axiom-query:ComponentTypeHeaderSubquery":
+              max_height: 1
+              shard_caps:
+                - 1
+            "axiom-query:ComponentTypeReceiptSubquery":
+              max_height: 1
+              shard_caps:
+                - 1

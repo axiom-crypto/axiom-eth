@@ -1,0 +1,20 @@
+# tree of depth 1 with 2 leaves
+Subquery:
+  Header:
+    Node:
+      k: 20
+      num_children: 1
+      child_intent:
+        Node:
+          k: 20
+          num_children: 1
+          child_intent:
+            Leaf:
+              k: 18
+              core_params:
+                max_extra_data_bytes: 32
+                capacity: 16
+              loader_params:
+                comp_loader_params: # keccak
+                  max_height: 1
+                  shard_caps: [100, 100]

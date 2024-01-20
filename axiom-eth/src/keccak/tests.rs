@@ -1,207 +1,186 @@
-#![allow(unused_imports)]
-use super::*;
 use crate::{
-    halo2_proofs::{
-        arithmetic::FieldExt,
-        circuit::{Layouter, SimpleFloorPlanner, Value},
-        dev::MockProver,
-        halo2curves::bn256::{Bn256, Fr, G1Affine},
-        plonk::*,
-        poly::commitment::{Params, ParamsProver},
-        poly::kzg::{
-            commitment::{KZGCommitmentScheme, ParamsKZG},
-            multiopen::{ProverGWC, ProverSHPLONK, VerifierSHPLONK},
-            strategy::SingleStrategy,
-        },
-        transcript::{Blake2bRead, Blake2bWrite, Challenge255},
-        transcript::{TranscriptReadBuffer, TranscriptWriterBuffer},
+    keccak::types::{ComponentTypeKeccak, KeccakVirtualInput, KeccakVirtualOutput},
+    rlc::circuit::builder::RlcCircuitBuilder,
+    utils::component::{
+        promise_loader::{comp_loader::ComponentCommiter, flatten_witness_to_rlc},
+        types::{FixLenLogical, Flatten},
+        utils::{into_key, load_logical_value},
+        ComponentCircuit, ComponentType, LogicalResult, PromiseCallWitness,
     },
-    rlp::rlc::RlcConfig,
 };
-use ark_std::{end_timer, start_timer};
+
 use halo2_base::{
-    gates::{
-        flex_gate::{FlexGateConfig, GateStrategy},
-        range::{RangeConfig, RangeStrategy},
-    },
-    utils::{fe_to_biguint, fs::gen_srs, value_to_option, ScalarField},
-    SKIP_FIRST_PASS,
+    gates::GateInstructions, halo2_proofs::halo2curves::bn256::Fr, safe_types::SafeTypeChip,
+    AssignedValue, Context,
 };
-use itertools::{assert_equal, Itertools};
-use rand::{rngs::StdRng, Rng, SeedableRng};
-use rand_core::OsRng;
-use serde::{Deserialize, Serialize};
-use std::{
-    env::{set_var, var},
-    fs::File,
-    io::{BufRead, BufReader, Write},
+use itertools::Itertools;
+use snark_verifier_sdk::CircuitExt;
+use zkevm_hashes::keccak::{
+    component::circuit::shard::{KeccakComponentShardCircuit, KeccakComponentShardCircuitParams},
+    vanilla::param::NUM_BYTES_TO_ABSORB,
 };
-use zkevm_keccak::keccak_packed_multi::get_keccak_capacity;
 
-fn test_keccak_circuit<F: Field>(
-    k: u32,
-    mut builder: RlcThreadBuilder<F>,
-    inputs: Vec<Vec<u8>>,
-    var_len: bool,
-) -> KeccakCircuitBuilder<F, impl FnSynthesize<F>> {
-    let prover = builder.witness_gen_only();
-    let range = RangeChip::default(8);
-    let keccak = SharedKeccakChip::default();
-    let ctx = builder.gate_builder.main(0);
-    let mut rng = StdRng::from_seed([0u8; 32]);
-    for (_idx, input) in inputs.into_iter().enumerate() {
-        let bytes = input.to_vec();
-        let mut bytes_assigned =
-            ctx.assign_witnesses(bytes.iter().map(|byte| F::from(*byte as u64)));
-        let len =
-            if var_len && !bytes.is_empty() { rng.gen_range(0..bytes.len()) } else { bytes.len() };
-        for byte in bytes_assigned[len..].iter_mut() {
-            *byte = ctx.load_zero();
-        }
+use super::{
+    promise::{KeccakComponentCommiter, KeccakFixLenCall, KeccakVarLenCall},
+    types::KeccakLogicalInput,
+};
 
-        let len = ctx.load_witness(F::from(len as u64));
+fn verify_rlc_consistency(
+    logical_input: KeccakLogicalInput,
+    f: impl Fn(&mut Context<Fr>) -> Box<dyn PromiseCallWitness<Fr>>,
+) {
+    let output = logical_input.compute_output();
 
-        let _hash = if var_len {
-            keccak.borrow_mut().keccak_var_len(ctx, &range, bytes_assigned, Some(bytes), len, 0)
-        } else {
-            keccak.borrow_mut().keccak_fixed_len(ctx, &range.gate, bytes_assigned, Some(bytes))
-        };
-    }
-    let circuit = KeccakCircuitBuilder::new(
-        builder,
-        keccak,
-        range,
-        None,
-        |_: &mut RlcThreadBuilder<F>, _: RlpChip<F>, _: (FixedLenRLCs<F>, VarLenRLCs<F>)| {},
+    let mut builder = RlcCircuitBuilder::<Fr>::new(false, 32);
+    builder.set_k(18);
+    builder.set_lookup_bits(8);
+    // Mock gamma for testing.
+    builder.gamma = Some(Fr::from([1, 5, 7, 8]));
+    let range_chip = &builder.range_chip();
+    let rlc_chip = builder.rlc_chip(&range_chip.gate);
+    let (gate_ctx, rlc_ctx) = builder.rlc_ctx_pair();
+
+    let assigned_output: KeccakVirtualOutput<AssignedValue<Fr>> =
+        load_logical_value(gate_ctx, &output);
+    let call = f(gate_ctx);
+
+    let key = into_key(logical_input.clone());
+    assert_eq!(&call.to_typeless_logical_input(), &key);
+
+    let lr =
+        LogicalResult::<Fr, ComponentTypeKeccak<Fr>>::new(logical_input.clone(), output.clone());
+    let vrs_from_results = ComponentTypeKeccak::<Fr>::logical_result_to_virtual_rows(&lr);
+    let assigned_vrs_from_results: Vec<(KeccakVirtualInput<_>, KeccakVirtualOutput<_>)> =
+        vrs_from_results
+            .into_iter()
+            .map(|(input, output)| {
+                (load_logical_value(gate_ctx, &input), load_logical_value(gate_ctx, &output))
+            })
+            .collect_vec();
+    let rlc_from_results = ComponentTypeKeccak::<Fr>::rlc_virtual_rows(
+        (gate_ctx, rlc_ctx),
+        range_chip,
+        &rlc_chip,
+        &assigned_vrs_from_results,
     );
-    if !prover {
-        let unusable_rows =
-            var("UNUSABLE_ROWS").unwrap_or_else(|_| "109".to_string()).parse().unwrap();
-        circuit.config(k as usize, Some(unusable_rows));
-    }
-    circuit
+
+    let mut rlc_from_call = call.to_rlc((gate_ctx, rlc_ctx), range_chip, &rlc_chip);
+    let output_rlc = flatten_witness_to_rlc(rlc_ctx, &rlc_chip, &assigned_output.into());
+    let output_multiplier = rlc_chip.rlc_pow_fixed(
+        gate_ctx,
+        &range_chip.gate,
+        KeccakVirtualOutput::<Fr>::get_num_fields(),
+    );
+    rlc_from_call = range_chip.gate.mul_add(gate_ctx, rlc_from_call, output_multiplier, output_rlc);
+
+    assert_eq!(rlc_from_results.last().unwrap().value(), rlc_from_call.value());
 }
 
-/// Cmdline: KECCAK_DEGREE=14 RUST_LOG=info cargo test -- --nocapture test_keccak
 #[test]
-pub fn test_keccak() {
-    let _ = env_logger::builder().is_test(true).try_init();
+fn test_rlc_consistency() {
+    let raw_bytes: [u8; 135] = [1; NUM_BYTES_TO_ABSORB - 1];
+    let logical_input: KeccakLogicalInput = KeccakLogicalInput::new(raw_bytes.to_vec());
+    // Fix-len
+    verify_rlc_consistency(logical_input.clone(), |gate_ctx| {
+        let assigned_raw_bytes =
+            gate_ctx.assign_witnesses(raw_bytes.into_iter().map(|b| Fr::from(b as u64)));
+        let fix_len_call = KeccakFixLenCall::new(SafeTypeChip::unsafe_to_fix_len_bytes_vec(
+            assigned_raw_bytes,
+            raw_bytes.len(),
+        ));
+        Box::new(fix_len_call)
+    });
+    // Var-len
+    verify_rlc_consistency(logical_input, |gate_ctx| {
+        let max_len = NUM_BYTES_TO_ABSORB;
+        let len = gate_ctx.load_witness(Fr::from(raw_bytes.len() as u64));
+        let var_len_bytes = vec![1; max_len];
 
-    let k: u32 = var("KECCAK_DEGREE").unwrap_or_else(|_| "14".to_string()).parse().unwrap();
+        let assigned_var_len_bytes =
+            gate_ctx.assign_witnesses(var_len_bytes.into_iter().map(|b| Fr::from(b as u64)));
+        let var_len_call = KeccakVarLenCall::new(
+            SafeTypeChip::unsafe_to_var_len_bytes_vec(assigned_var_len_bytes, len, max_len),
+            10,
+        );
+        Box::new(var_len_call)
+    });
+}
+
+// Test compute outputs against `instances()` implementation
+#[test]
+fn test_compute_outputs_commit_keccak() {
+    let k: usize = 15;
+    let num_unusable_row: usize = 109;
+    let capacity: usize = 10;
+    let publish_raw_outputs: bool = false;
+
     let inputs = vec![
+        (0u8..200).collect::<Vec<_>>(),
         vec![],
         (0u8..1).collect::<Vec<_>>(),
         (0u8..135).collect::<Vec<_>>(),
         (0u8..136).collect::<Vec<_>>(),
         (0u8..200).collect::<Vec<_>>(),
     ];
-    let circuit = test_keccak_circuit(k, RlcThreadBuilder::mock(), inputs.clone(), false);
-    MockProver::<Fr>::run(k, &circuit, vec![]).unwrap().assert_satisfied();
-    println!("Fixed len keccak passed");
+    // used capacity = 9
+    let mut padded_inputs = inputs.clone();
+    padded_inputs.push(vec![]);
 
-    let circuit = test_keccak_circuit(k, RlcThreadBuilder::mock(), inputs, true);
-    MockProver::<Fr>::run(k, &circuit, vec![]).unwrap().assert_satisfied();
-    println!("Var len keccak passed");
+    let params =
+        KeccakComponentShardCircuitParams::new(k, num_unusable_row, capacity, publish_raw_outputs);
+    let circuit = KeccakComponentShardCircuit::<Fr>::new(vec![], params, false);
+    circuit.feed_input(Box::new(inputs)).unwrap();
+    let commit = circuit.instances()[0][0];
+
+    let res = circuit.compute_outputs().unwrap();
+    assert_eq!(res.leaves()[0].commit, commit);
+    assert_eq!(
+        res.shards()[0].1.iter().map(|(i, _o)| i.clone()).collect_vec(),
+        padded_inputs
+            .into_iter()
+            .map(|bytes| into_key(KeccakLogicalInput::new(bytes)))
+            .collect_vec()
+    );
 }
 
-#[derive(Serialize, Deserialize)]
-pub struct KeccakBenchConfig {
-    degree: usize,
-    range_advice: Vec<usize>,
-    num_rlc: usize,
-    unusable_rows: usize,
-    rows_per_round: usize,
-}
-
+/// Test `compute_native_commitment` against the custom `compute_outputs` implementation
 #[test]
-fn bench_keccak() {
-    let _ = env_logger::builder().is_test(true).try_init();
-    let var_len = true;
+fn test_compute_native_commit_keccak() {
+    let k: usize = 15;
+    let num_unusable_row: usize = 109;
+    let capacity: usize = 10;
+    let publish_raw_outputs: bool = false;
 
-    let bench_params_file = File::open("configs/bench/keccak.json").unwrap();
-    std::fs::create_dir_all("data/bench").unwrap();
-    let mut fs_results = File::create("data/bench/keccak.csv").unwrap();
-    writeln!(
-            fs_results,
-            "degree,advice_columns,unusable_rows,rows_per_round,keccak_f/s,num_keccak_f,proof_time,proof_size,verify_time"
-        )
-        .unwrap();
+    let inputs = vec![
+        (0u8..200).collect::<Vec<_>>(),
+        vec![],
+        (0u8..1).collect::<Vec<_>>(),
+        (0u8..135).collect::<Vec<_>>(),
+        (0u8..136).collect::<Vec<_>>(),
+        (0u8..200).collect::<Vec<_>>(),
+    ];
+    // used capacity = 9
+    let mut padded_inputs = inputs.clone();
+    padded_inputs.push(vec![]);
 
-    let bench_params_reader = BufReader::new(bench_params_file);
-    let bench_params: Vec<KeccakBenchConfig> =
-        serde_json::from_reader(bench_params_reader).unwrap();
-    for bench_params in bench_params {
-        println!(
-            "---------------------- degree = {} ------------------------------",
-            bench_params.degree
-        );
-        let k = bench_params.degree as u32;
-        let num_rows = (1 << k) - bench_params.unusable_rows;
-        set_var("KECCAK_ROWS", bench_params.rows_per_round.to_string());
-        let capacity = get_keccak_capacity(num_rows);
-        println!("Performing {capacity} keccak_f permutations");
-        let inputs = vec![vec![0; 135]; capacity];
-        let circuit = test_keccak_circuit(k, RlcThreadBuilder::keygen(), inputs.clone(), var_len);
+    let params =
+        KeccakComponentShardCircuitParams::new(k, num_unusable_row, capacity, publish_raw_outputs);
+    let circuit = KeccakComponentShardCircuit::<Fr>::new(vec![], params, false);
+    circuit.feed_input(Box::new(inputs)).unwrap();
 
-        // MockProver::<Fr>::run(k, &circuit, vec![]).unwrap().assert_satisfied();
+    let res = circuit.compute_outputs().unwrap();
+    let commit = res.leaves()[0].commit;
 
-        let params = gen_srs(k);
-        let vk = keygen_vk(&params, &circuit).unwrap();
-        let pk = keygen_pk(&params, vk, &circuit).unwrap();
-        let break_points = circuit.break_points.take();
-
-        let inputs = (0..capacity)
-            .map(|_| (0..135).map(|_| rand::random::<u8>()).collect_vec())
-            .collect_vec();
-        // create a proof
-        let proof_time = start_timer!(|| "Create proof SHPLONK");
-        let circuit = test_keccak_circuit(k, RlcThreadBuilder::prover(), inputs.clone(), var_len);
-        *circuit.break_points.borrow_mut() = break_points;
-        let mut transcript = Blake2bWrite::<_, _, Challenge255<_>>::init(vec![]);
-        create_proof::<
-            KZGCommitmentScheme<Bn256>,
-            ProverSHPLONK<'_, Bn256>,
-            Challenge255<G1Affine>,
-            _,
-            Blake2bWrite<Vec<u8>, G1Affine, Challenge255<G1Affine>>,
-            _,
-        >(&params, &pk, &[circuit], &[&[]], OsRng, &mut transcript)
-        .unwrap();
-        let proof = transcript.finalize();
-        end_timer!(proof_time);
-
-        let verify_time = start_timer!(|| "Verify time");
-        let verifier_params = params.verifier_params();
-        let strategy = SingleStrategy::new(&params);
-        let mut transcript = Blake2bRead::<_, G1Affine, Challenge255<_>>::init(&proof[..]);
-        verify_proof::<
-            KZGCommitmentScheme<Bn256>,
-            VerifierSHPLONK<'_, Bn256>,
-            Challenge255<G1Affine>,
-            Blake2bRead<&[u8], G1Affine, Challenge255<G1Affine>>,
-            SingleStrategy<'_, Bn256>,
-        >(verifier_params, pk.get_vk(), strategy, &[&[]], &mut transcript)
-        .unwrap();
-        end_timer!(verify_time);
-
-        let auto_params: EthConfigParams =
-            serde_json::from_str(var("ETH_CONFIG_PARAMS").unwrap().as_str()).unwrap();
-        let keccak_advice = std::env::var("KECCAK_ADVICE_COLUMNS")
-            .unwrap_or_else(|_| "0".to_string())
-            .parse::<usize>()
-            .unwrap();
-        writeln!(
-            fs_results,
-            "{},{},{},{},{:.2},{},{:.2}s,{:?}",
-            auto_params.degree,
-            auto_params.num_range_advice.iter().sum::<usize>() + keccak_advice + 2,
-            var("UNUSABLE_ROWS").unwrap(),
-            auto_params.keccak_rows_per_round,
-            f64::from(capacity as u32) / proof_time.time.elapsed().as_secs_f64(),
-            capacity,
-            proof_time.time.elapsed().as_secs_f64(),
-            verify_time.time.elapsed()
-        )
-        .unwrap();
-    }
+    let vt = padded_inputs
+        .into_iter()
+        .flat_map(|bytes| {
+            let logical_input = KeccakLogicalInput::new(bytes);
+            let output = logical_input.compute_output();
+            let lr = LogicalResult::<Fr, ComponentTypeKeccak<Fr>>::new(logical_input, output);
+            ComponentTypeKeccak::<Fr>::logical_result_to_virtual_rows(&lr)
+        })
+        .map(|(v_i, v_o)| (Flatten::from(v_i), Flatten::from(v_o)))
+        .collect_vec();
+    let commit2 = KeccakComponentCommiter::compute_native_commitment(&vt);
+    assert_eq!(commit, commit2);
 }

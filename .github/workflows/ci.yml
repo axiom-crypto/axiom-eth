@@ -2,53 +2,64 @@ name: Tests
 
 on:
   push:
-    branches: ["main"]
+    branches: ["main", "develop"]
   pull_request:
-    branches: ["main"]
+    branches: ["main", "develop", "release*", "release/*", "rc*", "*-audit*", "v0.13", "v0.12"]
 
 env:
   CARGO_TERM_COLOR: always
-  INFURA_ID: ${{ vars.INFURA_ID }}
-  JSON_RPC_URL: ${{ vars.JSON_RPC_URL }}
 
 jobs:
   build:
-    runs-on: ubuntu-latest-m
+    runs-on: ubuntu-latest-64core-256ram
 
     steps:
       - uses: actions/checkout@v3
+
       - name: Build
-        run: cargo build --verbose
-      - name: Run axiom-eth tests MockProver
         run: |
-          export INFURA_ID=${{ vars.INFURA_ID }}
-          export JSON_RPC_URL=${{ vars.JSON_RPC_URL }}
-          cd axiom-eth
-          cargo test -- test_mock_account_queries_empty
-          cargo test -- test_mock_account_queries_genesis
-          cargo test -- test_mock_account_queries_simple
-          cargo test -- test_genesis_block
-          cargo test -- test_mock_block_queries_random
-          cargo test -- test_mock_row_consistency_nouns
-          cargo test -- test_default_storage_query
-          cargo test -- test_mock_storage_queries_empty
-          cargo test -- test_mock_storage_queries_mapping
-          cargo test -- test_mock_storage_queries_slot0
-          cargo test -- test_mock_storage_queries_uni_v3
-          cargo test -- test_multi_goerli_header_mock
-          cargo test -- test_one_mainnet_header_before_london_mock
-          cargo test -- test_one_mainnet_header_mock
-          cargo test -- test_one_mainnet_header_withdrawals_mock
-          cargo test -- test_keccak
-          cargo test -- test_mock_mpt_inclusion_fixed
-          cargo test -- test_mpt_empty_root
-          cargo test -- test_mpt_noninclusion_branch_fixed
-          cargo test -- test_mpt_noninclusion_extension_fixed
-          cargo test -- test_mock_rlc
-          cargo test -- test_mock_rlp_array
-          cargo test -- test_mock_rlp_field
-          cargo test -- test_mock_rlp_literal
-          cargo test -- test_mock_rlp_long_field
-          cargo test -- test_mock_rlp_long_long_field
-          cargo test -- test_mock_rlp_short_field
-          cargo test -- test_mock_single_eip1186
+          export AXIOM_SKIP_CONSTANT_GEN=1
+          cargo build --verbose
+
+      - name: Run axiom-eth tests MockProver
+        working-directory: "axiom-eth"
+        run: |
+          export ALCHEMY_KEY=${{ secrets.ALCHEMY_KEY}}
+          export JSON_RPC_URL=${{ secrets.JSON_RPC_URL }}
+          cargo t test_keccak
+          cargo t rlc::tests
+          cargo t rlp::tests
+          cargo t keccak::tests
+          cargo t block_header::tests
+          cargo t mpt
+          cargo t storage::tests::test_mock
+          cargo t transaction::tests
+          BLOCK_NUM=17000000 cargo test receipt::tests
+          cargo t solidity::tests::mapping::test_mock
+          cargo t solidity::tests::nested_mappings::test_mock
+          cargo t solidity::tests::mapping_storage::test_mock
+
+      - name: Run axiom-eth tests real prover
+        working-directory: "axiom-eth"
+        run: |
+          export ALCHEMY_KEY=${{ secrets.ALCHEMY_KEY }}
+          export JSON_RPC_URL=${{ secrets.JSON_RPC_URL }}
+          cargo t --release -- test_one_mainnet_header_prover
+          cargo t --release -- bench_mpt_inclusion_fixed --ignored
+          cargo t --release utils::component::
+
+      - name: Run axiom-core tests
+        working-directory: "axiom-core"
+        run: |
+          export ALCHEMY_KEY=${{ secrets.ALCHEMY_KEY }}
+          export JSON_RPC_URL=${{ secrets.JSON_RPC_URL }}
+          cargo t
+
+      - name: Run axiom-query tests
+        working-directory: "axiom-query"
+        run: |
+          export AXIOM_SKIP_CONSTANT_GEN=1
+          export ALCHEMY_KEY=${{ secrets.ALCHEMY_KEY }}
+          export JSON_RPC_URL=${{ secrets.JSON_RPC_URL }}
+          mkdir -p data/test
+          cargo t --no-default-features --features "halo2-axiom, jemallocator"

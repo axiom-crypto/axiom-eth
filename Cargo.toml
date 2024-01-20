@@ -1,12 +1,10 @@
 [workspace]
-members = [
-    "axiom-eth",
-    "any_circuit_derive"
-]
+members = ["axiom-eth", "axiom-core", "axiom-query", "axiom-codec"]
+resolver = "2"
 
 [profile.dev]
 opt-level = 3
-debug = 1 # change to 0 or 2 for more or less debug info
+debug = 2              # change to 0 or 2 for more or less debug info
 overflow-checks = true
 incremental = true
 
@@ -16,7 +14,7 @@ inherits = "dev"
 opt-level = 3
 # Set this to 1 or 2 to get more useful backtraces
 debug = 1
-debug-assertions = true 
+debug-assertions = true
 panic = 'unwind'
 # better recompile times
 incremental = true
@@ -27,9 +25,9 @@ codegen-units = 16
 opt-level = 3
 debug = false
 debug-assertions = false
-lto = "fat" 
+lto = "fat"
 # `codegen-units = 1` can lead to WORSE performance - always bench to find best profile for your machine!
-# codegen-units = 1
+codegen-units = 1
 panic = "abort"
 incremental = false
 

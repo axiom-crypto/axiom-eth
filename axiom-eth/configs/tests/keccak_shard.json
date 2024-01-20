@@ -1,0 +1,32 @@
+[
+  {
+    "k": 18,
+    "num_unusable_row": 69,
+    "capacity": 50,
+    "publish_raw_outputs": false,
+    "keccak_circuit_params": {
+      "k": 18,
+      "rows_per_round": 206
+    },
+    "base_circuit_params": {
+      "k": 18,
+      "num_advice_per_phase": [
+        3
+      ],
+      "num_fixed": 1,
+      "num_lookup_advice_per_phase": [
+        0,
+        0,
+        0
+      ],
+      "lookup_bits": null,
+      "num_instance_columns": 1
+    }
+  },
+  [
+    [
+      262034,
+      262032
+    ]
+  ]
+]

@@ -1,31 +1,36 @@
-use crate::halo2_proofs::plonk::ConstraintSystem;
+use std::iter;
+
+use crate::{
+    rlc::{chip::RlcChip, circuit::builder::RlcContextPair, types::RlcTrace},
+    utils::circuit_utils::constrain_no_leading_zeros,
+};
+
 use halo2_base::{
-    gates::{
-        flex_gate::FlexGateConfig,
-        range::{RangeConfig, RangeStrategy},
-        GateChip, GateInstructions, RangeChip, RangeInstructions,
-    },
+    gates::{GateChip, GateInstructions, RangeChip, RangeInstructions},
     utils::{bit_length, ScalarField},
     AssignedValue, Context,
     QuantumCell::{Constant, Existing},
 };
-use std::iter;
 
-pub mod builder;
-pub mod rlc;
+use self::types::{
+    RlpArrayPrefixParsed, RlpArrayTrace, RlpArrayWitness, RlpFieldPrefixParsed, RlpFieldTrace,
+    RlpFieldWitness, RlpPrefixParsed,
+};
+
 #[cfg(test)]
 mod tests;
+pub mod types;
 
-use rlc::{RlcChip, RlcConfig, RlcTrace};
-
-use self::rlc::RlcContextPair;
-
-pub fn max_rlp_len_len(max_len: usize) -> usize {
+pub const fn max_rlp_len_len(max_len: usize) -> usize {
     if max_len > 55 {
         (bit_length(max_len as u64) + 7) / 8
     } else {
         0
     }
+}
+
+pub const fn max_rlp_encoding_len(payload_len: usize) -> usize {
+    1 + max_rlp_len_len(payload_len) + payload_len
 }
 
 /// Returns array whose first `sub_len` cells are
@@ -41,13 +46,13 @@ pub fn witness_subarray<F: ScalarField>(
     max_len: usize,
 ) -> Vec<AssignedValue<F>> {
     // `u32` should be enough for array indices
-    let [start_id, sub_len] = [start_id, sub_len].map(|fe| fe.get_lower_32() as usize);
-    debug_assert!(sub_len <= max_len);
+    let [start_id, sub_len] = [start_id, sub_len].map(|fe| fe.get_lower_64() as usize);
+    debug_assert!(sub_len <= max_len, "{sub_len} > {max_len}");
     ctx.assign_witnesses(
         array[start_id..start_id + sub_len]
             .iter()
             .map(|a| *a.value())
-            .chain(iter::repeat(F::zero()))
+            .chain(iter::repeat(F::ZERO))
             .take(max_len),
     )
 }
@@ -59,11 +64,13 @@ pub fn evaluate_byte_array<F: ScalarField>(
     array: &[AssignedValue<F>],
     len: AssignedValue<F>,
 ) -> AssignedValue<F> {
-    let f_256 = gate.get_field_element(256);
     if !array.is_empty() {
-        let incremental_evals =
-            gate.accumulated_product(ctx, iter::repeat(Constant(f_256)), array.iter().copied());
-        let len_minus_one = gate.sub(ctx, len, Constant(F::one()));
+        let incremental_evals = gate.accumulated_product(
+            ctx,
+            iter::repeat(Constant(F::from(256))),
+            array.iter().copied(),
+        );
+        let len_minus_one = gate.sub(ctx, len, Constant(F::ONE));
         // if `len = 0` then `len_minus_one` will be very large, so `select_from_idx` will return 0.
         gate.select_from_idx(ctx, incremental_evals.iter().copied(), len_minus_one)
     } else {
@@ -71,118 +78,8 @@ pub fn evaluate_byte_array<F: ScalarField>(
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct RlpFieldPrefixParsed<F: ScalarField> {
-    is_not_literal: AssignedValue<F>,
-    is_big: AssignedValue<F>,
-
-    next_len: AssignedValue<F>,
-    len_len: AssignedValue<F>,
-}
-
-#[derive(Clone, Debug)]
-pub struct RlpArrayPrefixParsed<F: ScalarField> {
-    // is_empty: AssignedValue<F>,
-    is_big: AssignedValue<F>,
-
-    next_len: AssignedValue<F>,
-    len_len: AssignedValue<F>,
-}
-
-#[derive(Clone, Debug)]
-pub struct RlpFieldWitness<F: ScalarField> {
-    prefix: AssignedValue<F>, // value of the prefix
-    prefix_len: AssignedValue<F>,
-    len_len: AssignedValue<F>,
-    len_cells: Vec<AssignedValue<F>>,
-    max_len_len: usize,
-
-    pub field_len: AssignedValue<F>,
-    pub field_cells: Vec<AssignedValue<F>>,
-    pub max_field_len: usize,
-}
-
-#[derive(Clone, Debug)]
-/// All witnesses involved in the RLP decoding of a byte string (non-list).
-pub struct RlpFieldTraceWitness<F: ScalarField> {
-    /// This contains the assigned witnesses of the raw byte string after RLP decoding.
-    pub witness: RlpFieldWitness<F>,
-    /// This is the original raw RLP encoding byte string, padded with zeros to a known fixed maximum length
-    pub rlp_field: Vec<AssignedValue<F>>,
-    /// This is length of `rlp_field` in bytes, which can be variable.
-    pub rlp_len: AssignedValue<F>,
-    // We need to keep the raw `rlp_field, rlp_len` because we still need to compute their variable length RLC in SecondPhase
-}
-
-#[derive(Clone, Debug)]
-/// The outputed values after RLP decoding a byte string (non-list) in SecondPhase.
-/// This contains RLC of substrings from the decomposition.
-pub struct RlpFieldTrace<F: ScalarField> {
-    pub prefix: AssignedValue<F>, // value of the prefix
-    pub prefix_len: AssignedValue<F>,
-    pub len_trace: RlcTrace<F>,
-    pub field_trace: RlcTrace<F>,
-    // to save memory maybe we don't need this
-    // pub rlp_trace: RlcTrace<F>,
-}
-
-#[derive(Clone, Debug)]
-pub struct RlpArrayTraceWitness<F: ScalarField> {
-    pub field_witness: Vec<RlpFieldWitness<F>>,
-
-    pub len_len: AssignedValue<F>,
-    pub len_cells: Vec<AssignedValue<F>>,
-
-    pub rlp_len: AssignedValue<F>,
-    pub rlp_array: Vec<AssignedValue<F>>,
-}
-
-#[derive(Clone, Debug)]
-pub struct RlpArrayTrace<F: ScalarField> {
-    pub len_trace: RlcTrace<F>,
-    pub field_trace: Vec<RlpFieldTrace<F>>,
-    // to save memory we don't need this
-    // pub array_trace: RlcTrace<F>,
-}
-
-#[derive(Clone, Debug)]
-pub struct RlcGateConfig<F: ScalarField> {
-    pub rlc: RlcConfig<F>,
-    pub gate: FlexGateConfig<F>,
-}
-
-#[derive(Clone, Debug)]
-pub struct RlpConfig<F: ScalarField> {
-    pub rlc: RlcConfig<F>,
-    pub range: RangeConfig<F>,
-}
-
-impl<F: ScalarField> RlpConfig<F> {
-    pub fn configure(
-        meta: &mut ConstraintSystem<F>,
-        num_rlc_columns: usize,
-        num_advice: &[usize],
-        num_lookup_advice: &[usize],
-        num_fixed: usize,
-        lookup_bits: usize,
-        circuit_degree: usize,
-    ) -> Self {
-        let mut range = RangeConfig::configure(
-            meta,
-            RangeStrategy::Vertical,
-            num_advice,
-            num_lookup_advice,
-            num_fixed,
-            lookup_bits,
-            circuit_degree,
-        );
-        let rlc = RlcConfig::configure(meta, num_rlc_columns);
-        // blinding factors may have changed
-        range.gate.max_rows = (1 << circuit_degree) - meta.minimum_rows();
-        Self { rlc, range }
-    }
-}
-
+/// Chip for proving RLP decoding. This only contains references to other chips, so it can be freely copied.
+/// This will only contain [RlcChip] after [SecondPhase].
 #[derive(Clone, Copy, Debug)]
 pub struct RlpChip<'range, F: ScalarField> {
     pub rlc: Option<&'range RlcChip<F>>, // We use this chip in FirstPhase when there is no RlcChip
@@ -206,11 +103,6 @@ impl<'range, F: ScalarField> RlpChip<'range, F> {
         self.rlc.as_ref().expect("RlcChip should be constructed and used only in SecondPhase")
     }
 
-    /// Gets field element either from cache (for speed) or recalculates.
-    pub fn field_element(&self, n: u64) -> F {
-        self.gate().get_field_element(n)
-    }
-
     /// Parse a byte by interpreting it as the first byte in the RLP encoding of a byte string.
     /// Constrains that the byte is valid for RLP encoding of byte strings (not a list).
     ///
@@ -220,26 +112,27 @@ impl<'range, F: ScalarField> RlpChip<'range, F> {
     /// * For a single byte whose value is in the [0x00, 0x7f] (decimal [0, 127]) range, that byte is its own RLP encoding.
     /// * Otherwise, if a string is 0-55 bytes long, the RLP encoding consists of a single byte with value 0x80 (dec. 128) plus the length of the string followed by the string. The range of the first byte is thus [0x80, 0xb7] (dec. [128, 183]).
     /// * If a string is more than 55 bytes long, the RLP encoding consists of a single byte with value 0xb7 (dec. 183) plus the length in bytes of the length of the string in binary form, followed by the length of the string, followed by the string.
-    pub fn parse_rlp_field_prefix(
+    ///
+    /// ## Warning
+    /// This function does not constrain that if `is_big == true` then the string length must be greater than 55 bytes. This is done separately in `parse_rlp_len`.
+    fn parse_rlp_field_prefix(
         &self,
         ctx: &mut Context<F>,
         prefix: AssignedValue<F>,
     ) -> RlpFieldPrefixParsed<F> {
-        let is_not_literal =
-            self.range.is_less_than(ctx, Constant(self.field_element(127)), prefix, 8);
-        let is_len_or_literal =
-            self.range.is_less_than(ctx, prefix, Constant(self.field_element(184)), 8);
+        let is_not_literal = self.range.is_less_than(ctx, Constant(F::from(127)), prefix, 8);
+        let is_len_or_literal = self.range.is_less_than(ctx, prefix, Constant(F::from(184)), 8);
         // is valid
-        self.range.check_less_than(ctx, prefix, Constant(self.field_element(192)), 8);
+        self.range.check_less_than(ctx, prefix, Constant(F::from(192)), 8);
 
-        let field_len = self.gate().sub(ctx, prefix, Constant(self.field_element(128)));
-        let len_len = self.gate().sub(ctx, prefix, Constant(self.field_element(183)));
+        let field_len = self.gate().sub(ctx, prefix, Constant(F::from(128)));
+        let len_len = self.gate().sub(ctx, prefix, Constant(F::from(183)));
 
         let is_big = self.gate().not(ctx, is_len_or_literal);
 
         // length of the next RLP field
         let next_len = self.gate().select(ctx, len_len, field_len, is_big);
-        let next_len = self.gate().select(ctx, next_len, Constant(F::one()), is_not_literal);
+        let next_len = self.gate().select(ctx, next_len, Constant(F::ONE), is_not_literal);
         let len_len = self.gate().mul(ctx, len_len, is_big);
         let len_len = self.gate().mul(ctx, is_not_literal, len_len);
         RlpFieldPrefixParsed { is_not_literal, is_big, next_len, len_len }
@@ -253,22 +146,63 @@ impl<'range, F: ScalarField> RlpChip<'range, F> {
     /// https://ethereum.org/en/developers/docs/data-structures-and-encoding/rlp/
     /// * If the total payload of a list (i.e. the combined length of all its items being RLP encoded) is 0-55 bytes long, the RLP encoding consists of a single byte with value 0xc0 plus the length of the list followed by the concatenation of the RLP encodings of the items. The range of the first byte is thus [0xc0, 0xf7] (dec. [192, 247]).
     /// * If the total payload of a list is more than 55 bytes long, the RLP encoding consists of a single byte with value 0xf7 plus the length in bytes of the length of the payload in binary form, followed by the length of the payload, followed by the concatenation of the RLP encodings of the items. The range of the first byte is thus [0xf8, 0xff] (dec. [248, 255]).
-    pub fn parse_rlp_array_prefix(
+    ///
+    /// ## Warning
+    /// This function does not constrain that if `is_big == true` then the total payload length of the list must be greater than 55 bytes. This is done separately in `parse_rlp_len`.
+    fn parse_rlp_array_prefix(
         &self,
         ctx: &mut Context<F>,
         prefix: AssignedValue<F>,
     ) -> RlpArrayPrefixParsed<F> {
         // is valid
-        self.range.check_less_than(ctx, Constant(self.field_element(191)), prefix, 8);
+        self.range.check_less_than(ctx, Constant(F::from(191)), prefix, 8);
 
-        let is_big = self.range.is_less_than(ctx, Constant(self.field_element(247)), prefix, 8);
+        let is_big = self.range.is_less_than(ctx, Constant(F::from(247)), prefix, 8);
 
-        let array_len = self.gate().sub(ctx, prefix, Constant(self.field_element(192)));
-        let len_len = self.gate().sub(ctx, prefix, Constant(self.field_element(247)));
+        let array_len = self.gate().sub(ctx, prefix, Constant(F::from(192)));
+        let len_len = self.gate().sub(ctx, prefix, Constant(F::from(247)));
         let next_len = self.gate().select(ctx, len_len, array_len, is_big);
         let len_len = self.gate().mul(ctx, len_len, is_big);
 
         RlpArrayPrefixParsed { is_big, next_len, len_len }
+    }
+
+    /// Parse a byte by interpreting it as the first byte in the RLP encoding (either a byte string or a list).
+    /// Output should be identical to `parse_rlp_field_prefix` when `prefix` is a byte string.
+    /// Output should be identical to `parse_rlp_array_prefix` when `prefix` is a list.
+    ///
+    /// Assumes that `prefix` has already been range checked to be a byte
+    ///
+    /// ## Warning
+    /// This function does not constrain that if `is_big == true` then the total payload length must be greater than 55 bytes. This is done separately in `parse_rlp_len`.
+    fn parse_rlp_prefix(
+        &self,
+        ctx: &mut Context<F>,
+        prefix: AssignedValue<F>,
+    ) -> RlpPrefixParsed<F> {
+        let is_not_literal = self.range.is_less_than(ctx, Constant(F::from(127)), prefix, 8);
+        let is_field = self.range.is_less_than(ctx, prefix, Constant(F::from(192)), 8);
+
+        let is_big_if_field = self.range.is_less_than(ctx, Constant(F::from(183)), prefix, 8);
+        let is_big_if_array = self.range.is_less_than(ctx, Constant(F::from(247)), prefix, 8);
+
+        let is_big = self.gate().select(ctx, is_big_if_field, is_big_if_array, is_field);
+
+        let field_len = self.gate().sub(ctx, prefix, Constant(F::from(128)));
+        let field_len_len = self.gate().sub(ctx, prefix, Constant(F::from(183)));
+        let next_field_len = self.gate().select(ctx, field_len_len, field_len, is_big_if_field);
+        let next_field_len =
+            self.gate().select(ctx, next_field_len, Constant(F::ONE), is_not_literal);
+
+        let array_len = self.gate().sub(ctx, prefix, Constant(F::from(192)));
+        let array_len_len = self.gate().sub(ctx, prefix, Constant(F::from(247)));
+        let next_array_len = self.gate().select(ctx, array_len_len, array_len, is_big_if_array);
+
+        let next_len = self.gate().select(ctx, next_field_len, next_array_len, is_field);
+        let len_len = self.gate().select(ctx, field_len_len, array_len_len, is_field);
+        let len_len = self.gate().mul(ctx, len_len, is_big);
+
+        RlpPrefixParsed { is_not_literal, is_big, next_len, len_len }
     }
 
     /// Given a full RLP encoding `rlp_cells` string, and the length in bytes of the length of the payload, `len_len`, parse the length of the payload.
@@ -276,21 +210,39 @@ impl<'range, F: ScalarField> RlpChip<'range, F> {
     /// Assumes that it is known that `len_len <= max_len_len`.
     ///
     /// Returns the *witness* for the length of the payload in bytes, together with the BigInt value of this length, which is constrained assuming that the witness is valid. (The witness for the length as byte string is checked later in an RLC concatenation.)
+    ///
+    /// The BigInt value of the length is returned as `len_val`.
+    /// We constrain that `len_val > 55` if and only if `is_big == true`.
+    ///
+    /// ## Assumptions
+    /// * `rlp_cells` have already been constrained to be bytes.
     fn parse_rlp_len(
         &self,
         ctx: &mut Context<F>,
         rlp_cells: &[AssignedValue<F>],
         len_len: AssignedValue<F>,
         max_len_len: usize,
+        is_big: AssignedValue<F>,
     ) -> (Vec<AssignedValue<F>>, AssignedValue<F>) {
         let len_cells = witness_subarray(
             ctx,
             rlp_cells,
-            &F::one(), // the 0th index is the prefix byte, and is skipped
+            &F::ONE, // the 0th index is the prefix byte, and is skipped
             len_len.value(),
             max_len_len,
         );
+        // The conversion from length as BigInt to bytes must have no leading zeros
+        constrain_no_leading_zeros(ctx, self.gate(), &len_cells, len_len);
         let len_val = evaluate_byte_array(ctx, self.gate(), &len_cells, len_len);
+        // Constrain that `len_val > 55` if and only if `is_big == true`.
+        // `len_val` has at most `max_len_len * 8` bits, and `55` is 6 bits.
+        let len_is_big = self.range.is_less_than(
+            ctx,
+            Constant(F::from(55)),
+            len_val,
+            std::cmp::max(8 * max_len_len, 6),
+        );
+        ctx.constrain_equal(&len_is_big, &is_big);
         (len_cells, len_val)
     }
 
@@ -300,12 +252,16 @@ impl<'range, F: ScalarField> RlpChip<'range, F> {
     /// In the present function, the witnesses for the RLP decoding are computed and assigned. This decomposition is NOT yet constrained.
     ///
     /// Witnesses MUST be generated in `FirstPhase` to be able to compute RLC of them in `SecondPhase`
+    ///
+    /// # Assumptions
+    /// - `rlp_field` elements are already range checked to be bytes
+    // TODO: use SafeByte
     pub fn decompose_rlp_field_phase0(
         &self,
         ctx: &mut Context<F>, // context for GateChip
         rlp_field: Vec<AssignedValue<F>>,
         max_field_len: usize,
-    ) -> RlpFieldTraceWitness<F> {
+    ) -> RlpFieldWitness<F> {
         let max_len_len = max_rlp_len_len(max_field_len);
         debug_assert_eq!(rlp_field.len(), 1 + max_len_len + max_field_len);
 
@@ -335,7 +291,8 @@ impl<'range, F: ScalarField> RlpChip<'range, F> {
 
         let len_len = prefix_parsed.len_len;
         self.range.check_less_than_safe(ctx, len_len, (max_len_len + 1) as u64);
-        let (len_cells, len_byte_val) = self.parse_rlp_len(ctx, &rlp_field, len_len, max_len_len);
+        let (len_cells, len_byte_val) =
+            self.parse_rlp_len(ctx, &rlp_field, len_len, max_len_len, prefix_parsed.is_big);
 
         let field_len =
             self.gate().select(ctx, len_byte_val, prefix_parsed.next_len, prefix_parsed.is_big);
@@ -351,61 +308,63 @@ impl<'range, F: ScalarField> RlpChip<'range, F> {
 
         let rlp_len = self.gate().sum(ctx, [prefix_parsed.is_not_literal, len_len, field_len]);
 
-        RlpFieldTraceWitness {
-            witness: RlpFieldWitness {
-                prefix,
-                prefix_len: prefix_parsed.is_not_literal,
-                len_len,
-                len_cells,
-                max_len_len,
-                field_len,
-                field_cells,
-                max_field_len,
-            },
-            rlp_len,
-            rlp_field,
+        RlpFieldWitness {
+            prefix,
+            prefix_len: prefix_parsed.is_not_literal,
+            len_len,
+            len_cells,
+            field_len,
+            field_cells,
+            max_field_len,
+            encoded_item: rlp_field,
+            encoded_item_len: rlp_len,
         }
     }
 
     /// Use RLC to constrain the parsed RLP field witness. This MUST be done in `SecondPhase`.
-    ///
-    /// WARNING: this is not thread-safe if `load_rlc_cache` needs to be updated.
     pub fn decompose_rlp_field_phase1(
         &self,
         (ctx_gate, ctx_rlc): RlcContextPair<F>,
-        rlp_field_witness: RlpFieldTraceWitness<F>,
+        witness: RlpFieldWitness<F>,
     ) -> RlpFieldTrace<F> {
-        let RlpFieldTraceWitness { witness, rlp_len, rlp_field } = rlp_field_witness;
         let RlpFieldWitness {
             prefix,
             prefix_len,
             len_len,
             len_cells,
-            max_len_len,
             field_len,
             field_cells,
             max_field_len,
+            encoded_item: rlp_field,
+            encoded_item_len: rlp_field_len,
         } = witness;
-        let rlc = self.rlc();
+        assert_eq!(max_rlp_len_len(max_field_len), len_cells.len());
+        assert_eq!(max_field_len, field_cells.len());
 
-        rlc.load_rlc_cache((ctx_gate, ctx_rlc), self.gate(), bit_length(rlp_field.len() as u64));
+        let rlc = self.rlc();
+        // Disabling as it should be called globally to avoid concurrency issues:
+        // rlc.load_rlc_cache((ctx_gate, ctx_rlc), self.gate(), bit_length(rlp_field.len() as u64));
 
         let len_rlc = rlc.compute_rlc((ctx_gate, ctx_rlc), self.gate(), len_cells, len_len);
         let field_rlc = rlc.compute_rlc((ctx_gate, ctx_rlc), self.gate(), field_cells, field_len);
-        let rlp_field_rlc = rlc.compute_rlc((ctx_gate, ctx_rlc), self.gate(), rlp_field, rlp_len);
+        let rlp_field_rlc =
+            rlc.compute_rlc((ctx_gate, ctx_rlc), self.gate(), rlp_field, rlp_field_len);
 
         rlc.constrain_rlc_concat(
             ctx_gate,
             self.gate(),
-            [
-                (prefix, prefix_len, 1),
-                (len_rlc.rlc_val, len_rlc.len, max_len_len),
-                (field_rlc.rlc_val, field_rlc.len, max_field_len),
-            ],
-            (&rlp_field_rlc.rlc_val, &rlp_field_rlc.len),
+            [RlcTrace::new(prefix, prefix_len, 1), len_rlc, field_rlc],
+            &rlp_field_rlc,
+            None,
         );
 
-        RlpFieldTrace { prefix, prefix_len, len_trace: len_rlc, field_trace: field_rlc }
+        RlpFieldTrace {
+            prefix,
+            prefix_len,
+            len_trace: len_rlc,
+            field_trace: field_rlc,
+            rlp_trace: rlp_field_rlc,
+        }
     }
 
     /// Compute and assign witnesses for deserializing an RLP list of byte strings. Does not support nested lists.
@@ -417,14 +376,19 @@ impl<'range, F: ScalarField> RlpChip<'range, F> {
     /// * Otherwise if `is_variable_len = true`, then `max_field_lens.len()` is assumed to be the maximum number of items of any list represented by this RLP encoding.
     /// * `max_field_lens` is the maximum length of each field in the list.
     ///
-    /// In order for the circuit to pass, the excess witness values in `rlp_array` beyond the actual RLP sequence should all be `0`s.
+    /// # Assumptions
+    /// * In order for the circuit to pass, the excess witness values in `rlp_array` beyond the actual RLP sequence should all be `0`s.
+    /// * `rlp_array` should be an array of `AssignedValue`s that are range checked to be bytes
+    ///
+    /// For each item in the array, we must decompose its prefix and length to determine how long the item is.
+    ///
     pub fn decompose_rlp_array_phase0(
         &self,
         ctx: &mut Context<F>, // context for GateChip
         rlp_array: Vec<AssignedValue<F>>,
         max_field_lens: &[usize],
         is_variable_len: bool,
-    ) -> RlpArrayTraceWitness<F> {
+    ) -> RlpArrayWitness<F> {
         let max_rlp_array_len = rlp_array.len();
         let max_len_len = max_rlp_len_len(max_rlp_array_len);
 
@@ -450,15 +414,18 @@ impl<'range, F: ScalarField> RlpChip<'range, F> {
         //                        (field_rlc.rlc_val, field_rlc.rlc_len)])
 
         let prefix = rlp_array[0];
-        let prefix_parsed = self.parse_rlp_array_prefix(ctx, prefix);
 
+        let prefix_parsed = self.parse_rlp_array_prefix(ctx, prefix);
         let len_len = prefix_parsed.len_len;
+        let next_len = prefix_parsed.next_len;
+        let is_big = prefix_parsed.is_big;
+
         self.range.check_less_than_safe(ctx, len_len, (max_len_len + 1) as u64);
 
-        let (len_cells, len_byte_val) = self.parse_rlp_len(ctx, &rlp_array, len_len, max_len_len);
+        let (len_cells, len_byte_val) =
+            self.parse_rlp_len(ctx, &rlp_array, len_len, max_len_len, is_big);
 
-        let list_payload_len =
-            self.gate().select(ctx, len_byte_val, prefix_parsed.next_len, prefix_parsed.is_big);
+        let list_payload_len = self.gate().select(ctx, len_byte_val, next_len, is_big);
         self.range.check_less_than_safe(
             ctx,
             list_payload_len,
@@ -466,14 +433,15 @@ impl<'range, F: ScalarField> RlpChip<'range, F> {
         );
 
         // this is automatically <= max_rlp_array_len
-        let rlp_len = self
-            .gate()
-            .sum(ctx, [Constant(F::one()), Existing(len_len), Existing(list_payload_len)]);
+        let rlp_len =
+            self.gate().sum(ctx, [Constant(F::ONE), Existing(len_len), Existing(list_payload_len)]);
 
         let mut field_witness = Vec::with_capacity(max_field_lens.len());
 
-        let mut prefix_idx = self.gate().add(ctx, Constant(F::one()), Existing(len_len));
+        let mut prefix_idx = self.gate().add(ctx, Constant(F::ONE), len_len);
         let mut running_max_len = max_len_len + 1;
+
+        let mut list_len = ctx.load_zero();
 
         for &max_field_len in max_field_lens {
             let mut prefix = self.gate().select_from_idx(
@@ -482,37 +450,34 @@ impl<'range, F: ScalarField> RlpChip<'range, F> {
                 rlp_array.iter().copied().take(running_max_len + 1),
                 prefix_idx,
             );
-            let prefix_parsed = self.parse_rlp_field_prefix(ctx, prefix);
 
+            let prefix_parsed = self.parse_rlp_prefix(ctx, prefix);
             let mut len_len = prefix_parsed.len_len;
+
             let max_field_len_len = max_rlp_len_len(max_field_len);
-            self.range.check_less_than_safe(ctx, len_len, (max_field_len_len + 1) as u64);
+            self.range.check_less_than_safe(
+                ctx,
+                prefix_parsed.len_len,
+                (max_field_len_len + 1) as u64,
+            );
 
             let len_start_id = *prefix_parsed.is_not_literal.value() + prefix_idx.value();
             let len_cells = witness_subarray(
                 ctx,
                 &rlp_array,
                 &len_start_id,
-                len_len.value(),
+                prefix_parsed.len_len.value(),
                 max_field_len_len,
             );
 
-            let field_byte_val = evaluate_byte_array(ctx, self.gate(), &len_cells, len_len);
+            let field_len_byte_val = evaluate_byte_array(ctx, self.gate(), &len_cells, len_len);
             let mut field_len = self.gate().select(
                 ctx,
-                field_byte_val,
+                field_len_byte_val,
                 prefix_parsed.next_len,
                 prefix_parsed.is_big,
             );
-            self.range.check_less_than_safe(ctx, field_len, (max_field_len + 1) as u64);
 
-            let field_cells = witness_subarray(
-                ctx,
-                &rlp_array,
-                &(len_start_id + len_len.value()),
-                field_len.value(),
-                max_field_len,
-            );
             running_max_len += 1 + max_field_len_len + max_field_len;
 
             // prefix_len is either 0 or 1
@@ -525,103 +490,114 @@ impl<'range, F: ScalarField> RlpChip<'range, F> {
                     rlp_len,
                     bit_length(max_rlp_array_len as u64),
                 );
+                list_len = self.gate().add(ctx, list_len, field_in_list);
                 // In cases where the RLP sequence is a list of unknown variable length, we keep track
                 // of whether the corresponding index actually is a list item by constraining that
                 // all of `prefix_len, len_len, field_len` are 0 when the current field should be treated
                 // as a dummy and not actually in the list
                 prefix_len = self.gate().mul(ctx, prefix_len, field_in_list);
-                len_len = self.gate().mul(ctx, len_len, field_in_list);
+                len_len = self.gate().mul(ctx, prefix_parsed.len_len, field_in_list);
                 field_len = self.gate().mul(ctx, field_len, field_in_list);
             }
+
+            self.range.check_less_than_safe(ctx, field_len, (max_field_len + 1) as u64);
+
+            let field_cells = witness_subarray(
+                ctx,
+                &rlp_array,
+                &(len_start_id + len_len.value()),
+                field_len.value(),
+                max_field_len,
+            );
+
+            let encoded_item_len =
+                self.gate().sum(ctx, [prefix_parsed.is_not_literal, len_len, field_len]);
+            let encoded_item = witness_subarray(
+                ctx,
+                &rlp_array,
+                prefix_idx.value(),
+                encoded_item_len.value(),
+                max_rlp_encoding_len(max_field_len),
+            ); // *** unconstrained
+
             prefix = self.gate().mul(ctx, prefix, prefix_len);
-            prefix_idx = self.gate().sum(ctx, [prefix_idx, prefix_len, len_len, field_len]);
+            prefix_idx =
+                self.gate().sum(ctx, [prefix_idx, prefix_len, prefix_parsed.len_len, field_len]);
 
             let witness = RlpFieldWitness {
-                prefix,
-                prefix_len,
+                prefix,     // 0 if phantom or literal, 1st byte otherwise
+                prefix_len, // 0 if phantom or literal, 1 otherwise
                 len_len,
-                len_cells,
-                max_len_len: max_field_len_len,
-                field_len,
-                field_cells,
+                len_cells,   // have not constrained this subarray
+                field_len,   // have not constrained the copy used to make this
+                field_cells, // have not constrained this subarray
                 max_field_len,
+                encoded_item, // have not constrained this subarray
+                encoded_item_len,
             };
             field_witness.push(witness);
         }
-        RlpArrayTraceWitness { field_witness, len_len, len_cells, rlp_len, rlp_array }
+        let list_len = is_variable_len.then_some(list_len);
+        RlpArrayWitness { field_witness, len_len, len_cells, rlp_len, rlp_array, list_len }
     }
 
     /// Use RLC to constrain the parsed RLP array witness. This MUST be done in `SecondPhase`.
     ///
     /// We do not make any guarantees on the values in the original RLP sequence beyond the parsed length for the total payload
-    ///
-    /// WARNING: this is not thread-safe if `load_rlc_cache` needs to be updated
     pub fn decompose_rlp_array_phase1(
         &self,
         (ctx_gate, ctx_rlc): RlcContextPair<F>,
-        rlp_array_witness: RlpArrayTraceWitness<F>,
+        rlp_array_witness: RlpArrayWitness<F>,
         _is_variable_len: bool,
     ) -> RlpArrayTrace<F> {
-        let RlpArrayTraceWitness { field_witness, len_len, len_cells, rlp_len, rlp_array } =
+        let RlpArrayWitness { field_witness, len_len, len_cells, rlp_len, rlp_array, .. } =
             rlp_array_witness;
         let rlc = self.rlc();
+        // we only need rlc_pow up to the maximum length in a fragment of `constrain_rlc_concat`
+        // let max_item_rlp_len =
+        //     field_witness.iter().map(|w| max_rlp_encoding_len(w.max_field_len)).max().unwrap();
+        // Disabling this as it should be called once globally:
+        // rlc.load_rlc_cache((ctx_gate, ctx_rlc), self.gate(), bit_length(max_item_rlp_len as u64));
+
         let len_trace = rlc.compute_rlc((ctx_gate, ctx_rlc), self.gate(), len_cells, len_len);
 
         let mut field_trace = Vec::with_capacity(field_witness.len());
-        for field_witness in field_witness {
-            let len_rlc = rlc.compute_rlc(
+        for w in field_witness {
+            let len_rlc = rlc.compute_rlc((ctx_gate, ctx_rlc), self.gate(), w.len_cells, w.len_len);
+            let field_rlc =
+                rlc.compute_rlc((ctx_gate, ctx_rlc), self.gate(), w.field_cells, w.field_len);
+            // RLC of the entire RLP encoded item
+            let rlp_trace = rlc.compute_rlc(
                 (ctx_gate, ctx_rlc),
                 self.gate(),
-                field_witness.len_cells,
-                field_witness.len_len,
+                w.encoded_item,
+                w.encoded_item_len,
             );
-            let field_rlc = rlc.compute_rlc(
-                (ctx_gate, ctx_rlc),
+            // We need to constrain that the `encoded_item` is the concatenation of the prefix, the length, and the payload
+            rlc.constrain_rlc_concat(
+                ctx_gate,
                 self.gate(),
-                field_witness.field_cells,
-                field_witness.field_len,
+                [RlcTrace::new(w.prefix, w.prefix_len, 1), len_rlc, field_rlc],
+                &rlp_trace,
+                None,
             );
             field_trace.push(RlpFieldTrace {
-                prefix: field_witness.prefix,
-                prefix_len: field_witness.prefix_len,
+                prefix: w.prefix,
+                prefix_len: w.prefix_len,
                 len_trace: len_rlc,
                 field_trace: field_rlc,
+                rlp_trace,
             });
         }
 
-        rlc.load_rlc_cache((ctx_gate, ctx_rlc), self.gate(), bit_length(rlp_array.len() as u64));
-
         let prefix = rlp_array[0];
-        let one = ctx_gate.load_constant(F::one());
+        let one = ctx_gate.load_constant(F::ONE);
         let rlp_rlc = rlc.compute_rlc((ctx_gate, ctx_rlc), self.gate(), rlp_array, rlp_len);
-
         let inputs = iter::empty()
-            .chain([(prefix, one, 1), (len_trace.rlc_val, len_trace.len, len_trace.max_len)])
-            .chain(field_trace.iter().flat_map(|trace| {
-                [
-                    (trace.prefix, trace.prefix_len, 1),
-                    (trace.len_trace.rlc_val, trace.len_trace.len, trace.len_trace.max_len),
-                    (trace.field_trace.rlc_val, trace.field_trace.len, trace.field_trace.max_len),
-                ]
-            }));
+            .chain([RlcTrace::new(prefix, one, 1), len_trace])
+            .chain(field_trace.iter().map(|trace| trace.rlp_trace));
 
-        rlc.constrain_rlc_concat(ctx_gate, self.gate(), inputs, (&rlp_rlc.rlc_val, &rlp_rlc.len));
-
-        // We do not constrain the witness values of trailing elements in `rlp_array` beyond `rlp_len`. To do so, uncomment below:
-        /*
-        let unused_array_len =
-            self.gate().sub(ctx, Constant(F::from(rlp_array.len() as u64)), Existing(&rlp_rlc.len));
-        let suffix_pow = self.rlc.rlc_pow(
-            ctx,
-            self.gate(),
-            &unused_array_len,
-            bit_length(rlp_rlc.values.len() as u64),
-        );
-        let suffix_check = self.gate().mul(ctx,
-                Existing(&suffix_pow),
-                Existing(&rlp_rlc.rlc_val));
-        ctx.region.constrain_equal(suffix_check.cell(), rlp_rlc.rlc_max.cell());
-        */
+        rlc.constrain_rlc_concat(ctx_gate, self.gate(), inputs, &rlp_rlc, None);
 
         RlpArrayTrace { len_trace, field_trace }
     }
