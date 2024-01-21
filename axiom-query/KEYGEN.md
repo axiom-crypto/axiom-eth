@@ -55,3 +55,10 @@ bash src/bin/rename_snark_verifier.sh $CIRCUIT_DATA_DIR/e94efbee3e07ae4224ed1ae0
 ```
 
 The final Solidity file will be output to `AxiomV2QueryVerifier.sol`.
+
+5. Compare the summary `*.tree` JSONs with the ones we use in production [here](./data/production/).
+
+6. Check the top level aggregate vkey hashes in the `*.tree` JSONs match the ones we use in production:
+
+- The list we use in production is provided [here](./data/production/aggregate_vk_hashes.json)
+- These aggregate vkey hashes are part of the constructor arguments of our `AxiomV2Query` smart contract on Ethereum mainnet: see [logs](https://etherscan.io/tx/0xab7e570b6fbcc78841a0a5bde473e47737285aabf5fb9fb4876bd2b8043d9301#eventlog).
