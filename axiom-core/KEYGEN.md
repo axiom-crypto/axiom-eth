@@ -60,3 +60,5 @@ bash src/bin/rename_snark_verifier.sh $CIRCUIT_DATA_DIR/0379c723deafac09822de4f3
 ```
 
 The final Solidity file will be output to `AxiomV2CoreHistoricalVerifier.sol`.
+
+7. Compare the summary JSONs `v2.0.12.cids` and `v2.0.12.historical.cids` with the ones we use in production [here](./data/production/).

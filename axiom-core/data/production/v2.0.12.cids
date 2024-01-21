@@ -1,0 +1,26 @@
+[
+  [
+    "{\"node_type\":{\"Leaf\":32},\"depth\":7,\"initial_depth\":7}",
+    "55c014423ae74968405f8d846426515360183fe27b3080cd905dc7e932cb2e47"
+  ],
+  [
+    "{\"node_type\":\"Intermediate\",\"depth\":8,\"initial_depth\":7}",
+    "8946746811c9cb4b00b37a7e864135a8a752040efaf93ef3d231c45818c9402a"
+  ],
+  [
+    "{\"node_type\":\"Intermediate\",\"depth\":9,\"initial_depth\":7}",
+    "42e495dd8ef1b1eace1bcb273f405dd07e0837dbc102c78cabb3b613ab948fcd"
+  ],
+  [
+    "{\"node_type\":\"Root\",\"depth\":10,\"initial_depth\":7}",
+    "d83322a8dba1df94cf6ffeac309ad1c1d50146740ed77090487254b6443eaa4e"
+  ],
+  [
+    "{\"node_type\":{\"Evm\":0},\"depth\":10,\"initial_depth\":7}",
+    "066eb72da7facfce749da885f9ef80281aefb08cd676ec63e6feb09fba9fe246"
+  ],
+  [
+    "{\"node_type\":{\"Evm\":1},\"depth\":10,\"initial_depth\":7}",
+    "39cb264c605428fc752e90b6ac1b77427ab06b795419a759e237e283b95f377f"
+  ]
+]
