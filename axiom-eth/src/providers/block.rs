@@ -133,7 +133,7 @@ mod tests {
 
         let rt = Runtime::new().unwrap();
         let latest = rt.block_on(provider.get_block_number()).unwrap();
-        for block_num in [0, 5000050, 5187810, 5187814, latest.as_u64()] {
+        for block_num in [0, 5000050, 5187023, 5187810, 5187814, latest.as_u64()] {
             let block = rt.block_on(provider.get_block(block_num)).unwrap().unwrap();
             get_block_rlp(&block);
         }
