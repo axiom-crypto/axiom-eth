@@ -3,6 +3,7 @@ use std::fs::File;
 use super::{
     chip::RlcChip,
     circuit::{builder::RlcCircuitBuilder, instructions::RlcCircuitInstructions, RlcCircuitParams},
+    utils::executor::{RlcCircuit, RlcExecutor},
 };
 use ethers_core::k256::elliptic_curve::Field;
 use halo2_base::{
@@ -25,9 +26,6 @@ use halo2_base::{
 use itertools::Itertools;
 use rand::{rngs::StdRng, SeedableRng};
 use test_log::test;
-
-pub mod utils;
-use utils::executor::{RlcCircuit, RlcExecutor};
 
 const K: usize = 16;
 fn test_params() -> RlcCircuitParams {

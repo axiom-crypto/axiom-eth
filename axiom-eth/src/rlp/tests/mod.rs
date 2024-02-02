@@ -3,7 +3,7 @@ use std::marker::PhantomData;
 use crate::rlc::{
     chip::RlcChip,
     circuit::{builder::RlcCircuitBuilder, instructions::RlcCircuitInstructions},
-    tests::utils::executor::{RlcCircuit, RlcExecutor},
+    utils::executor::{RlcCircuit, RlcExecutor},
 };
 
 use halo2_base::{

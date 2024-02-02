@@ -13,6 +13,8 @@ pub mod types;
 /// Module for managing the virtual region corresponding to RLC columns
 pub mod virtual_region;
 
+pub mod utils;
+
 /// FirstPhase of challenge API
 pub const FIRST_PHASE: usize = 0;
 /// RLC is hard-coded to take place in SecondPhase
