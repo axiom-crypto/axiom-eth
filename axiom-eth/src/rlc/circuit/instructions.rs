@@ -78,6 +78,7 @@ impl<F: ScalarField> RlcCircuitBuilder<F> {
                 },
             )
             .unwrap();
+        self.base.assign_instances(&config.base.instance, layouter.namespace(|| "expose public"));
     }
 }
 
