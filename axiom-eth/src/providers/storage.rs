@@ -161,22 +161,37 @@ pub fn get_block_storage_input<P: JsonRpcClient>(
     acct_pf_max_depth: usize,
     storage_pf_max_depth: usize,
 ) -> EthBlockStorageInput {
-    let rt = Runtime::new().unwrap();
-    let block = rt
-        .block_on(provider.get_block(block_number as u64))
-        .unwrap()
-        .unwrap_or_else(|| panic!("Block {block_number} not found"));
+    Runtime::new().unwrap().block_on(get_block_storage_input_async(
+        provider,
+        block_number,
+        addr,
+        slots,
+        acct_pf_max_depth,
+        storage_pf_max_depth,
+    ))
+}
+
+pub async fn get_block_storage_input_async<P: JsonRpcClient>(
+    provider: &Provider<P>,
+    block_number: u32,
+    addr: Address,
+    slots: Vec<H256>,
+    acct_pf_max_depth: usize,
+    storage_pf_max_depth: usize,
+) -> EthBlockStorageInput {
+    let block = provider.get_block(block_number as u64).await.unwrap().unwrap();
     let block_hash = block.hash.unwrap();
     let block_header = get_block_rlp(&block);
 
-    let mut storage = rt.block_on(get_storage_query(
+    let mut storage = get_storage_query(
         provider,
         block_number as u64,
         addr,
         slots,
         acct_pf_max_depth,
         storage_pf_max_depth,
-    ));
+    )
+    .await;
     storage.acct_pf.root_hash = block.state_root;
 
     EthBlockStorageInput { block, block_number, block_hash, block_header, storage }
