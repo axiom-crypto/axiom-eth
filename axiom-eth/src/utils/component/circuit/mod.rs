@@ -61,7 +61,7 @@ impl CoreBuilderParams for CoreBuilderOutputParams {
 }
 /// Input for CoreBuilder.
 /// TODO: specify its output capacity.
-pub trait CoreBuilderInput<F: Field> = Serialize + DeserializeOwned + Clone + 'static;
+pub trait CoreBuilderInput<F: Field> = Clone + 'static;
 
 /// Output for CoreBuilder which is determined at phase0.
 pub struct CoreBuilderOutput<F: Field, T: ComponentType<F>> {
