@@ -221,7 +221,7 @@ pub struct MPTHashTrace<F: ScalarField> {
     pub mpt_hash: RlcTrace<F>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Hash)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, Hash)]
 pub struct PathBytes(pub Vec<u8>);
 
 impl<T: AsRef<[u8]>> From<&T> for PathBytes {

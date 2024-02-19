@@ -5,7 +5,7 @@
 //! - extracting the terminal node from the proof
 use super::*;
 
-#[derive(Clone, Debug, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Hash, Serialize, Deserialize)]
 /// The pre-assigned inputs for the MPT proof
 pub struct MPTInput {
     // claim specification: (path, value)
