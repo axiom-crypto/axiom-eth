@@ -1,6 +1,6 @@
 [package]
 name = "axiom-codec"
-version = "0.2.0"
+version = "0.2.1"
 authors = ["Intrinsic Technologies"]
 license = "MIT"
 edition = "2021"
@@ -19,7 +19,7 @@ serde_with = { version = "2.2", optional = true }
 anyhow = "1.0"
 
 # halo2, features turned on by axiom-eth
-axiom-eth = { version = "=0.4.0", path = "../axiom-eth", default-features = false }
+axiom-eth = { version = "0.4.1", path = "../axiom-eth", default-features = false }
 
 # ethereum
 ethers-core = { version = "2.0.10" }
