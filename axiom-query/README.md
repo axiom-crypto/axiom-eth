@@ -50,7 +50,7 @@ These promise tables are _a priori_ grouped by subquery types. Moreover they may
 
 The join is currently done in the `table` module; it will be moved to `MultiPromiseLoader` in a coming PR.
 
-The reason this component circuit has no component output is that the true outputs of the circuit are: `resultsRoot`, `resultsRootPoseidon`, and `subqueryHash`s. These are outward/user facing outputs, and for future compatibilty their format depends on the number of subqueries (e.g., `resultsRoot` is a padded Merkle root up to next power of 2 of `numSubqueries`). As such there is no automatic way to compute these commitments and we have custom implementations for them.
+The reason this component circuit has no component output is that the true outputs of the circuit are: `resultsRoot`, `resultsRootPoseidon`, and `subqueryHash`s. These are outward/user facing outputs, and for future compatibility their format depends on the number of subqueries (e.g., `resultsRoot` is a padded Merkle root up to next power of 2 of `numSubqueries`). As such there is no automatic way to compute these commitments and we have custom implementations for them.
 
 ## [Keccak Component Shard Circuit](https://github.com/axiom-crypto/halo2-lib/blob/main/hashes/zkevm/src/keccak/component/circuit/shard.rs)
 

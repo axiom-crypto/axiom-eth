@@ -77,7 +77,7 @@ pub fn compress_flatten_pair<F: Field>(
         .zip_eq(input.field_size.iter().chain(output.field_size))
     {
         let bits = *bits;
-        // If bits > capacity, this is a hacky way to speicify this field taking a whole witness.
+        // If bits > capacity, this is a hacky way to specify this field taking a whole witness.
         if used_bits + bits <= (F::CAPACITY as usize) {
             let const_mul = ctx.load_constant(range_chip.gate.pow_of_two[used_bits]);
             witness_current = range_chip.gate.mul_add(ctx, const_mul, *a, witness_current);

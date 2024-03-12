@@ -43,7 +43,7 @@ impl<T: Copy> From<Flatten<T>> for Vec<T> {
     }
 }
 
-/// A logical input/output should be able to convert to a flatten logical input/ouptut.
+/// A logical input/output should be able to convert to a flatten logical input/output.
 pub trait FixLenLogical<T: Copy>:
     TryFrom<Flatten<T>, Error = anyhow::Error> + Into<Flatten<T>> + Clone
 {

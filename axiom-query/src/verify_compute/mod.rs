@@ -1,7 +1,7 @@
 //! # Verify Compute Circuit
 //!
 //! Verifies the user proof (`computeQuery`) and calculates the query hash
-//! by de-commiting subquery results and subquery hashes from two public instances.
+//! by de-committing subquery results and subquery hashes from two public instances.
 //!
 //! The Axiom Aggregation Circuit **must** check that these public instances agree
 //! with the public instances from the Subquery Aggregation Circuit.

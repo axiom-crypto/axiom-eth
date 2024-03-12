@@ -200,7 +200,7 @@ impl InputSubqueryAggregation {
         // ======== results root =========
         // MUST match order in `InputResultsRootShard::build`
         let type_ids = SubqueryDependencies::<F>::get_component_type_ids();
-        // We now collect the promises from snarks in the order they were commited to in ResultsRoot
+        // We now collect the promises from snarks in the order they were committed to in ResultsRoot
         let mut results_deps_commits = Vec::new();
         results_deps_commits.push(promise_keccak);
         for t_id in &type_ids {
