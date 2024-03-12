@@ -59,7 +59,7 @@ These are traits that specify interfaces for variations of the functions:
 - `virtual_assign_phase1`
 - `raw_synthesize_phase1`
 
-These four functions are all called in sequence in the `Circuit::synthesize` trait implementation in raw Halo2, with the phase0 columns being commited to between `raw_synthesize_phase0` and `virtual_assign_phase1` so that the challenge values are availabe starting in `virtual_assign_phase1`. (The other technical distinction is that `virtual_assign_*` can be called outside of `Circuit::synthesize` without a `Layouter`, for any precomputation purposes.)
+These four functions are all called in sequence in the `Circuit::synthesize` trait implementation in raw Halo2, with the phase0 columns being committed to between `raw_synthesize_phase0` and `virtual_assign_phase1` so that the challenge values are available starting in `virtual_assign_phase1`. (The other technical distinction is that `virtual_assign_*` can be called outside of `Circuit::synthesize` without a `Layouter`, for any precomputation purposes.)
 
 Most of the time, one circuit builder can be re-used for different circuit implementations:
 the `raw_synthesize_*` logic stays the same, and you only need to specify the `virtual_assign_*` instructions to quickly write new circuits.

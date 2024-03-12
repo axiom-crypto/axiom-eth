@@ -4,5 +4,5 @@ pub mod aggregation;
 pub mod dummy;
 #[cfg(feature = "keygen")]
 pub mod keygen;
-/// Circut pinning instructions
+/// Circuit pinning instructions
 pub mod pinning;

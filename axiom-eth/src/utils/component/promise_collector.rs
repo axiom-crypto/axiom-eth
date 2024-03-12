@@ -58,7 +58,7 @@ pub struct PromiseCollector<F: Field> {
     promise_results_ready: bool,
 }
 
-/// This is to limit PromiseCollector's interfaces exposed to implementaion.
+/// This is to limit PromiseCollector's interfaces exposed to implementation.
 pub trait PromiseCallsGetter<F: Field> {
     /// Get promise calls by component type id. This is used to add these promises into lookup columns.
     /// TODO: This should return `Vec<PromiseResultWitness<F>>` because the order is determined at that time. But it's tricky to
@@ -69,7 +69,7 @@ pub trait PromiseCallsGetter<F: Field> {
     ) -> Option<&BTreeMap<ContextTag, Vec<PromiseResultWitness<F>>>>;
 }
 
-/// This is to limit PromiseCollector's interfaces exposed to implementaion.
+/// This is to limit PromiseCollector's interfaces exposed to implementation.
 pub trait PromiseResultsGetter<F: Field> {
     /// Get promise results by component type id. This is used to add these promises into lookup columns.
     fn get_results_by_component_type_id(
@@ -78,7 +78,7 @@ pub trait PromiseResultsGetter<F: Field> {
     ) -> Option<&ComponentPromiseResultsInMerkle<F>>;
 }
 
-/// This is to limit PromiseCollector's interfaces exposed to implementaion.
+/// This is to limit PromiseCollector's interfaces exposed to implementation.
 pub trait PromiseCommitSetter<F: Field> {
     /// Get promise results by component type id. This is used to add these promises into lookup columns.
     fn set_commit_by_component_type_id(
@@ -171,7 +171,7 @@ impl<F: Field> PromiseCollector<F> {
 
         let component_type_id = witness_input.get_component_type_id();
         if !is_virtual && !self.dependencies_lookup.contains(&component_type_id) {
-            return Err(anyhow!("Unsupport component type id {:?}.", component_type_id));
+            return Err(anyhow!("Unsupported component type id {:?}.", component_type_id));
         }
 
         let value_serialized_input = witness_input.to_typeless_logical_input();
@@ -181,8 +181,8 @@ impl<F: Field> PromiseCollector<F> {
         let witness_output = if !is_virtual && self.promise_results_ready {
             // Hack: there is no direct way to get field size information.
             let mut flatten_output = witness_input.get_mock_output();
-            // If promise results are fullfilled, use the results directly.
-            // Crash if the promise result is not fullfilled.
+            // If promise results are fulfilled, use the results directly.
+            // Crash if the promise result is not fulfilled.
             flatten_output.fields =
                 call_results.unwrap().get(&value_serialized_input).unwrap().clone();
             flatten_output.assign(ctx)

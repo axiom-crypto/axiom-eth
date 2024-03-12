@@ -43,7 +43,7 @@ pub struct KeccakFixedLenQuery<F: ScalarField> {
     /// Input in bytes
     pub input_assigned: Vec<AssignedValue<F>>,
     /// The hash digest, in bytes
-    // For backwards compatbility we always compute this; we can consider computing it on-demand in the future
+    // For backwards compatibility we always compute this; we can consider computing it on-demand in the future
     pub output_bytes: SafeBytes32<F>,
     /// The hash digest, hi 128 bits (range checked by lookup table)
     pub output_hi: AssignedValue<F>,
@@ -66,7 +66,7 @@ pub struct KeccakVarLenQuery<F: ScalarField> {
     pub length: AssignedValue<F>,
     pub input_assigned: Vec<AssignedValue<F>>,
     /// The hash digest, in bytes
-    // For backwards compatbility we always compute this; we can consider computing it on-demand in the future
+    // For backwards compatibility we always compute this; we can consider computing it on-demand in the future
     pub output_bytes: SafeBytes32<F>,
     /// The hash digest, hi 128 bits (range checked by lookup table)
     pub output_hi: AssignedValue<F>,
@@ -94,7 +94,7 @@ pub struct OutputKeccakShard {
 }
 
 impl OutputKeccakShard {
-    /// Createa a dummy OutputKeccakShard with the given capacity.
+    /// Create a dummy OutputKeccakShard with the given capacity.
     pub fn create_dummy(capacity: usize) -> Self {
         Self { responses: vec![], capacity }
     }
