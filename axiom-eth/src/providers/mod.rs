@@ -12,7 +12,18 @@ pub mod transaction;
 
 pub fn get_provider_uri(chain: Chain) -> String {
     let key = var("ALCHEMY_KEY").expect("ALCHEMY_KEY environmental variable not set");
-    format!("https://eth-{chain}.g.alchemy.com/v2/{key}")
+    match chain {
+        Chain::Base | Chain::Optimism | Chain::Arbitrum => {
+            format!("https://{chain}-mainnet.g.alchemy.com/v2/{key}")
+        }
+        Chain::Mainnet | Chain::Sepolia => {
+            format!("https://eth-{chain}.g.alchemy.com/v2/{key}")
+        }
+        _ => {
+            // Catch-all, may not always work
+            format!("https://{chain}.g.alchemy.com/v2/{key}")
+        }
+    }
 }
 
 pub fn setup_provider(chain: Chain) -> Provider<RetryClient<Http>> {

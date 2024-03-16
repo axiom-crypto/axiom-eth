@@ -1,5 +1,5 @@
 use ethers_core::{
-    types::{Block, H256, U64},
+    types::{Block, H256},
     utils::keccak256,
 };
 use ethers_providers::{JsonRpcClient, Middleware, Provider, ProviderError};
@@ -36,22 +36,10 @@ pub fn get_block_rlp<TX>(block: &Block<TX>) -> Vec<u8> {
     let base_fee = block.base_fee_per_gas;
     let withdrawals_root: Option<H256> = block.withdrawals_root;
     // EIP-4844:
-    let other = &block.other;
-    let mut blob_gas_used = other.get("blobGasUsed"); // EIP-4844 spec
-    if blob_gas_used.is_none() {
-        blob_gas_used = other.get("dataGasUsed"); // EIP-4788 spec
-    }
-    let blob_gas_used: Option<U64> =
-        blob_gas_used.map(|v| serde_json::from_value(v.clone()).unwrap());
-    let mut excess_blob_gas = other.get("excessBlobGas"); // EIP-4844 spec
-    if excess_blob_gas.is_none() {
-        excess_blob_gas = other.get("excessDataGas"); // EIP-4788 spec
-    }
-    let excess_blob_gas: Option<U64> =
-        excess_blob_gas.map(|v| serde_json::from_value(v.clone()).unwrap());
+    let blob_gas_used = block.blob_gas_used;
+    let excess_blob_gas = block.excess_blob_gas;
     // EIP-4788:
-    let parent_beacon_block_root: Option<H256> =
-        other.get("parentBeaconBlockRoot").map(|v| serde_json::from_value(v.clone()).unwrap());
+    let parent_beacon_block_root: Option<H256> = block.parent_beacon_block_root;
 
     let mut rlp_len = 15;
     for opt in [
@@ -116,25 +104,32 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn test_retry_provider() {
+    #[tokio::test]
+    async fn test_retry_provider() {
         let provider = setup_provider(Chain::Mainnet);
-
-        let rt = Runtime::new().unwrap();
-        for block_num in [5000050, 5000051, 17034973] {
-            let block = rt.block_on(provider.get_block(block_num)).unwrap().unwrap();
+        let latest = provider.get_block_number().await.unwrap().as_u64();
+        for block_num in [5_000_050, 5_000_051, 17_034_973, 19_426_587, 19_426_589, latest] {
+            let block = provider.get_block(block_num).await.unwrap().unwrap();
             get_block_rlp(&block);
         }
     }
 
-    #[test]
-    fn test_retry_provider_sepolia() {
-        let provider = setup_provider(Chain::Sepolia);
+    #[tokio::test]
+    async fn test_retry_provider_base() {
+        let provider = setup_provider(Chain::Base);
+        let latest = provider.get_block_number().await.unwrap().as_u64();
+        for block_num in [0, 100, 100_000, 5_000_050, 7_000_000, 8_000_000, 11_864_572, latest] {
+            let block = provider.get_block(block_num).await.unwrap().unwrap();
+            get_block_rlp(&block);
+        }
+    }
 
-        let rt = Runtime::new().unwrap();
-        let latest = rt.block_on(provider.get_block_number()).unwrap();
-        for block_num in [0, 5000050, 5187023, 5187810, 5187814, latest.as_u64()] {
-            let block = rt.block_on(provider.get_block(block_num)).unwrap().unwrap();
+    #[tokio::test]
+    async fn test_retry_provider_sepolia() {
+        let provider = setup_provider(Chain::Sepolia);
+        let latest = provider.get_block_number().await.unwrap().as_u64();
+        for block_num in [0, 5000050, 5187023, 5187810, 5187814, latest] {
+            let block = provider.get_block(block_num).await.unwrap().unwrap();
             get_block_rlp(&block);
         }
     }

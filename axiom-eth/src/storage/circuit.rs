@@ -5,6 +5,7 @@ use halo2_base::{gates::GateInstructions, Context};
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
+use zkevm_hashes::util::eth_types::ToBigEndian;
 
 use crate::{
     block_header::get_block_header_rlp_max_lens,
@@ -27,7 +28,7 @@ pub struct EthStorageInput {
     pub acct_pf: MPTInput,
     pub acct_state: Vec<Vec<u8>>,
     /// A vector of (slot, value, proof) tuples
-    pub storage_pfs: Vec<(H256, U256, MPTInput)>,
+    pub storage_pfs: Vec<(U256, U256, MPTInput)>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -48,7 +49,7 @@ impl EthStorageInput {
             .storage_pfs
             .into_iter()
             .map(|(slot, _, pf)| {
-                let slot = encode_h256_to_hilo(&slot).hi_lo();
+                let slot = encode_h256_to_hilo(&H256(slot.to_be_bytes())).hi_lo();
                 let slot = slot.map(|slot| ctx.load_witness(slot));
                 let pf = pf.assign(ctx);
                 (slot, pf)

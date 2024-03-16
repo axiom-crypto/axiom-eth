@@ -15,7 +15,7 @@ use axiom_eth::{
     halo2_base::AssignedValue,
     impl_fix_len_call_witness,
     mpt::MPTInput,
-    providers::receipt::rlp_bytes,
+    providers::{receipt::rlp_bytes, transaction::get_tx_key_from_index},
     receipt::{calc_max_val_len as rc_calc_max_val_len, EthReceiptInput},
     utils::{
         build_utils::dummy::DummyFrom,
@@ -28,10 +28,7 @@ use hasher::HasherKeccak;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    components::subqueries::{
-        common::OutputSubqueryShard, transaction::types::get_tx_key_from_index,
-    },
-    utils::codec::AssignedReceiptSubquery,
+    components::subqueries::common::OutputSubqueryShard, utils::codec::AssignedReceiptSubquery,
     Field,
 };
 
