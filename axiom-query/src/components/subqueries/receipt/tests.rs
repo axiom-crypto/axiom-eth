@@ -17,7 +17,7 @@ use axiom_eth::{
     halo2_proofs::{dev::MockProver, halo2curves::bn256::Fr},
     keccak::{promise::generate_keccak_shards_from_calls, types::ComponentTypeKeccak},
     mpt::MPTInput,
-    providers::{get_provider_uri, setup_provider},
+    providers::{get_provider_uri, setup_provider, transaction::get_tx_key_from_index},
     receipt::{calc_max_val_len, EthReceiptChipParams, EthReceiptInput},
     utils::component::{
         promise_loader::single::PromiseLoaderParams, ComponentCircuit,
@@ -37,7 +37,6 @@ use crate::components::{
     subqueries::{
         block_header::types::{ComponentTypeHeaderSubquery, OutputHeaderShard},
         common::shard_into_component_promise_results,
-        transaction::types::get_tx_key_from_index,
     },
 };
 

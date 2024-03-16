@@ -1,4 +1,4 @@
-use std::{collections::HashMap, marker::PhantomData, str::FromStr, sync::Arc};
+use std::{marker::PhantomData, str::FromStr};
 
 use axiom_codec::{
     special_values::{TX_CALLDATA_IDX_OFFSET, TX_FUNCTION_SELECTOR_FIELD_IDX},
@@ -12,19 +12,22 @@ use axiom_eth::{
     halo2_proofs::{dev::MockProver, halo2curves::bn256::Fr},
     keccak::{promise::generate_keccak_shards_from_calls, types::ComponentTypeKeccak},
     mpt::MPTInput,
-    providers::setup_provider,
-    transaction::EthTransactionChipParams,
-    transaction::{calc_max_val_len, EthTransactionProof},
+    providers::{
+        setup_provider,
+        transaction::{
+            construct_tx_tries_from_full_blocks, get_tx_key_from_index, BlockWithTransactions,
+        },
+    },
+    transaction::{calc_max_val_len, EthTransactionChipParams, EthTransactionProof},
     utils::component::{
         promise_loader::single::PromiseLoaderParams, ComponentCircuit,
         ComponentPromiseResultsInMerkle, ComponentType,
     },
 };
-use cita_trie::{MemoryDB, PatriciaTrie, Trie};
+use cita_trie::Trie;
 use ethers_core::types::{Chain, H256};
 use ethers_providers::Middleware;
 use futures::future::join_all;
-use hasher::HasherKeccak;
 use itertools::Itertools;
 use tokio;
 
@@ -38,54 +41,11 @@ use crate::components::{
 
 use super::{
     circuit::{ComponentCircuitTxSubquery, CoreParamsTxSubquery},
-    types::{
-        get_tx_key_from_index, BlockWithTransactions, CircuitInputTxShard, CircuitInputTxSubquery,
-    },
+    types::{CircuitInputTxShard, CircuitInputTxSubquery},
 };
 
 /// transaction index is within u16, so rlp(txIndex) is at most 3 bytes => 6 nibbles
 pub const TRANSACTION_PROOF_MAX_DEPTH: usize = 6;
-
-pub struct BlockTransactionsDb {
-    pub trie: PatriciaTrie<MemoryDB, HasherKeccak>,
-    pub root: H256,
-    pub tx_rlps: Vec<Vec<u8>>,
-}
-
-impl BlockTransactionsDb {
-    pub fn new(
-        trie: PatriciaTrie<MemoryDB, HasherKeccak>,
-        root: H256,
-        tx_rlps: Vec<Vec<u8>>,
-    ) -> Self {
-        Self { trie, root, tx_rlps }
-    }
-}
-
-pub fn construct_tx_tries_from_full_blocks(
-    blocks: Vec<BlockWithTransactions>,
-) -> anyhow::Result<HashMap<u64, BlockTransactionsDb>> {
-    let mut tries = HashMap::new();
-    for block in blocks {
-        let mut trie =
-            PatriciaTrie::new(Arc::new(MemoryDB::new(true)), Arc::new(HasherKeccak::new()));
-        let mut tx_rlps = Vec::with_capacity(block.transactions.len());
-        for (idx, tx) in block.transactions.into_iter().enumerate() {
-            let tx_key = get_tx_key_from_index(idx);
-            let tx_rlp = tx.rlp().to_vec();
-            tx_rlps.push(tx_rlp.clone());
-            trie.insert(tx_key, tx_rlp)?;
-        }
-        // safety check:
-        let root = trie.root()?;
-        if root != block.transactions_root.as_bytes() {
-            anyhow::bail!("Transactions trie incorrectly constructed");
-        }
-        let root = block.transactions_root;
-        tries.insert(block.number.as_u64(), BlockTransactionsDb::new(trie, root, tx_rlps));
-    }
-    Ok(tries)
-}
 
 async fn test_mock_tx_subqueries(
     k: u32,
@@ -246,12 +206,22 @@ async fn test_mock_tx_subqueries_simple() {
 async fn test_mock_tx_subqueries_legacy_vrs() {
     let k = 18;
     let subqueries = vec![
-        ("0xbfcf97782f59c868a4f3248fce750488f567f312da4aa6632c64c2fe3cca4d8c", 8),
-        ("0xbfcf97782f59c868a4f3248fce750488f567f312da4aa6632c64c2fe3cca4d8c", 9),
-        ("0xbfcf97782f59c868a4f3248fce750488f567f312da4aa6632c64c2fe3cca4d8c", 10),
-        ("0xbfcf97782f59c868a4f3248fce750488f567f312da4aa6632c64c2fe3cca4d8c", 11),
+        ("0xb522100fc065547683da6b3fa5e755e721ffe5cd80f73153327cd5f403e6223c", 8),
+        ("0xb522100fc065547683da6b3fa5e755e721ffe5cd80f73153327cd5f403e6223c", 9),
+        ("0xb522100fc065547683da6b3fa5e755e721ffe5cd80f73153327cd5f403e6223c", 10),
+        ("0xb522100fc065547683da6b3fa5e755e721ffe5cd80f73153327cd5f403e6223c", 11),
     ];
-    test_mock_tx_subqueries(k, Chain::Goerli, subqueries, 4000, 0).await;
+    test_mock_tx_subqueries(k, Chain::Sepolia, subqueries, 4000, 0).await;
+}
+
+#[tokio::test]
+async fn test_mock_tx_subqueries_eip4844() {
+    let k = 18;
+    let subqueries = vec![(
+        "0x740bbfb65e00b16e496757dfb1c8df1eea101cf9f559f519096d25904b7fa79b",
+        TX_FUNCTION_SELECTOR_FIELD_IDX,
+    )];
+    test_mock_tx_subqueries(k, Chain::Mainnet, subqueries, 200, 0).await;
 }
 
 #[cfg(feature = "keygen")]

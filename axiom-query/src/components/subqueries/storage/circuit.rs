@@ -8,8 +8,7 @@ use axiom_eth::{
     halo2_proofs::plonk::ConstraintSystem,
     keccak::{types::ComponentTypeKeccak, KeccakChip},
     mpt::MPTChip,
-    rlc::circuit::builder::RlcCircuitBuilder,
-    rlc::circuit::builder::RlcContextPair,
+    rlc::circuit::builder::{RlcCircuitBuilder, RlcContextPair},
     rlp::RlpChip,
     storage::{EthStorageChip, EthStorageWitness},
     utils::{
@@ -30,6 +29,7 @@ use axiom_eth::{
         },
         constrain_vec_equal, unsafe_bytes_to_assigned,
     },
+    zkevm_hashes::util::eth_types::ToBigEndian,
 };
 use serde::{Deserialize, Serialize};
 
@@ -215,7 +215,7 @@ pub fn handle_single_storage_subquery_phase0<F: Field>(
     // should have already validated input so storage_pfs has length 1
     let (slot, _value, mpt_proof) = subquery.proof.storage_pfs[0].clone();
     // assign `slot` as `SafeBytes32`
-    let unsafe_slot = unsafe_bytes_to_assigned(ctx, slot.as_bytes());
+    let unsafe_slot = unsafe_bytes_to_assigned(ctx, &slot.to_be_bytes());
     let slot_bytes = safe.raw_bytes_to(ctx, unsafe_slot);
     // convert slot to HiLo to save for later
     let slot = safe_bytes32_to_hi_lo(ctx, gate, &slot_bytes);
