@@ -209,10 +209,11 @@ async fn test_mock_empty_account_subqueries() {
     let _circuit = test_mock_account_subqueries(18, network, subqueries, 50).await;
 }
 
-#[tokio::test]
-async fn test_mock_empty_account_subqueries2() {
-    let network = Chain::Goerli;
-    // non-inclusion ends in extension node
-    let subqueries: Vec<_> = vec![(9173678, "0x8dde5d4a8384f403f888e1419672d94c570440c9", 0)];
-    let _circuit = test_mock_account_subqueries(18, network, subqueries, 50).await;
-}
+// Goerli is dead
+// #[tokio::test]
+// async fn test_mock_empty_account_subqueries2() {
+//     let network = Chain::Goerli;
+//     // non-inclusion ends in extension node
+//     let subqueries: Vec<_> = vec![(9173678, "0x8dde5d4a8384f403f888e1419672d94c570440c9", 0)];
+//     let _circuit = test_mock_account_subqueries(18, network, subqueries, 50).await;
+// }
