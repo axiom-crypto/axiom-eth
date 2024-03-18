@@ -33,5 +33,5 @@ serde = { version = "1.0", features = ["derive"] }
 
 [features]
 default = ["halo2-axiom"]
-halo2-pse = ["axiom-eth/halo2-pse"]
+# halo2-pse = ["axiom-eth/halo2-pse"]
 halo2-axiom = ["axiom-eth/halo2-axiom"]
