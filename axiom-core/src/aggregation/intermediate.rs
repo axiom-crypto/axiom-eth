@@ -45,7 +45,7 @@ impl EthBlockHeaderChainIntermediateAggregationCircuit {
 }
 
 /// The input to create an intermediate [AggregationCircuit] that aggregates [crate::header_chain::EthBlockHeaderChainCircuit]s.
-/// These are intemediate aggregations because they do not perform additional keccaks. Therefore the public instance format (after excluding accumulators) is
+/// These are intermediate aggregations because they do not perform additional keccaks. Therefore the public instance format (after excluding accumulators) is
 /// different from that of the original [crate::header_chain::EthBlockHeaderChainCircuit]s.
 #[derive(Clone, Debug)]
 pub struct EthBlockHeaderChainIntermediateAggregationInput {

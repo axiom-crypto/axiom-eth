@@ -220,7 +220,7 @@ impl<F: Field, T: ComponentType<F>> SingleComponentLoader<F> for SingleComponent
         // It will compute the merkle root of [a, b, c, d] where `4` is a private witness.
         // Then it may have `selected_shards = [0, 2]`, meaning it only de-commits the shards for a, c. It does this by using `select_from_idx` on `[a, b, c, d]` to get `a, c`.
         // Because we always decommit the leaves, meaning we dictate that the leaves much be flat hashes of virtual tables of fixed size (given by `shard_caps`), the
-        // private witness for the true height (in this example `4`), is commited to by the merkle root we generate.
+        // private witness for the true height (in this example `4`), is committed to by the merkle root we generate.
         // In other words, our definition of shard commitment provides domain separation for the merkle leaves.
 
         // The loader's behavior should not depend on inputs. So the loader always computes a merkle tree with a pre-defined height.
@@ -342,7 +342,7 @@ pub trait ComponentCommiter<F: Field> {
     ) -> AssignedValue<F>;
     /// The implementor **must** enforce that the output of this function
     /// is the same as the output value of `compute_commitment`.
-    /// We allow a separate implemenation purely for performance, as the native commitmnt
+    /// We allow a separate implementation purely for performance, as the native commitment
     /// computation is much faster than doing it in the circuit.
     fn compute_native_commitment(witness_promise_results: &[(Flatten<F>, Flatten<F>)]) -> F;
 }

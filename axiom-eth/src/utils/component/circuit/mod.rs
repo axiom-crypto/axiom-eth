@@ -88,7 +88,7 @@ pub trait CoreBuilder<F: Field>: ComponentBuilder<F, Params: CoreBuilderParams> 
         builder: &mut RlcCircuitBuilder<F>,
         // Core circuits can make promise calls.
         promise_caller: PromiseCaller<F>,
-        // TODO: Output commitmment
+        // TODO: Output commitment
     ) -> CoreBuilderOutput<F, Self::CompType>;
     /// Synthesize for phase0. Any data passing to other steps should be stored inside `self`.
     #[allow(unused_variables)]
@@ -110,7 +110,7 @@ pub struct LoaderParamsPerComponentType {
 /// A ComponentModule load promise results from other components and owns some columns and corresponding gates.
 /// All ComponentModules in a single circuit share a RlcCircuitBuilder and they communicate with each other through PromiseCollector.
 pub trait PromiseBuilder<F: Field>: ComponentBuilder<F> {
-    /// Get component type dependencies of this ComponentBuilder in a determinstic order.
+    /// Get component type dependencies of this ComponentBuilder in a deterministic order.
     fn get_component_type_dependencies() -> Vec<ComponentTypeId>;
     /// Extract loader params per component type from circuit params.
     /// Assumption: Return value is in a deterministic order which we use to compute the promise commit.

@@ -97,7 +97,7 @@ impl<F: Field> EthConfig<F> {
         let params: EthCircuitParams = params.into();
         let k = params.k();
         let mut rlc_config = RlcConfig::configure(meta, params.rlc);
-        // TODO: allow 0 columns here for more flexility
+        // TODO: allow 0 columns here for more flexibility
         let keccak = PromiseLoaderConfig {
             dyn_lookup_config: BasicDynLookupConfig::new(meta, || SecondPhase, 1),
         };

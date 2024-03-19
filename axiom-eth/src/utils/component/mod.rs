@@ -45,7 +45,7 @@ pub trait LogicalInputValue<F: Field>:
     Debug + Send + Sync + Clone + Eq + Serialize + DeserializeOwned + 'static
 {
     /// Get the capacity of this logical input.
-    /// The default implementaion is for the fixed length case.
+    /// The default implementation is for the fixed length case.
     fn get_capacity(&self) -> usize;
 }
 /// A format of a promise call to component type T.
@@ -55,7 +55,7 @@ pub trait PromiseCallWitness<F: Field>: Debug + Send + Sync + 'static {
     /// Get the capacity of this promise call.
     fn get_capacity(&self) -> usize;
     /// Encode the promise call into RLC.
-    /// TODO: maybe pass builder here for better flexiability? but constructing chips are slow.
+    /// TODO: maybe pass builder here for better flexibility? but constructing chips are slow.
     fn to_rlc(
         &self,
         ctx_pair: (&mut Context<F>, &mut Context<F>),

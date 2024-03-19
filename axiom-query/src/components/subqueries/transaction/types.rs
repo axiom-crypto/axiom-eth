@@ -1,6 +1,6 @@
 //! Types are separated into:
 //! - Circuit metadata that along with the circuit type determines the circuit configuration completely.
-//! - Human readable _logical_ input and output to the circuit. These include private inputs and outputs that are only commited to in the public output.
+//! - Human readable _logical_ input and output to the circuit. These include private inputs and outputs that are only committed to in the public output.
 //! - The in-circuit formatted versions of logical inputs and outputs. These include formatting in terms of field elements and accounting for all lengths needing to be fixed at compile time.
 //!   - We then provide conversion functions from human-readable to circuit formats.
 //! - This circuit has no public instances (IO) other than the circuit's own component commitment and the promise commitments from any component calls.
