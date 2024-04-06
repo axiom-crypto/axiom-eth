@@ -360,16 +360,22 @@ impl<F: Field, C: CoreBuilder<F>, P: PromiseBuilder<F>> Circuit<F>
         {
             let mut core_builder = self.core_builder.borrow_mut();
             let mut promise_builder = self.promise_builder.borrow_mut();
-            let rlc_builder = self.rlc_builder.borrow_mut();
+            let mut rlc_builder = self.rlc_builder.borrow_mut();
 
             let mut phase0_layouter = layouter.namespace(|| "raw synthesize phase0");
             core_builder.borrow_mut().raw_synthesize_phase0(&config.0, &mut phase0_layouter);
             promise_builder.raw_synthesize_phase0(&config.1, &mut phase0_layouter);
             rlc_builder.raw_synthesize_phase0(&config.2, phase0_layouter);
-        }
-        #[cfg(feature = "halo2-axiom")]
-        {
-            layouter.next_phase();
+
+            #[cfg(feature = "halo2-axiom")]
+            {
+                if rlc_builder.witness_gen_only() {
+                    // To save memory, clear virtual columns in phase0 because they should never be used again
+                    rlc_builder.base.pool(0).threads.clear();
+                }
+                drop(rlc_builder);
+                layouter.next_phase();
+            }
         }
         self.rlc_builder
             .borrow_mut()
