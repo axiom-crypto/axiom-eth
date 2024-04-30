@@ -28,10 +28,10 @@ static_assertions = "1.1.0"
 type-map = "0.5.0"
 
 # halo2
-halo2-base = { version = "=0.4.1", default-features = false, features = ["test-utils"] }
-# halo2-base = { git = "https://github.com/axiom-crypto/halo2-lib.git", tag = "v0.4.1-git", default-features = false, features = ["test-utils"] }
-zkevm-hashes = { version = "=0.2.1", default-features = false }
-# zkevm-hashes = { git = "https://github.com/axiom-crypto/halo2-lib.git", tag = "v0.4.1-git", default-features = false }
+# halo2-base = { version = "=0.4.1", default-features = false, features = ["test-utils"] }
+halo2-base = { git = "https://github.com/axiom-crypto/halo2-lib.git", tag = "v0.4.1-git", default-features = false, features = ["test-utils"] }
+# zkevm-hashes = { version = "=0.2.1", default-features = false }
+zkevm-hashes = { git = "https://github.com/axiom-crypto/halo2-lib.git", tag = "v0.4.1-git", default-features = false }
 
 # crypto
 rlp = "=0.5.2"
@@ -47,10 +47,10 @@ rand = "0.8"
 rand_chacha = "0.3.1"
 
 # aggregation
-snark-verifier = { version = "=0.1.7", default-features = false }
-# snark-verifier = { git = "https://github.com/axiom-crypto/snark-verifier.git", tag = "v0.1.7-git", default-features = false }
-snark-verifier-sdk = { version = "=0.1.7", default-features = false }
-# snark-verifier-sdk = { git = "https://github.com/axiom-crypto/snark-verifier.git", tag = "v0.1.7-git", default-features = false }
+# snark-verifier = { version = "=0.1.7", default-features = false }
+snark-verifier = { git = "https://github.com/axiom-crypto/snark-verifier.git", tag = "v0.1.7-git", default-features = false }
+# snark-verifier-sdk = { version = "=0.1.7", default-features = false }
+snark-verifier-sdk = { git = "https://github.com/axiom-crypto/snark-verifier.git", tag = "v0.1.7-git", default-features = false }
 
 # generating circuit inputs from blockchain
 ethers-providers = { version = "=2.0.14", optional = true, features = ["optimism"] }
@@ -89,7 +89,7 @@ revm = ["snark-verifier-sdk/revm"]
 providers = ["dep:ethers-providers", "dep:tokio", "dep:futures"]
 display = ["zkevm-hashes/display", "snark-verifier-sdk/display", "dep:ark-std"]
 # EXACTLY one of halo2-pse / halo2-axiom should always be turned on
-# halo2-pse = ["zkevm-hashes/halo2-pse", "snark-verifier-sdk/halo2-pse"]
+halo2-pse = ["zkevm-hashes/halo2-pse", "snark-verifier-sdk/halo2-pse"]
 halo2-axiom = ["zkevm-hashes/halo2-axiom", "snark-verifier-sdk/halo2-axiom"]
 keygen = ["aggregation", "dep:blake3"]
 jemallocator = ["halo2-base/jemallocator"]
