@@ -1,0 +1,326 @@
+AxiomAgg2:
+  k: 23
+  force_params:
+    num_advice: 1
+    num_lookup_advice: 1
+    num_fixed: 1
+  axiom_agg1_intent:
+    k: 22
+    force_params:
+      num_advice: 13
+      num_lookup_advice: 2
+      num_fixed: 1
+    intent_verify_compute:
+      k: 22
+      core_params:
+        subquery_results_capacity: 128
+        svk: "0100000000000000000000000000000000000000000000000000000000000000"
+        client_metadata:
+          version: 0
+          numAdvicePerPhase:
+            - 4
+          numLookupAdvicePerPhase:
+            - 1
+          numRlcColumns: 0
+          numFixed: 1
+          numInstance:
+            - 2304
+          numChallenge:
+            - 0
+          maxOutputs: 128
+          isAggregation: false
+        preprocessed_len: 13
+      loader_params:
+        comp_loader_params:
+          max_height: 5
+          shard_caps:
+            - 4000
+    intent_keccak:
+      Node:
+        k: 21
+        num_children: 2
+        child_intent:
+          Node:
+            k: 21
+            num_children: 2
+            child_intent:
+              Node:
+                k: 21
+                num_children: 2
+                child_intent:
+                  Node:
+                    k: 21
+                    num_children: 2
+                    child_intent:
+                      Node:
+                        k: 21
+                        num_children: 2
+                        child_intent:
+                          Leaf:
+                            k: 20
+                            core_params:
+                              capacity: 4000
+    intent_subquery_agg:
+      k: 22
+      deps:
+        - Header:
+            Node:
+              k: 21
+              num_children: 2
+              child_intent:
+                Leaf:
+                  k: 21
+                  core_params:
+                    max_extra_data_bytes: 32
+                    capacity: 132
+                  loader_params:
+                    comp_loader_params:
+                      note: intent_keccak
+                      max_height: 5
+                      shard_caps:
+                        - 4000
+        - Account:
+            Node:
+              k: 21
+              num_children: 2
+              child_intent:
+                Node:
+                  k: 21
+                  num_children: 2
+                  child_intent:
+                    Leaf:
+                      k: 21
+                      core_params:
+                        capacity: 33
+                        max_trie_depth: 14
+                      loader_params:
+                        - comp_loader_params:
+                            note: intent_keccak
+                            max_height: 5
+                            shard_caps:
+                              - 4000
+                        - comp_loader_params:
+                            note: Header
+                            max_height: 1
+                            shard_caps:
+                              - 132
+        - Storage:
+            Node:
+              k: 21
+              num_children: 2
+              child_intent:
+                Node:
+                  k: 21
+                  num_children: 2
+                  child_intent:
+                    Leaf:
+                      k: 21
+                      core_params:
+                        capacity: 33
+                        max_trie_depth: 14
+                      loader_params:
+                        - comp_loader_params:
+                            note: intent_keccak
+                            max_height: 5
+                            shard_caps:
+                              - 4000
+                        - comp_loader_params:
+                            note: Account
+                            max_height: 2
+                            shard_caps:
+                              - 33
+        - Tx:
+            Node:
+              k: 21
+              num_children: 2
+              child_intent:
+                Node:
+                  k: 21
+                  num_children: 2
+                  child_intent:
+                    Node:
+                      k: 21
+                      num_children: 2
+                      child_intent:
+                        Leaf:
+                          k: 21
+                          core_params:
+                            chip_params:
+                              max_data_byte_len: 8192
+                              max_access_list_len: 4096
+                              enable_types:
+                                - true
+                                - true
+                                - true
+                            capacity: 16
+                            max_trie_depth: 6
+                          loader_params:
+                            - comp_loader_params:
+                                note: intent_keccak
+                                max_height: 5
+                                shard_caps:
+                                  - 4000
+                            - comp_loader_params:
+                                note: Header
+                                max_height: 1
+                                shard_caps:
+                                  - 132
+        - Receipt:
+            Node:
+              k: 21
+              num_children: 2
+              child_intent:
+                Node:
+                  k: 21
+                  num_children: 2
+                  child_intent:
+                    Node:
+                      k: 21
+                      num_children: 2
+                      child_intent:
+                        Node:
+                          k: 21
+                          num_children: 2
+                          child_intent:
+                            Node:
+                              k: 21
+                              num_children: 2
+                              child_intent:
+                                Leaf:
+                                  k: 21
+                                  core_params:
+                                    chip_params:
+                                      max_data_byte_len: 1024
+                                      max_log_num: 80
+                                      topic_num_bounds:
+                                        - 0
+                                        - 4
+                                    capacity: 4
+                                    max_trie_depth: 6
+                                  loader_params:
+                                    - comp_loader_params:
+                                        note: intent_keccak
+                                        max_height: 5
+                                        shard_caps:
+                                          - 4000
+                                    - comp_loader_params:
+                                        note: Header
+                                        max_height: 1
+                                        shard_caps:
+                                          - 132
+        - SolidityMapping:
+            Node:
+              k: 21
+              num_children: 2
+              child_intent:
+                Node:
+                  k: 21
+                  num_children: 2
+                  child_intent:
+                    Leaf:
+                      k: 21
+                      core_params:
+                        capacity: 32
+                      loader_params:
+                        - comp_loader_params:
+                            note: intent_keccak
+                            max_height: 5
+                            shard_caps:
+                              - 4000
+                        - comp_loader_params:
+                            note: Storage
+                            max_height: 2
+                            shard_caps:
+                              - 33
+        - ResultsRoot:
+            Leaf:
+              k: 22
+              core_params:
+                enabled_types:
+                  - false
+                  - true
+                  - true
+                  - true
+                  - true
+                  - true
+                  - true
+                capacity: 128
+              loader_params:
+                - comp_loader_params:
+                    note: intent_keccak
+                    max_height: 5
+                    shard_caps:
+                      - 4000
+                - params_per_component:
+                    axiom-query:ComponentTypeHeaderSubquery:
+                      max_height: 1
+                      shard_caps:
+                        - 132
+                        - 132
+                    axiom-query:ComponentTypeAccountSubquery:
+                      max_height: 2
+                      shard_caps:
+                        - 33
+                        - 33
+                        - 33
+                        - 33
+                    axiom-query:ComponentTypeStorageSubquery:
+                      max_height: 2
+                      shard_caps:
+                        - 33
+                        - 33
+                        - 33
+                        - 33
+                    axiom-query:ComponentTypeTxSubquery:
+                      max_height: 3
+                      shard_caps:
+                        - 16
+                        - 16
+                        - 16
+                        - 16
+                        - 16
+                        - 16
+                        - 16
+                        - 16
+                    axiom-query:ComponentTypeReceiptSubquery:
+                      max_height: 5
+                      shard_caps:
+                        - 4
+                        - 4
+                        - 4
+                        - 4
+                        - 4
+                        - 4
+                        - 4
+                        - 4
+                        - 4
+                        - 4
+                        - 4
+                        - 4
+                        - 4
+                        - 4
+                        - 4
+                        - 4
+                        - 4
+                        - 4
+                        - 4
+                        - 4
+                        - 4
+                        - 4
+                        - 4
+                        - 4
+                        - 4
+                        - 4
+                        - 4
+                        - 4
+                        - 4
+                        - 4
+                        - 4
+                        - 4
+                    axiom-query:ComponentTypeSolidityNestedMappingSubquery:
+                      max_height: 2
+                      shard_caps:
+                        - 32
+                        - 32
+                        - 32
+                        - 32

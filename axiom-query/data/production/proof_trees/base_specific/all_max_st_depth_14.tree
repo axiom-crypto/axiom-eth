@@ -1,0 +1,316 @@
+{
+  "circuit_id": "e94efbee3e07ae4224ed1ae0a6389f5128d210ff7a2a743e459cff501e4379ab",
+  "children": [
+    {
+      "circuit_id": "aaf2004f06b92db06ecf815585f0998265492686c07dccfcd3f64de4a20b5d75",
+      "children": [
+        {
+          "circuit_id": "068ea0469095f39946198391fbe3922bbf38af01e16e15ad9414ee94d90bcba6",
+          "children": []
+        },
+        {
+          "circuit_id": "8867b35fff9debce96d50e1ee171c64ccc82f3456c4d81b25c09b2cf78c545eb",
+          "children": [
+            {
+              "circuit_id": "1b27b8beba29e1877515de57289d6fc09945c140a3c81c1b28a6a81b6b4ce280",
+              "children": [
+                {
+                  "circuit_id": "6f1f29be179a848960f2e5d711b679de1a7f61addb541ccbd364ba46707bec4c",
+                  "children": []
+                },
+                {
+                  "circuit_id": "6f1f29be179a848960f2e5d711b679de1a7f61addb541ccbd364ba46707bec4c",
+                  "children": []
+                }
+              ]
+            },
+            {
+              "circuit_id": "4f7652293244d2ba16f213685f56b78fcf96e38ded01317209aedd2ed5e26d11",
+              "children": [
+                {
+                  "circuit_id": "30fa0b2e0ac80815e8f6db0bd2e46a558726e55f5898d063df2b6b62278ed3f6",
+                  "children": [
+                    {
+                      "circuit_id": "f52860b9774f65757700d4c5d1cb535af33fd0aa86c7ff4259f1e25cb6dd12fd",
+                      "children": []
+                    },
+                    {
+                      "circuit_id": "f52860b9774f65757700d4c5d1cb535af33fd0aa86c7ff4259f1e25cb6dd12fd",
+                      "children": []
+                    }
+                  ]
+                },
+                {
+                  "circuit_id": "30fa0b2e0ac80815e8f6db0bd2e46a558726e55f5898d063df2b6b62278ed3f6",
+                  "children": [
+                    {
+                      "circuit_id": "f52860b9774f65757700d4c5d1cb535af33fd0aa86c7ff4259f1e25cb6dd12fd",
+                      "children": []
+                    },
+                    {
+                      "circuit_id": "f52860b9774f65757700d4c5d1cb535af33fd0aa86c7ff4259f1e25cb6dd12fd",
+                      "children": []
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "circuit_id": "f964a76c3b72d9f06a93b424c1dd4168528b09d15a4dfa86a16bfa739413aeec",
+              "children": [
+                {
+                  "circuit_id": "1e79ae670746ee44291ed7a185bed5414700db733992c6142f5aed8877f662eb",
+                  "children": [
+                    {
+                      "circuit_id": "4ffd89bf60c55bd00dfc402e49b5cf2c3191160018756e21ac8dc71b5ebacea0",
+                      "children": []
+                    },
+                    {
+                      "circuit_id": "4ffd89bf60c55bd00dfc402e49b5cf2c3191160018756e21ac8dc71b5ebacea0",
+                      "children": []
+                    }
+                  ]
+                },
+                {
+                  "circuit_id": "1e79ae670746ee44291ed7a185bed5414700db733992c6142f5aed8877f662eb",
+                  "children": [
+                    {
+                      "circuit_id": "4ffd89bf60c55bd00dfc402e49b5cf2c3191160018756e21ac8dc71b5ebacea0",
+                      "children": []
+                    },
+                    {
+                      "circuit_id": "4ffd89bf60c55bd00dfc402e49b5cf2c3191160018756e21ac8dc71b5ebacea0",
+                      "children": []
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "circuit_id": "57337b417ce43a651631c4ae8f5d93eacbc7c6d2b37265102a28355ef2396981",
+              "children": [
+                {
+                  "circuit_id": "08ef7abf64edba8ab2d87509ea55523dbc436beecb2619ddf71958ccff0a93ec",
+                  "children": [
+                    {
+                      "circuit_id": "b32418a39c363d3f66e35f66f78b9ea2c229aa0c13b91c9fce5222f5eb336a9b",
+                      "children": []
+                    },
+                    {
+                      "circuit_id": "b32418a39c363d3f66e35f66f78b9ea2c229aa0c13b91c9fce5222f5eb336a9b",
+                      "children": []
+                    }
+                  ]
+                },
+                {
+                  "circuit_id": "08ef7abf64edba8ab2d87509ea55523dbc436beecb2619ddf71958ccff0a93ec",
+                  "children": [
+                    {
+                      "circuit_id": "b32418a39c363d3f66e35f66f78b9ea2c229aa0c13b91c9fce5222f5eb336a9b",
+                      "children": []
+                    },
+                    {
+                      "circuit_id": "b32418a39c363d3f66e35f66f78b9ea2c229aa0c13b91c9fce5222f5eb336a9b",
+                      "children": []
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "circuit_id": "5bd5d69c3ddfd79a56fc758a1bb7ddc68e095fae2692ff59f61566fd483c187a",
+              "children": [
+                {
+                  "circuit_id": "881a6156828dca8d2a1cb5a76721a14e9f93d6f78dfc9f9cf80f9ab701b72fb6",
+                  "children": [
+                    {
+                      "circuit_id": "c31808a3d314c9498fc53b728d8e901bd267e6c44e763a841254660d013f44a6",
+                      "children": []
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "circuit_id": "5dddd0c2f2a3dc9fbb4da1d2e59e30977132f08ed615813587e2d1cf07036b3d",
+              "children": [
+                {
+                  "circuit_id": "3dfb02ee54e16070ddb4478b5e50c9cd6c88fb60a7a87ec48a235d36d8aa842c",
+                  "children": [
+                    {
+                      "circuit_id": "3a23530420ebfe4b419bd9f912f801578833bb3341074815ef0d135bbb3b1b99",
+                      "children": []
+                    },
+                    {
+                      "circuit_id": "3a23530420ebfe4b419bd9f912f801578833bb3341074815ef0d135bbb3b1b99",
+                      "children": []
+                    }
+                  ]
+                },
+                {
+                  "circuit_id": "3dfb02ee54e16070ddb4478b5e50c9cd6c88fb60a7a87ec48a235d36d8aa842c",
+                  "children": [
+                    {
+                      "circuit_id": "3a23530420ebfe4b419bd9f912f801578833bb3341074815ef0d135bbb3b1b99",
+                      "children": []
+                    },
+                    {
+                      "circuit_id": "3a23530420ebfe4b419bd9f912f801578833bb3341074815ef0d135bbb3b1b99",
+                      "children": []
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "circuit_id": "f38b7e8a3d8ebbc1b2abdcb65547305a5365e83401ed11ba498725ee4e460b88",
+              "children": []
+            }
+          ],
+          "aggregate_vk_hash": "0x1c696780ae36d1129c7dababaea0671afac31041364fca98d3864bdbea2b19b4"
+        },
+        {
+          "circuit_id": "ddc653048a62ac040b26de56ce6685afa3cd95b99a6d3cba3f4d23e6d71244fe",
+          "children": [
+            {
+              "circuit_id": "2b933bc26fd84fd144a5b7ac29722b9a1be10cc5bbd9462d5fa60f0663c309d2",
+              "children": [
+                {
+                  "circuit_id": "42c63049ef9d26ac8d6631dbd04dc509b89b419adae5c12f77d16d6e587d2054",
+                  "children": [
+                    {
+                      "circuit_id": "2299cde2d28d6621e0f4221488e8006429e76ef987f1fd1ca33b8be31f95cb2a",
+                      "children": [
+                        {
+                          "circuit_id": "21745f8186a53c3e64b826dbec6b31e2d3e6cdd6a0c652570f7be4ee3105dde3",
+                          "children": []
+                        },
+                        {
+                          "circuit_id": "21745f8186a53c3e64b826dbec6b31e2d3e6cdd6a0c652570f7be4ee3105dde3",
+                          "children": []
+                        }
+                      ]
+                    },
+                    {
+                      "circuit_id": "2299cde2d28d6621e0f4221488e8006429e76ef987f1fd1ca33b8be31f95cb2a",
+                      "children": [
+                        {
+                          "circuit_id": "21745f8186a53c3e64b826dbec6b31e2d3e6cdd6a0c652570f7be4ee3105dde3",
+                          "children": []
+                        },
+                        {
+                          "circuit_id": "21745f8186a53c3e64b826dbec6b31e2d3e6cdd6a0c652570f7be4ee3105dde3",
+                          "children": []
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "circuit_id": "42c63049ef9d26ac8d6631dbd04dc509b89b419adae5c12f77d16d6e587d2054",
+                  "children": [
+                    {
+                      "circuit_id": "2299cde2d28d6621e0f4221488e8006429e76ef987f1fd1ca33b8be31f95cb2a",
+                      "children": [
+                        {
+                          "circuit_id": "21745f8186a53c3e64b826dbec6b31e2d3e6cdd6a0c652570f7be4ee3105dde3",
+                          "children": []
+                        },
+                        {
+                          "circuit_id": "21745f8186a53c3e64b826dbec6b31e2d3e6cdd6a0c652570f7be4ee3105dde3",
+                          "children": []
+                        }
+                      ]
+                    },
+                    {
+                      "circuit_id": "2299cde2d28d6621e0f4221488e8006429e76ef987f1fd1ca33b8be31f95cb2a",
+                      "children": [
+                        {
+                          "circuit_id": "21745f8186a53c3e64b826dbec6b31e2d3e6cdd6a0c652570f7be4ee3105dde3",
+                          "children": []
+                        },
+                        {
+                          "circuit_id": "21745f8186a53c3e64b826dbec6b31e2d3e6cdd6a0c652570f7be4ee3105dde3",
+                          "children": []
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "circuit_id": "2b933bc26fd84fd144a5b7ac29722b9a1be10cc5bbd9462d5fa60f0663c309d2",
+              "children": [
+                {
+                  "circuit_id": "42c63049ef9d26ac8d6631dbd04dc509b89b419adae5c12f77d16d6e587d2054",
+                  "children": [
+                    {
+                      "circuit_id": "2299cde2d28d6621e0f4221488e8006429e76ef987f1fd1ca33b8be31f95cb2a",
+                      "children": [
+                        {
+                          "circuit_id": "21745f8186a53c3e64b826dbec6b31e2d3e6cdd6a0c652570f7be4ee3105dde3",
+                          "children": []
+                        },
+                        {
+                          "circuit_id": "21745f8186a53c3e64b826dbec6b31e2d3e6cdd6a0c652570f7be4ee3105dde3",
+                          "children": []
+                        }
+                      ]
+                    },
+                    {
+                      "circuit_id": "2299cde2d28d6621e0f4221488e8006429e76ef987f1fd1ca33b8be31f95cb2a",
+                      "children": [
+                        {
+                          "circuit_id": "21745f8186a53c3e64b826dbec6b31e2d3e6cdd6a0c652570f7be4ee3105dde3",
+                          "children": []
+                        },
+                        {
+                          "circuit_id": "21745f8186a53c3e64b826dbec6b31e2d3e6cdd6a0c652570f7be4ee3105dde3",
+                          "children": []
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "circuit_id": "42c63049ef9d26ac8d6631dbd04dc509b89b419adae5c12f77d16d6e587d2054",
+                  "children": [
+                    {
+                      "circuit_id": "2299cde2d28d6621e0f4221488e8006429e76ef987f1fd1ca33b8be31f95cb2a",
+                      "children": [
+                        {
+                          "circuit_id": "21745f8186a53c3e64b826dbec6b31e2d3e6cdd6a0c652570f7be4ee3105dde3",
+                          "children": []
+                        },
+                        {
+                          "circuit_id": "21745f8186a53c3e64b826dbec6b31e2d3e6cdd6a0c652570f7be4ee3105dde3",
+                          "children": []
+                        }
+                      ]
+                    },
+                    {
+                      "circuit_id": "2299cde2d28d6621e0f4221488e8006429e76ef987f1fd1ca33b8be31f95cb2a",
+                      "children": [
+                        {
+                          "circuit_id": "21745f8186a53c3e64b826dbec6b31e2d3e6cdd6a0c652570f7be4ee3105dde3",
+                          "children": []
+                        },
+                        {
+                          "circuit_id": "21745f8186a53c3e64b826dbec6b31e2d3e6cdd6a0c652570f7be4ee3105dde3",
+                          "children": []
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "aggregate_vk_hash": "0x2e790d8143e71a6c7393e24c21a91d2e1b7a6d1a285f20fd55411caf6f3e18c7"
+    }
+  ],
+  "aggregate_vk_hash": "0x0eb84f1a5cf040e4d89b2ee982fb8ffd33bbf463871b84ef43ebd3128f262152"
+}
