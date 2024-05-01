@@ -19,7 +19,7 @@ impl<F: ScalarField> RlcCircuitBuilder<F> {
     ///
     /// (We are only imposing the copy constraints on the instance column, not assigning values to the instance column --
     /// The instance values are provided in `create_proof` as an argument, and that is what is used for Fiat-Shamir.
-    /// Therefore the equality constraints on instance columsn can also be done in SecondPhase instead.
+    /// Therefore the equality constraints on instance column can also be done in SecondPhase instead.
     /// We keep it in FirstPhase for logical clarity.)
     pub fn raw_synthesize_phase0(&self, config: &RlcConfig<F>, mut layouter: impl Layouter<F>) {
         let usable_rows = config.rlc.usable_rows;

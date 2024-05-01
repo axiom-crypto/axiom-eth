@@ -13,7 +13,7 @@ use halo2_base::{
 use crate::utils::hilo::HiLo;
 
 /// Takes `bytes` as fixed length byte array, left pads with 0s, and then converts
-/// to HiLo form. Optmization where if `bytes` is less than 16 bytes, it can
+/// to HiLo form. Optimization where if `bytes` is less than 16 bytes, it can
 /// skip the Hi part.
 pub fn pack_bytes_to_hilo<F: ScalarField>(
     ctx: &mut Context<F>,

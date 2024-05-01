@@ -125,7 +125,7 @@ impl<F: Field> CoreBuilder<F> for CoreBuilderResultsRoot<F> {
     fn feed_input(&mut self, mut input: Self::CoreInput) -> anyhow::Result<()> {
         if input.subqueries.len() > self.params.capacity {
             anyhow::bail!(
-                "Subquery results table is greater than capcaity - {} > {}",
+                "Subquery results table is greater than capacity - {} > {}",
                 input.subqueries.len(),
                 self.params.capacity
             );

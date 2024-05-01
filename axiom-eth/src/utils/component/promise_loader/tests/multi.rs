@@ -17,7 +17,7 @@ use crate::{
     },
 };
 
-// Just for teseting purpose
+// Just for testing purpose
 struct DummyRlcAdapter {}
 impl RlcAdapter<Fr> for DummyRlcAdapter {
     fn to_rlc(

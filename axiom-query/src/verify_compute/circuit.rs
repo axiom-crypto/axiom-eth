@@ -78,7 +78,7 @@ impl CircuitMetadata for CoreBuilderVerifyCompute {
         Some((0..NUM_FE_ACCUMULATOR).map(|i| (0, NUM_COMPONENT_OWNED_INSTANCES + i)).collect())
     }
     fn num_instance(&self) -> Vec<usize> {
-        // For reference only, overriden by `num_instance` in `ComponentCircuitImpl`
+        // For reference only, overridden by `num_instance` in `ComponentCircuitImpl`
         vec![
             NUM_COMPONENT_OWNED_INSTANCES + NUM_FE_ACCUMULATOR + super::types::NUM_LOGICAL_INSTANCE,
         ]
