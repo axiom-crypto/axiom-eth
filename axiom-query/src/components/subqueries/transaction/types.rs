@@ -6,7 +6,6 @@
 //! - This circuit has no public instances (IO) other than the circuit's own component commitment and the promise commitments from any component calls.
 use std::{marker::PhantomData, sync::Arc};
 
-use anyhow::Result;
 use axiom_codec::{
     types::{field_elements::FieldTxSubquery, native::TxSubquery},
     HiLo,
@@ -15,7 +14,6 @@ use axiom_eth::{
     halo2_base::AssignedValue,
     impl_fix_len_call_witness,
     mpt::MPTInput,
-    providers::from_hex,
     transaction::{calc_max_val_len as tx_calc_max_val_len, EthTransactionProof},
     utils::{
         build_utils::dummy::DummyFrom,
@@ -23,7 +21,7 @@ use axiom_eth::{
     },
 };
 use cita_trie::{MemoryDB, PatriciaTrie, Trie};
-use ethers_core::types::{Block, Transaction, H256, U64};
+use ethers_core::types::{Transaction, H256};
 use hasher::HasherKeccak;
 use serde::{Deserialize, Serialize};
 
@@ -122,37 +120,4 @@ impl<F: Field> From<OutputTxShard> for CircuitOutputTxShard<F> {
     fn from(output: OutputTxShard) -> Self {
         output.convert_into()
     }
-}
-
-// ===== Block with Transactions =====
-/// A block with all transactions. We require the transactionsRoot to be provided for a safety check.
-/// Deserialization should still work on an object with extra fields.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct BlockWithTransactions {
-    /// Block number
-    pub number: U64,
-    /// Transactions root hash
-    pub transactions_root: H256,
-    /// All transactions in the block
-    pub transactions: Vec<Transaction>,
-}
-
-impl TryFrom<Block<Transaction>> for BlockWithTransactions {
-    type Error = &'static str;
-    fn try_from(block: Block<Transaction>) -> Result<Self, Self::Error> {
-        Ok(Self {
-            number: block.number.ok_or("Block not in chain")?,
-            transactions_root: block.transactions_root,
-            transactions: block.transactions,
-        })
-    }
-}
-
-pub fn get_tx_key_from_index(idx: usize) -> Vec<u8> {
-    let mut tx_key = rlp::encode(&from_hex(&format!("{idx:x}"))).to_vec();
-    if idx == 0 {
-        tx_key = vec![0x80];
-    }
-    tx_key
 }

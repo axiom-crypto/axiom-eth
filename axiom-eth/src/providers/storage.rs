@@ -6,6 +6,7 @@ use ethers_providers::{JsonRpcClient, Middleware, Provider};
 use futures::future::join_all;
 use rlp::{Encodable, Rlp, RlpStream};
 use tokio::runtime::Runtime;
+use zkevm_hashes::util::eth_types::ToBigEndian;
 
 use crate::{
     mpt::{MPTInput, KECCAK_RLP_EMPTY_STRING},
@@ -87,7 +88,7 @@ pub fn json_to_mpt_input(
         .storage_proof
         .into_iter()
         .map(|storage_pf| {
-            let path = H256(keccak256(storage_pf.key));
+            let path = H256(keccak256(storage_pf.key.to_be_bytes()));
             let (new_proof, mut value) = get_new_proof_and_value(&path, &storage_pf.proof);
             let new_proof_bytes: Vec<Bytes> =
                 new_proof.clone().into_iter().map(Bytes::from_iter).collect();

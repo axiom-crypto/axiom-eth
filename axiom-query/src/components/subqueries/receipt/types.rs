@@ -4,9 +4,8 @@
 //! - The in-circuit formatted versions of logical inputs and outputs. These include formatting in terms of field elements and accounting for all lengths needing to be fixed at compile time.
 //!   - We then provide conversion functions from human-readable to circuit formats.
 //! - This circuit has no public instances (IO) other than the circuit's own component commitment and the promise commitments from any component calls.
-use std::{collections::HashMap, marker::PhantomData, sync::Arc};
+use std::{marker::PhantomData, sync::Arc};
 
-use anyhow::Result;
 use axiom_codec::{
     types::{field_elements::FieldReceiptSubquery, native::ReceiptSubquery},
     HiLo,
@@ -15,7 +14,7 @@ use axiom_eth::{
     halo2_base::AssignedValue,
     impl_fix_len_call_witness,
     mpt::MPTInput,
-    providers::receipt::rlp_bytes,
+    providers::receipt::{get_receipt_rlp, TransactionReceipt},
     receipt::{calc_max_val_len as rc_calc_max_val_len, EthReceiptInput},
     utils::{
         build_utils::dummy::DummyFrom,
@@ -23,15 +22,12 @@ use axiom_eth::{
     },
 };
 use cita_trie::{MemoryDB, PatriciaTrie, Trie};
-use ethers_core::types::{TransactionReceipt, H256, U64};
+use ethers_core::types::H256;
 use hasher::HasherKeccak;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    components::subqueries::{
-        common::OutputSubqueryShard, transaction::types::get_tx_key_from_index,
-    },
-    utils::codec::AssignedReceiptSubquery,
+    components::subqueries::common::OutputSubqueryShard, utils::codec::AssignedReceiptSubquery,
     Field,
 };
 
@@ -71,7 +67,7 @@ impl<F: Field> DummyFrom<CoreParamsReceiptSubquery> for CircuitInputReceiptShard
         let mut trie =
             PatriciaTrie::new(Arc::new(MemoryDB::new(true)), Arc::new(HasherKeccak::new()));
         let rc = TransactionReceipt { status: Some(0x1.into()), ..Default::default() };
-        let rc_rlp = rlp_bytes(rc);
+        let rc_rlp = get_receipt_rlp(&rc).unwrap().to_vec();
         trie.insert(vec![0x80], rc_rlp.clone()).unwrap();
         let mpt_input = MPTInput {
             path: (&[0x80]).into(),
@@ -137,59 +133,4 @@ impl<F: Field> From<OutputReceiptShard> for CircuitOutputReceiptShard<F> {
     fn from(output: OutputReceiptShard) -> Self {
         output.convert_into()
     }
-}
-
-// ===== Block with Receipts =====
-/// A block with all receipts. We require the receiptsRoot to be provided for a safety check.
-/// Deserialization should still work on an object with extra fields.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct BlockWithReceipts {
-    /// Block number
-    pub number: U64,
-    /// Receipts root hash
-    pub receipts_root: H256,
-    /// All receipts in the block
-    pub receipts: Vec<TransactionReceipt>,
-}
-
-pub struct BlockReceiptsDb {
-    pub trie: PatriciaTrie<MemoryDB, HasherKeccak>,
-    pub root: H256,
-    pub rc_rlps: Vec<Vec<u8>>,
-}
-
-impl BlockReceiptsDb {
-    pub fn new(
-        trie: PatriciaTrie<MemoryDB, HasherKeccak>,
-        root: H256,
-        rc_rlps: Vec<Vec<u8>>,
-    ) -> Self {
-        Self { trie, root, rc_rlps }
-    }
-}
-
-pub fn construct_rc_tries_from_full_blocks(
-    blocks: Vec<BlockWithReceipts>,
-) -> Result<HashMap<u64, BlockReceiptsDb>> {
-    let mut tries = HashMap::new();
-    for block in blocks {
-        let mut trie =
-            PatriciaTrie::new(Arc::new(MemoryDB::new(true)), Arc::new(HasherKeccak::new()));
-        let mut rc_rlps = Vec::with_capacity(block.receipts.len());
-        for (idx, rc) in block.receipts.into_iter().enumerate() {
-            let tx_key = get_tx_key_from_index(idx);
-            let rc_rlp = rlp_bytes(rc);
-            rc_rlps.push(rc_rlp.clone());
-            trie.insert(tx_key, rc_rlp)?;
-        }
-        // safety check:
-        let root = trie.root()?;
-        if root != block.receipts_root.as_bytes() {
-            anyhow::bail!("Transactions trie incorrectly constructed");
-        }
-        let root = block.receipts_root;
-        tries.insert(block.number.as_u64(), BlockReceiptsDb::new(trie, root, rc_rlps));
-    }
-    Ok(tries)
 }
