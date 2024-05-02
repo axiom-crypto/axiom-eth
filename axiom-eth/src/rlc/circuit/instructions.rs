@@ -100,4 +100,6 @@ pub trait RlcCircuitInstructions<F: ScalarField> {
         rlc: &RlcChip<F>,
         payload: Self::FirstPhasePayload,
     );
+
+    fn instances(&self) -> Vec<Vec<F>>;
 }

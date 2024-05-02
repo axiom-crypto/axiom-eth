@@ -60,6 +60,10 @@ impl<F: ScalarField> RlcCircuitInstructions<F> for RlpListTest<F> {
         let (ctx_gate, ctx_rlc) = builder.rlc_ctx_pair();
         chip.decompose_rlp_array_phase1((ctx_gate, ctx_rlc), witness, is_var_len);
     }
+
+    fn instances(&self) -> Vec<Vec<F>> {
+        vec![vec![]]
+    }
 }
 
 fn rlp_list_circuit<F: ScalarField>(

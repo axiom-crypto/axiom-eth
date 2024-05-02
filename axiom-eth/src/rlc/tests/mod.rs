@@ -85,6 +85,10 @@ impl<F: ScalarField> RlcCircuitInstructions<F> for Test<F> {
         let real_rlc = compute_rlc_acc(&true_input, *rlc.gamma());
         assert_eq!(real_rlc, rlc_val);
     }
+
+    fn instances(&self) -> Vec<Vec<F>> {
+        vec![vec![]]
+    }
 }
 
 fn compute_rlc_acc<F: ScalarField>(msg: &[F], r: F) -> F {

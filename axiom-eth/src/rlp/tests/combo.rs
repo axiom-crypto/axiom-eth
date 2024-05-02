@@ -51,6 +51,10 @@ impl RlcCircuitInstructions<Fr> for RlpComboTestInput {
         let chip = RlpChip::new(range, Some(rlc));
         chip.decompose_rlp_array_phase1(builder.rlc_ctx_pair(), witness, is_var_len);
     }
+
+    fn instances(&self) -> Vec<Vec<Fr>> {
+        vec![vec![]]
+    }
 }
 
 #[test_case("src/rlp/test_data/list_of_strings.json" ; "fields")]
