@@ -17,7 +17,11 @@ use axiom_eth::{
     halo2_proofs::{dev::MockProver, halo2curves::bn256::Fr},
     keccak::{promise::generate_keccak_shards_from_calls, types::ComponentTypeKeccak},
     mpt::MPTInput,
-    providers::{get_provider_uri, setup_provider},
+    providers::{
+        receipt::{construct_rc_tries_from_full_blocks, get_block_with_receipts},
+        setup_provider,
+        transaction::get_tx_key_from_index,
+    },
     receipt::{calc_max_val_len, EthReceiptChipParams, EthReceiptInput},
     utils::component::{
         promise_loader::single::PromiseLoaderParams, ComponentCircuit,
@@ -25,11 +29,11 @@ use axiom_eth::{
     },
 };
 use cita_trie::Trie;
-use ethers_core::types::{Chain, TransactionReceipt, H256};
+use ethers_core::types::{Chain, H256};
 use ethers_providers::Middleware;
 use futures::future::join_all;
 use itertools::Itertools;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use tokio;
 
 use crate::components::{
@@ -37,16 +41,12 @@ use crate::components::{
     subqueries::{
         block_header::types::{ComponentTypeHeaderSubquery, OutputHeaderShard},
         common::shard_into_component_promise_results,
-        transaction::types::get_tx_key_from_index,
     },
 };
 
 use super::{
     circuit::{ComponentCircuitReceiptSubquery, CoreParamsReceiptSubquery},
-    types::{
-        construct_rc_tries_from_full_blocks, BlockWithReceipts, CircuitInputReceiptShard,
-        CircuitInputReceiptSubquery,
-    },
+    types::{CircuitInputReceiptShard, CircuitInputReceiptSubquery},
 };
 
 /// transaction index is within u16, so rlp(txIndex) is at most 3 bytes => 6 nibbles
@@ -64,17 +64,6 @@ struct Request {
     jsonrpc: String,
     method: String,
     params: Vec<Params>,
-}
-
-#[derive(Deserialize)]
-struct Response {
-    // id: u8,
-    // jsonrpc: String,
-    result: ResponseBody,
-}
-#[derive(Deserialize)]
-struct ResponseBody {
-    receipts: Vec<TransactionReceipt>,
 }
 
 async fn test_mock_receipt_subqueries(
@@ -108,35 +97,9 @@ async fn test_mock_receipt_subqueries(
     ))
     .await;
 
-    // assuming this is Alchemy for now
-    let _provider_uri = get_provider_uri(network);
-    let provider_uri = _provider_uri.as_str(); // async moves are weird
-    let _client = reqwest::Client::new();
-    let client = &_client;
     let block_nums = requests.iter().map(|r| r.block_number as u64).sorted().dedup().collect_vec();
     let blocks = join_all(block_nums.iter().map(|&block_num| async move {
-        let block = provider.get_block(block_num).await.unwrap().unwrap();
-        let req = Request {
-            id: 1,
-            jsonrpc: "2.0".to_string(),
-            method: "alchemy_getTransactionReceipts".to_string(),
-            params: vec![Params { block_number: format!("0x{block_num:x}") }],
-        };
-        // println!("{}", serde_json::to_string(&req).unwrap());
-        let res = client
-            .post(provider_uri)
-            .json(&req)
-            .send()
-            .await
-            .unwrap()
-            .json::<Response>()
-            .await
-            .unwrap();
-        BlockWithReceipts {
-            number: block_num.into(),
-            receipts_root: block.receipts_root,
-            receipts: res.result.receipts,
-        }
+        get_block_with_receipts(provider, block_num, None).await.unwrap()
     }))
     .await;
 

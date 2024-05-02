@@ -1,6 +1,6 @@
 [package]
 name = "axiom-eth"
-version = "0.4.0"
+version = "0.4.3"
 authors = ["Intrinsic Technologies"]
 license = "MIT"
 edition = "2021"
@@ -35,7 +35,7 @@ zkevm-hashes = { git = "https://github.com/axiom-crypto/halo2-lib.git", tag = "v
 
 # crypto
 rlp = "=0.5.2"
-ethers-core = { version = "2.0.10" }
+ethers-core = { version = "=2.0.14", features = ["optimism"] } # fix the version as it affects what fields are included in the `Block` struct
 # mpt implementation
 hasher = { version = "=0.1", features = ["hash-keccak"] }
 cita_trie = "=5.0.0"
@@ -53,7 +53,7 @@ snark-verifier = { git = "https://github.com/axiom-crypto/snark-verifier.git", t
 snark-verifier-sdk = { git = "https://github.com/axiom-crypto/snark-verifier.git", tag = "v0.1.7-git", default-features = false }
 
 # generating circuit inputs from blockchain
-ethers-providers = { version = "2.0.10", optional = true }
+ethers-providers = { version = "=2.0.14", optional = true, features = ["optimism"] }
 tokio = { version = "1.28", default-features = false, features = ["rt", "rt-multi-thread", "macros"], optional = true }
 futures = { version = "0.3", optional = true }
 
