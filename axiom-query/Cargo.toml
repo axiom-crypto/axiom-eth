@@ -40,7 +40,7 @@ axiom-codec = { version = "0.2.1", path = "../axiom-codec", default-features = f
 
 # crypto
 rlp = "0.5.2"
-ethers-core = { version = "=2.0.14", features = ["optimism"] }
+ethers-core = { version = "2.0", features = ["optimism"] }
 # mpt implementation
 hasher = { version = "=0.1", features = ["hash-keccak"] }
 cita_trie = "=5.0.0"

@@ -29,13 +29,13 @@ type-map = "0.5.0"
 
 # halo2
 # halo2-base = { version = "=0.4.1", default-features = false, features = ["test-utils"] }
-halo2-base = { git = "https://github.com/axiom-crypto/halo2-lib.git", tag = "v0.4.1-git", default-features = false, features = ["test-utils"] }
+halo2-base = { git = "https://github.com/axiom-crypto/halo2-lib.git", branch = "dev-0716", default-features = false, features = ["test-utils"] }
 # zkevm-hashes = { version = "=0.2.1", default-features = false }
-zkevm-hashes = { git = "https://github.com/axiom-crypto/halo2-lib.git", tag = "v0.4.1-git", default-features = false }
+zkevm-hashes = { git = "https://github.com/axiom-crypto/halo2-lib.git", branch = "dev-0716", default-features = false }
 
 # crypto
 rlp = "=0.5.2"
-ethers-core = { version = "=2.0.14", features = ["optimism"] } # fix the version as it affects what fields are included in the `Block` struct
+ethers-core = { version = "2.0", features = ["optimism"] } # fix the version as it affects what fields are included in the `Block` struct
 # mpt implementation
 hasher = { version = "=0.1", features = ["hash-keccak"] }
 cita_trie = "=5.0.0"
@@ -48,12 +48,12 @@ rand_chacha = "0.3.1"
 
 # aggregation
 # snark-verifier = { version = "=0.1.7", default-features = false }
-snark-verifier = { git = "https://github.com/axiom-crypto/snark-verifier.git", tag = "v0.1.7-git", default-features = false }
+snark-verifier = { git = "https://github.com/axiom-crypto/snark-verifier.git", branch = "dev-0716", default-features = false }
 # snark-verifier-sdk = { version = "=0.1.7", default-features = false }
-snark-verifier-sdk = { git = "https://github.com/axiom-crypto/snark-verifier.git", tag = "v0.1.7-git", default-features = false }
+snark-verifier-sdk = { git = "https://github.com/axiom-crypto/snark-verifier.git", branch = "dev-0716", default-features = false }
 
 # generating circuit inputs from blockchain
-ethers-providers = { version = "=2.0.14", optional = true, features = ["optimism"] }
+ethers-providers = { version = "2.0", optional = true, features = ["optimism"] }
 tokio = { version = "1.28", default-features = false, features = ["rt", "rt-multi-thread", "macros"], optional = true }
 futures = { version = "0.3", optional = true }
 
