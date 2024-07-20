@@ -1,10 +1,12 @@
 use std::marker::PhantomData;
 
 use halo2_base::{
-    gates::circuit::BaseCircuitParams,
-    gates::{circuit::BaseConfig, flex_gate::BasicGateConfig},
+    gates::{
+        circuit::{BaseCircuitParams, BaseConfig},
+        flex_gate::BasicGateConfig,
+    },
     halo2_proofs::{
-        plonk::{Challenge, ConstraintSystem, FirstPhase, SecondPhase},
+        plonk::{Challenge, ConstraintSystem, Expression, FirstPhase, SecondPhase},
         poly::Rotation,
     },
     utils::ScalarField,
@@ -35,7 +37,12 @@ pub struct PureRlcConfig<F: ScalarField> {
 }
 
 impl<F: ScalarField> PureRlcConfig<F> {
-    pub fn configure(meta: &mut ConstraintSystem<F>, k: usize, num_advice_col: usize) -> Self {
+    pub fn configure_from_challenge(
+        meta: &mut ConstraintSystem<F>,
+        k: usize,
+        num_advice_col: usize,
+        gamma: Challenge,
+    ) -> Self {
         let basic_gates = (0..num_advice_col)
             .map(|_| {
                 let a = meta.advice_column_in(SecondPhase);
@@ -44,8 +51,6 @@ impl<F: ScalarField> PureRlcConfig<F> {
                 BasicGateConfig::new(q, a)
             })
             .collect_vec();
-
-        let gamma = meta.challenge_usable_after(FirstPhase);
 
         for gate in &basic_gates {
             meta.create_gate("RLC computation", |meta| {
@@ -87,9 +92,18 @@ pub struct RlcConfig<F: ScalarField> {
 
 impl<F: ScalarField> RlcConfig<F> {
     pub fn configure(meta: &mut ConstraintSystem<F>, params: RlcCircuitParams) -> Self {
+        let gamma = meta.challenge_usable_after(FirstPhase);
+        Self::configure_from_challenge(meta, params, gamma)
+    }
+
+    pub fn configure_from_challenge(
+        meta: &mut ConstraintSystem<F>,
+        params: RlcCircuitParams,
+        gamma: Challenge,
+    ) -> Self {
         let k = params.base.k;
         let mut base = BaseConfig::configure(meta, params.base);
-        let rlc = PureRlcConfig::configure(meta, k, params.num_rlc_columns);
+        let rlc = PureRlcConfig::configure_from_challenge(meta, k, params.num_rlc_columns, gamma);
         base.set_usable_rows(rlc.usable_rows);
         RlcConfig { base, rlc }
     }

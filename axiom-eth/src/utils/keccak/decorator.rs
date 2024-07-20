@@ -21,7 +21,7 @@ use halo2_base::{
     },
     halo2_proofs::{
         circuit::{Layouter, SimpleFloorPlanner},
-        plonk::{self, Circuit, ConstraintSystem},
+        plonk::{self, Challenge, Circuit, ConstraintSystem, FirstPhase},
     },
     safe_types::SafeTypeChip,
     AssignedValue,
@@ -105,8 +105,17 @@ pub struct RlcKeccakConfig<F: Field> {
 
 impl<F: Field> RlcKeccakConfig<F> {
     pub fn configure(meta: &mut ConstraintSystem<F>, params: RlcKeccakCircuitParams) -> Self {
+        let gamma = meta.challenge_usable_after(FirstPhase);
+        Self::configure_from_challenge(meta, params, gamma)
+    }
+
+    pub fn configure_from_challenge(
+        meta: &mut ConstraintSystem<F>,
+        params: RlcKeccakCircuitParams,
+        gamma: Challenge,
+    ) -> Self {
         let k = params.k();
-        let mut rlc_config = RlcConfig::configure(meta, params.rlc);
+        let mut rlc_config = RlcConfig::configure_from_challenge(meta, params.rlc, gamma);
         let keccak_config = KeccakCircuitConfig::new(
             meta,
             KeccakConfigParams { k: k as u32, rows_per_round: params.keccak_rows_per_round },
