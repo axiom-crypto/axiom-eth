@@ -131,14 +131,14 @@ pub struct RlcKeccakCircuitImpl<F: Field, I: EthCircuitInstructions<F>> {
     /// some formatting. The actual keccaks will be passed on to the vanilla zkevm keccak
     /// sub-circuit to be proved.
     pub keccak_chip: KeccakChip<F>,
-    keccak_rows_per_round: usize,
+    pub keccak_rows_per_round: usize,
     /// The FirstPhasePayload is set after FirstPhase witness generation.
     /// This is used both to pass payload between phases and also to detect if `virtual_assign_phase0_start`
     /// was already run outside of `synthesize` (e.g., to determine public instances)
-    payload: RefCell<Option<I::FirstPhasePayload>>,
+    pub payload: RefCell<Option<I::FirstPhasePayload>>,
 
     // we keep these as RefCell to pass between phases just so the user doesn't need to keep track of them:
-    call_collector: RefCell<KeccakCallCollector<F>>,
+    pub call_collector: RefCell<KeccakCallCollector<F>>,
 }
 
 impl<F, I> RlcKeccakCircuitImpl<F, I>
