@@ -15,23 +15,19 @@ use snark_verifier::{loader::native::NativeLoader, util::hash::Poseidon};
 ///
 /// Unfortunately we can't use lazy_static due to the generic type `F`.
 pub fn native_poseidon_hasher<F: Field>() -> Poseidon<F, F, POSEIDON_T, POSEIDON_RATE> {
-    Poseidon::<F, F, POSEIDON_T, POSEIDON_RATE>::new::<
-        POSEIDON_R_F,
-        POSEIDON_R_P,
-        POSEIDON_SECURE_MDS,
-    >(&NativeLoader)
+    Poseidon::<F, F, POSEIDON_T, POSEIDON_RATE>::new(&NativeLoader, POSEIDON_R_F, POSEIDON_R_P)
 }
 
 /// Do not recreate this unless you need to: it is computationally expensive.
 ///
 /// Unfortunately we can't use lazy_static due to the generic type `F`.
-pub fn optimized_poseidon_spec<F: Field>() -> OptimizedPoseidonSpec<F, POSEIDON_T, POSEIDON_RATE> {
-    OptimizedPoseidonSpec::<F, POSEIDON_T, POSEIDON_RATE>::new::<
-        POSEIDON_R_F,
-        POSEIDON_R_P,
-        POSEIDON_SECURE_MDS,
-    >()
-}
+// pub fn optimized_poseidon_spec<F: Field>() -> OptimizedPoseidonSpec<F, POSEIDON_T, POSEIDON_RATE> {
+//     OptimizedPoseidonSpec::<F, POSEIDON_T, POSEIDON_RATE>::new::<
+//         POSEIDON_R_F,
+//         POSEIDON_R_P,
+//         POSEIDON_SECURE_MDS,
+//     >()
+// }
 
 pub fn compute_poseidon<F: Field>(payload: &[F]) -> F {
     let mut native_poseidon_sponge = native_poseidon_hasher();

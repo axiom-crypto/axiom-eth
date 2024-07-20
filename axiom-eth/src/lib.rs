@@ -8,7 +8,9 @@ use serde::{de::DeserializeOwned, Serialize};
 pub use halo2_base;
 pub use halo2_base::halo2_proofs;
 pub use halo2_base::halo2_proofs::halo2curves;
+#[cfg(feature = "aggregation")]
 pub use snark_verifier;
+#[cfg(feature = "aggregation")]
 pub use snark_verifier_sdk;
 pub use zkevm_hashes;
 

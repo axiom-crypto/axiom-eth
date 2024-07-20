@@ -10,8 +10,7 @@ use halo2_base::{
 };
 use itertools::Itertools;
 use num_bigint::BigUint;
-use snark_verifier::util::hash::Poseidon;
-use snark_verifier_sdk::NativeLoader;
+use snark_verifier::{loader::native::NativeLoader, util::hash::Poseidon};
 use zkevm_hashes::keccak::{
     component::{
         encode::{format_input, num_word_per_witness, pack_native_input},
@@ -195,6 +194,7 @@ impl<F: Field> PromiseCallWitness<F> for KeccakVarLenCall<F> {
 
 fn get_dummy_key<F: Field>(native_poseidon: &mut Poseidon<F, F, POSEIDON_T, POSEIDON_RATE>) -> F {
     native_poseidon.clear();
+
     // copied from encode_native_input, but save re-creating Spec above
     let witnesses_per_keccak_f = pack_native_input(&[]);
     for witnesses in witnesses_per_keccak_f {
@@ -224,7 +224,7 @@ impl<F: Field> ComponentCommiter<F> for KeccakComponentCommiter<F> {
         let mut hasher = create_hasher::<F>();
         hasher.initialize_consts(ctx, &range_chip.gate);
         let dummy_key = {
-            let mut native_poseidon = Poseidon::from_spec(&NativeLoader, hasher.spec().clone());
+            let mut native_poseidon = native_poseidon_hasher(); // Poseidon::from_spec(&NativeLoader, hasher.spec().clone());
             get_dummy_key(&mut native_poseidon)
         };
         let dummy_input = ctx.load_constant(dummy_key);

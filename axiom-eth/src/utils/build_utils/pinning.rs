@@ -11,7 +11,6 @@ use halo2_base::{
     utils::ScalarField,
 };
 use serde::{Deserialize, Serialize};
-use snark_verifier_sdk::gen_pk;
 use std::{fs::File, io, path::Path};
 
 use crate::{
@@ -53,6 +52,7 @@ pub trait CircuitPinningInstructions {
     fn pinning(&self) -> Self::Pinning;
 }
 
+#[cfg(feature = "aggregation")]
 pub trait PinnableCircuit: CircuitPinningInstructions + Sized + Circuit<Fr> {
     /// Reads the proving key for the pre-circuit.
     fn read_pk(
@@ -75,7 +75,7 @@ pub trait PinnableCircuit: CircuitPinningInstructions + Sized + Circuit<Fr> {
             let pinning = Self::Pinning::from_path(pinning_path.as_ref())?;
             Ok((pk, pinning))
         } else {
-            let pk = gen_pk(params, self, Some(pk_path.as_ref()));
+            let pk = snark_verifier_sdk::gen_pk(params, self, Some(pk_path.as_ref()));
             // should only write pinning data if we created a new pkey
             let pinning = self.pinning();
             pinning.write(pinning_path)?;
@@ -84,6 +84,7 @@ pub trait PinnableCircuit: CircuitPinningInstructions + Sized + Circuit<Fr> {
     }
 }
 
+#[cfg(feature = "aggregation")]
 impl<C> PinnableCircuit for C where C: CircuitPinningInstructions + Sized + Circuit<Fr> {}
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
